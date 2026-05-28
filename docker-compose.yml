@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: arias-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: arias
+      POSTGRES_USER: arias
+      POSTGRES_PASSWORD: arias_dev_password
+    # Mapeamos a 5433 en el host para evitar conflicto con un Postgres nativo
+    # que puede estar instalado en Windows (puerto 5432 por defecto)
+    ports:
+      - "5433:5432"
+    volumes:
+      - arias_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arias -d arias"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  arias_postgres_data:
+    name: arias_postgres_data
