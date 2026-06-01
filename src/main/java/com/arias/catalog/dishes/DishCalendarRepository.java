@@ -14,7 +14,7 @@ public interface DishCalendarRepository extends JpaRepository<DishCalendarEntry,
 
     List<DishCalendarEntry> findByFechaBetween(LocalDate from, LocalDate to);
 
-    @Modifying(clearAutomatically = true)
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("DELETE FROM DishCalendarEntry e WHERE e.fecha = :fecha")
     void deleteByFecha(@Param("fecha") LocalDate fecha);
 }
