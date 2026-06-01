@@ -6,7 +6,6 @@ import com.arias.catalog.sides.SideDto;
 import com.arias.catalog.sides.SideType;
 
 import java.util.List;
-import java.util.Set;
 
 /**
  * Versión enriquecida del DTO de Dish para el panel admin.
@@ -24,8 +23,7 @@ public record AdminDishDto(
     Integer stockDiarioDefault,
     Integer stockActual,
     Boolean enabled,
-    Boolean especial,
-    Set<DiaSemana> diasSemana
+    Boolean especial
 ) {
     public static AdminDishDto from(Dish d) {
         return new AdminDishDto(
@@ -43,8 +41,7 @@ public record AdminDishDto(
             d.getStockDiarioDefault(),
             d.getStockActual(),
             d.getEnabled(),
-            d.getEspecial(),
-            d.getDiasSemana()
+            d.getEspecial()
         );
     }
 }

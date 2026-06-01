@@ -15,6 +15,9 @@ public interface DishRepository extends JpaRepository<Dish, Long> {
      * Platos disponibles para un usuario, dado el conjunto de categorías visibles
      * (resuelto previamente desde la categoría del usuario + descendientes).
      * Solo retorna platos enabled con stock > 0.
+     *
+     * <p>Los platos especiales solo aparecen si tienen una asignación en
+     * {@link DishCalendarEntry} para la fecha en cuestión.
      */
     @Query("""
         SELECT DISTINCT d FROM Dish d
@@ -22,10 +25,13 @@ public interface DishRepository extends JpaRepository<Dish, Long> {
         WHERE d.category.id IN :categoryIds
           AND d.enabled = true
           AND d.stockActual > 0
-          AND (d.especial = false OR :diaActual MEMBER OF d.diasSemana)
+          AND (d.especial = false OR EXISTS (
+              SELECT 1 FROM DishCalendarEntry dc
+              WHERE dc.dishId = d.id AND dc.fecha = :fecha
+          ))
     """)
     List<Dish> findAvailableForCategories(@Param("categoryIds") Set<Long> categoryIds,
-                                          @Param("diaActual") DiaSemana diaActual);
+                                          @Param("fecha") LocalDate fecha);
 
     /**
      * Decremento atómico de stock. Devuelve 1 si se pudo (había stock),
@@ -54,10 +60,13 @@ public interface DishRepository extends JpaRepository<Dish, Long> {
         LEFT JOIN FETCH d.allowedSides
         WHERE d.category.id IN :categoryIds
           AND d.enabled = true
-          AND (d.especial = false OR :diaActual MEMBER OF d.diasSemana)
+          AND (d.especial = false OR EXISTS (
+              SELECT 1 FROM DishCalendarEntry dc
+              WHERE dc.dishId = d.id AND dc.fecha = :fecha
+          ))
     """)
     List<Dish> findAvailableForCategoriesNoStock(@Param("categoryIds") Set<Long> categoryIds,
-                                                  @Param("diaActual") DiaSemana diaActual);
+                                                  @Param("fecha") LocalDate fecha);
 
     @Modifying
     @Query(value = """

@@ -19,6 +19,7 @@ import java.time.format.DateTimeFormatter;
 public class DisableNotificationEmails {
 
     private static final DateTimeFormatter HM = DateTimeFormatter.ofPattern("HH:mm");
+    private static final DateTimeFormatter DM = DateTimeFormatter.ofPattern("d/M");
 
     private final EmailService emailService;
     private final EmailProperties props;
@@ -62,29 +63,67 @@ public class DisableNotificationEmails {
      * Mail al empleado cuando el resto desactiva Y cancela el pedido.
      * El empleado tiene que hacer uno nuevo.
      */
+    @SuppressWarnings("unused") // Reason queda para futuros usos / logging
     public void notifyOrderCancelled(DailyChoice order, Reason reason, LocalTime cutoffTime) {
-        String firstName = safeName(order.getUser().getFirstName());
-        String itemName = reason == Reason.SIDE_DISABLED
-            ? order.getSideNombre()
-            : order.getDishNombre();
+        sendCancellationMail(order);
+    }
 
-        String html = baseTemplate(
-            "¡Hola " + firstName + "!",
-            "Tu pedido para hoy fue cancelado porque <strong>" + itemName + "</strong> " +
-                "ya no está disponible.",
-            "Podés hacer un nuevo pedido entrando a la app antes de las <strong>" +
-                HM.format(cutoffTime) + "</strong>.",
-            "Hacer un nuevo pedido"
-        );
+    /**
+     * Mail al empleado cuando el admin remueve un plato especial de una fecha
+     * (vía el calendario) y el empleado tenía ese plato programado.
+     */
+    public void notifySpecialRemovedForDate(DailyChoice order) {
+        sendCancellationMail(order);
+    }
+
+    /**
+     * Texto único para cualquier cancelación de pedido. El motivo (plato deshabilitado,
+     * especial removido del calendario, etc.) NO se menciona — el mail es breve y amable.
+     */
+    private void sendCancellationMail(DailyChoice order) {
+        String firstName = safeName(order.getUser().getFirstName());
+        String fechaStr = DM.format(order.getFecha());
+
+        String html = cancellationTemplate(firstName, fechaStr);
 
         emailService.send(
             order.getUser().getEmail(),
-            "Tu pedido de hoy fue cancelado",
+            "Cambio en tu almuerzo del " + fechaStr,
             html
         );
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────
+
+    /**
+     * Template específico para mails de cancelación. Tono amable y breve,
+     * sin mencionar el motivo. Cierra con "Con tu permiso, muchas gracias!".
+     */
+    private String cancellationTemplate(String firstName, String fechaStr) {
+        return """
+            <!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8"></head>
+            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f7f1ed; padding: 40px 20px; color: #2a1a14;">
+              <table cellpadding="0" cellspacing="0" border="0" align="center" style="max-width: 480px; background: #fffdfb; border-radius: 8px; padding: 32px;">
+                <tr><td>
+                  <h1 style="font-family: Georgia, serif; color: #c5191d; font-size: 28px; margin: 0 0 8px;">ARIAS</h1>
+                  <p style="color: #c5191d; text-transform: uppercase; letter-spacing: 2px; font-size: 11px; margin: 0 0 32px;">Bodegón · Parrilla</p>
+
+                  <h2 style="font-family: Georgia, serif; font-size: 22px; margin: 0 0 16px;">Hola %s</h2>
+                  <p style="line-height: 1.6; margin: 0 0 16px;">Lamentablemente tenemos que pedirte que cambies tu plato programado para el <strong>%s</strong>.</p>
+                  <p style="line-height: 1.6; margin: 0 0 16px;">Ya están disponibles en la app las opciones de cambio.</p>
+                  <p style="line-height: 1.6; margin: 0 0 24px;">Con tu permiso, muchas gracias!</p>
+
+                  <a href="%s" style="display: inline-block; background: #c5191d; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; font-size: 13px;">Programar pedido</a>
+
+                  <p style="color: #6b5b52; font-size: 11px; margin: 32px 0 0; text-transform: uppercase; letter-spacing: 1px;">Familia Mazzariello · Desde 2015</p>
+                </td></tr>
+              </table>
+            </body>
+            </html>
+            """.formatted(firstName, fechaStr, props.appUrl());
+    }
 
     private String baseTemplate(String heading, String body1, String body2, String ctaText) {
         return """

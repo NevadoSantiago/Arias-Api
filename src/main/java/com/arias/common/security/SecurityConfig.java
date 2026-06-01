@@ -77,6 +77,8 @@ public class SecurityConfig {
                     "/api/v1/auth/forgot-password",
                     "/api/v1/auth/reset-password"
                 ).permitAll()
+                // Unsubscribe del recordatorio — link público del mail
+                .requestMatchers(HttpMethod.POST, "/api/v1/me/unsubscribe-reminder").permitAll()
                 // Health check
                 .requestMatchers("/actuator/health/**").permitAll()
                 // Todo lo demás autenticado

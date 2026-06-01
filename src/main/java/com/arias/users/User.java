@@ -66,6 +66,14 @@ public class User {
     private Boolean active = true;
 
     /**
+     * Opt-in al recordatorio diario por mail si no tiene pedido para hoy.
+     * Default true al crear el user — el empleado lo puede apagar desde la app
+     * o haciendo click en el link de unsubscribe del mismo mail.
+     */
+    @Column(name = "recibe_recordatorio_pedido", nullable = false)
+    private Boolean recibeRecordatorioPedido = true;
+
+    /**
      * Soft delete. NULL = visible. Cuando se setea, el user desaparece
      * de listings, login y check-email — pero su id sigue referenciable
      * desde DailyChoice y otras tablas históricas.

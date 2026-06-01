@@ -20,8 +20,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Clock;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.*;
@@ -53,13 +51,12 @@ public class DishService {
         boolean isFuture = targetDate.isAfter(LocalDate.now());
 
         Set<Long> visible = categoryHierarchy.visibleCategoryIdsFor(userCategoryId);
-        DiaSemana dia = toDiaSemana(targetDate.getDayOfWeek());
 
         List<Dish> dishes;
         if (isFuture) {
-            dishes = dishRepo.findAvailableForCategoriesNoStock(visible, dia);
+            dishes = dishRepo.findAvailableForCategoriesNoStock(visible, targetDate);
         } else {
-            dishes = dishRepo.findAvailableForCategories(visible, dia);
+            dishes = dishRepo.findAvailableForCategories(visible, targetDate);
         }
 
         return dishes.stream()
@@ -77,7 +74,17 @@ public class DishService {
             .sorted(Comparator
                 .comparingInt((Dish d) -> d.getMenuSection().getOrdenDisplay())
                 .thenComparing(d -> d.getNombre().toLowerCase()))
-            .peek(d -> d.getDiasSemana().size())
+            .map(AdminDishDto::from)
+            .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<AdminDishDto> listSpecialForAdmin() {
+        return dishRepo.findAll().stream()
+            .filter(d -> Boolean.TRUE.equals(d.getEspecial()) && Boolean.TRUE.equals(d.getEnabled()))
+            .sorted(Comparator
+                .comparingInt((Dish d) -> d.getMenuSection().getOrdenDisplay())
+                .thenComparing(d -> d.getNombre().toLowerCase()))
             .map(AdminDishDto::from)
             .toList();
     }
@@ -89,7 +96,6 @@ public class DishService {
         Set<Side> sides = validateAndResolveSides(req.sideType(), req.allowedSideIds());
 
         boolean esEspecial = req.especial() != null && req.especial();
-        validateEspecial(esEspecial, req.diasSemana());
 
         Dish dish = Dish.builder()
             .nombre(req.nombre().trim())
@@ -103,7 +109,6 @@ public class DishService {
             .stockActual(req.stockActual())
             .enabled(true)
             .especial(esEspecial)
-            .diasSemana(esEspecial ? EnumSet.copyOf(req.diasSemana()) : EnumSet.noneOf(DiaSemana.class))
             .build();
 
         return AdminDishDto.from(dishRepo.save(dish));
@@ -117,7 +122,6 @@ public class DishService {
         Set<Side> sides = validateAndResolveSides(req.sideType(), req.allowedSideIds());
 
         boolean esEspecial = req.especial() != null && req.especial();
-        validateEspecial(esEspecial, req.diasSemana());
 
         dish.setNombre(req.nombre().trim());
         dish.setDescripcion(trimOrNull(req.descripcion()));
@@ -130,10 +134,6 @@ public class DishService {
         dish.setStockActual(req.stockActual());
         dish.setEnabled(req.enabled());
         dish.setEspecial(esEspecial);
-        dish.getDiasSemana().clear();
-        if (esEspecial) {
-            dish.getDiasSemana().addAll(req.diasSemana());
-        }
 
         return AdminDishDto.from(dish);
     }
@@ -230,25 +230,6 @@ public class DishService {
         }
 
         return new HashSet<>(sides);
-    }
-
-    private void validateEspecial(boolean esEspecial, List<DiaSemana> dias) {
-        if (esEspecial && (dias == null || dias.isEmpty())) {
-            throw BusinessException.badRequest("especial-sin-dias",
-                "Un plato especial debe tener al menos un día asignado");
-        }
-    }
-
-    private DiaSemana toDiaSemana(DayOfWeek dow) {
-        return switch (dow) {
-            case MONDAY -> DiaSemana.LUNES;
-            case TUESDAY -> DiaSemana.MARTES;
-            case WEDNESDAY -> DiaSemana.MIERCOLES;
-            case THURSDAY -> DiaSemana.JUEVES;
-            case FRIDAY -> DiaSemana.VIERNES;
-            case SATURDAY -> DiaSemana.SABADO;
-            case SUNDAY -> DiaSemana.DOMINGO;
-        };
     }
 
     private static String trimOrNull(String s) {

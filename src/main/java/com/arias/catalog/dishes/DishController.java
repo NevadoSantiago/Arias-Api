@@ -38,6 +38,13 @@ public class DishController {
         return dishService.listAllForAdmin();
     }
 
+    /** Lista los platos especiales activos. Usado por el calendario de especiales. */
+    @GetMapping("/special")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public List<AdminDishDto> listSpecial() {
+        return dishService.listSpecialForAdmin();
+    }
+
     @PostMapping
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     public AdminDishDto create(@Valid @RequestBody CreateDishRequest req) {

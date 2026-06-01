@@ -16,7 +16,8 @@ public record EmployeeDto(
     Boolean active,
     Boolean firstLoginPending,
     Instant lastLoginAt,
-    Instant createdAt
+    Instant createdAt,
+    Role role
 ) {
     public static EmployeeDto from(User u) {
         return new EmployeeDto(
@@ -29,7 +30,8 @@ public record EmployeeDto(
             u.getActive(),
             u.getPasswordHash() == null, // sin password = pendiente de first-login
             u.getLastLoginAt(),
-            u.getCreatedAt()
+            u.getCreatedAt(),
+            u.getRole()
         );
     }
 }

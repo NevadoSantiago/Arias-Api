@@ -1,30 +1,63 @@
 package com.arias.catalog.categories;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
 /**
  * Endpoints de categorías de acceso (Premium, Básico, etc.).
- * SUPER_ADMIN para los forms de empresas y platos.
- * COMPANY_ADMIN para el dropdown de cambiar categoría a sus empleados.
+ *
+ * <p>GET / — público para SUPER_ADMIN y COMPANY_ADMIN: dropdown del form de empresas/empleados.
+ * Solo lista categorías habilitadas, ordenadas por orden display.
+ *
+ * <p>Resto de endpoints (CRUD) — solo SUPER_ADMIN.
  */
 @RestController
 @RequestMapping("/api/v1/categories")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('SUPER_ADMIN', 'COMPANY_ADMIN')")
 public class CategoryController {
 
     private final CategoryRepository repo;
+    private final CategoryService service;
 
     @GetMapping
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'COMPANY_ADMIN')")
     public List<CategoryDto> list() {
         return repo.findAllByEnabledTrueOrderByOrdenDisplayAsc().stream()
             .map(CategoryDto::from)
             .toList();
+    }
+
+    @GetMapping("/admin")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public List<AdminCategoryDto> listAdmin() {
+        return service.listAllForAdmin();
+    }
+
+    @PostMapping
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public AdminCategoryDto create(@Valid @RequestBody CreateCategoryRequest req) {
+        return service.create(req);
+    }
+
+    @PutMapping("/{id}")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public AdminCategoryDto update(@PathVariable Long id, @Valid @RequestBody UpdateCategoryRequest req) {
+        return service.update(id, req);
+    }
+
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public void disable(@PathVariable Long id) {
+        service.disable(id);
+    }
+
+    @PutMapping("/{id}/enable")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public void enable(@PathVariable Long id) {
+        service.enable(id);
     }
 }

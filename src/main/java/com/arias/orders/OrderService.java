@@ -50,6 +50,19 @@ public class OrderService {
         return orderRepo.findByUserIdAndFecha(userId, LocalDate.now(clock));
     }
 
+    /**
+     * Sugerencia para el cartelito "El último [día] pediste:". Devuelve el último
+     * pedido del usuario en el mismo día de la semana, o vacío si no existe.
+     */
+    @Transactional(readOnly = true)
+    public Optional<DailyChoiceDto> findLastSameWeekdayOrder(Long userId) {
+        LocalDate today = LocalDate.now(clock);
+        // Java DayOfWeek: Mon=1..Sun=7. Postgres DOW: Sun=0..Sat=6. Mod 7 los matchea.
+        int dow = today.getDayOfWeek().getValue() % 7;
+        return orderRepo.findLastSameWeekdayBeforeToday(userId, dow)
+            .map(DailyChoiceDto::from);
+    }
+
     @Transactional(readOnly = true)
     public Optional<DishPreferenceDto> findDishPreference(Long userId, Long dishId) {
         return orderRepo.findFirstByUserIdAndDishIdOrderByFechaDesc(userId, dishId)
@@ -242,30 +255,8 @@ public class OrderService {
     }
 
     @Transactional
-    public int markComandado(Long orderId) {
-        DailyChoice order = orderRepo.findById(orderId)
-            .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
-        if (order.getEstado() != OrderEstado.CONFIRMADO) {
-            throw BusinessException.conflict("order-not-confirmed",
-                "Solo se pueden comandar pedidos confirmados");
-        }
-        return orderRepo.markComandado(orderId, clock.instant());
-    }
-
-    @Transactional
-    public int markComandadoByCompany(Long companyId) {
-        return orderRepo.markComandadoByCompany(companyId, LocalDate.now(clock), clock.instant());
-    }
-
-    @Transactional
-    public int markDelivered(Long orderId) {
-        DailyChoice order = orderRepo.findById(orderId)
-            .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
-        if (order.getEstado() != OrderEstado.CONFIRMADO && order.getEstado() != OrderEstado.COMANDADO) {
-            throw BusinessException.conflict("order-not-deliverable",
-                "Solo se pueden entregar pedidos confirmados o comandados");
-        }
-        return orderRepo.markDelivered(orderId, clock.instant());
+    public int markComandadoByCompany(Long companyId, LocalDate fecha) {
+        return orderRepo.markComandadoByCompany(companyId, fecha, clock.instant());
     }
 
     @Transactional

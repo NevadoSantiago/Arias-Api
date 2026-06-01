@@ -1,5 +1,8 @@
 package com.arias.orders;
 
+import com.arias.common.exception.BusinessException;
+import com.arias.companies.Company;
+import com.arias.companies.CompanyRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFColor;
@@ -12,73 +15,89 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.time.LocalDate;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
+import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 public class OrderExportService {
 
+    private static final Set<OrderEstado> EXPORTABLE_ESTADOS =
+        EnumSet.of(OrderEstado.CONFIRMADO, OrderEstado.COMANDADO, OrderEstado.ENTREGADO);
+
     private final DailyChoiceRepository orderRepo;
+    private final CompanyRepository companyRepo;
 
+    /**
+     * Exporta a Excel los pedidos de una empresa para una fecha dada.
+     * Solo incluye pedidos en estados {@link #EXPORTABLE_ESTADOS} —
+     * los PENDIENTE no se exportan porque significan que el corte aún no pasó.
+     */
     @Transactional(readOnly = true)
-    public byte[] exportToExcel(LocalDate fecha) {
-        List<DailyChoice> orders = orderRepo.findAllByFechaOrderByCompanyIdAscHoraEntregaAsc(fecha);
+    public byte[] exportCompanyToExcel(Long companyId, LocalDate fecha) {
+        Company company = companyRepo.findById(companyId)
+            .orElseThrow(() -> BusinessException.notFound("company-not-found",
+                "Empresa no encontrada"));
 
-        Map<String, List<DailyChoice>> byCompany = orders.stream()
-            .collect(Collectors.groupingBy(
-                o -> o.getCompany().getNombre(),
-                LinkedHashMap::new,
-                Collectors.toList()
-            ));
+        List<DailyChoice> orders = orderRepo
+            .findAllByCompanyIdAndFechaOrderByHoraEntregaAsc(companyId, fecha)
+            .stream()
+            .filter(o -> EXPORTABLE_ESTADOS.contains(o.getEstado()))
+            .sorted(Comparator
+                .comparing(DailyChoice::getDishNombre)
+                .thenComparing(o -> o.getSideNombre() != null ? o.getSideNombre() : "")
+                .thenComparing(this::buildFullName))
+            .toList();
+
+        if (orders.isEmpty()) {
+            throw BusinessException.badRequest("no-orders",
+                "No hay pedidos confirmados para exportar de esta empresa");
+        }
 
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             CellStyle headerStyle = createHeaderStyle(workbook);
+            CellStyle totalStyle = createTotalStyle(workbook);
 
-            for (var entry : byCompany.entrySet()) {
-                List<DailyChoice> companyOrders = entry.getValue();
+            Sheet sheet = workbook.createSheet(sanitizeSheetName(company.getNombre()));
 
-                companyOrders.sort(Comparator
-                    .comparing(DailyChoice::getDishNombre)
-                    .thenComparing(o -> o.getSideNombre() != null ? o.getSideNombre() : "")
-                    .thenComparing(o -> buildFullName(o)));
-
-                Sheet sheet = workbook.createSheet(sanitizeSheetName(entry.getKey()));
-
-                String[] headers = {"Nombre y Apellido", "Plato", "Acompañamiento", "Notas", "Comandado"};
-                Row headerRow = sheet.createRow(0);
-                for (int i = 0; i < headers.length; i++) {
-                    Cell cell = headerRow.createCell(i);
-                    cell.setCellValue(headers[i]);
-                    cell.setCellStyle(headerStyle);
-                }
-
-                int rowNum = 1;
-                String lastDish = null;
-
-                for (DailyChoice order : companyOrders) {
-                    if (lastDish != null && !lastDish.equals(order.getDishNombre())) {
-                        rowNum++;
-                    }
-                    lastDish = order.getDishNombre();
-
-                    Row row = sheet.createRow(rowNum++);
-                    row.createCell(0).setCellValue(buildFullName(order));
-                    row.createCell(1).setCellValue(order.getDishNombre());
-                    row.createCell(2).setCellValue(order.getSideNombre() != null ? order.getSideNombre() : "");
-                    row.createCell(3).setCellValue(order.getNotas() != null ? order.getNotas() : "");
-                    row.createCell(4).setCellValue(false);
-                }
-
-                for (int i = 0; i < headers.length; i++) {
-                    sheet.autoSizeColumn(i);
-                }
+            String[] headers = {"Nombre y Apellido", "Plato", "Acompañamiento", "Notas", "Comandado"};
+            Row headerRow = sheet.createRow(0);
+            for (int i = 0; i < headers.length; i++) {
+                Cell cell = headerRow.createCell(i);
+                cell.setCellValue(headers[i]);
+                cell.setCellStyle(headerStyle);
             }
 
-            if (byCompany.isEmpty()) {
-                workbook.createSheet("Sin pedidos");
+            int rowNum = 1;
+            String lastDish = null;
+
+            for (DailyChoice order : orders) {
+                if (lastDish != null && !lastDish.equals(order.getDishNombre())) {
+                    rowNum++;
+                }
+                lastDish = order.getDishNombre();
+
+                Row row = sheet.createRow(rowNum++);
+                row.createCell(0).setCellValue(buildFullName(order));
+                row.createCell(1).setCellValue(order.getDishNombre());
+                row.createCell(2).setCellValue(order.getSideNombre() != null ? order.getSideNombre() : "");
+                row.createCell(3).setCellValue(order.getNotas() != null ? order.getNotas() : "");
+                row.createCell(4).setCellValue(false);
+            }
+
+            // Fila TOTAL al final
+            rowNum++;
+            Row totalRow = sheet.createRow(rowNum);
+            Cell totalLabel = totalRow.createCell(0);
+            totalLabel.setCellValue("TOTAL:");
+            totalLabel.setCellStyle(totalStyle);
+            Cell totalValue = totalRow.createCell(1);
+            totalValue.setCellValue(orders.size());
+            totalValue.setCellStyle(totalStyle);
+
+            for (int i = 0; i < headers.length; i++) {
+                sheet.autoSizeColumn(i);
             }
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -111,6 +130,15 @@ public class OrderExportService {
             .setFillForegroundColor(new XSSFColor(red, null));
         style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
 
+        return style;
+    }
+
+    private CellStyle createTotalStyle(XSSFWorkbook workbook) {
+        CellStyle style = workbook.createCellStyle();
+        XSSFFont font = workbook.createFont();
+        font.setBold(true);
+        style.setFont(font);
+        style.setBorderTop(BorderStyle.THIN);
         return style;
     }
 

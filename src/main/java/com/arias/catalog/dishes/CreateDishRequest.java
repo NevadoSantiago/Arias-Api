@@ -20,6 +20,5 @@ public record CreateDishRequest(
     List<Long> allowedSideIds,
     @NotNull @PositiveOrZero Integer stockDiarioDefault,
     @NotNull @PositiveOrZero Integer stockActual,
-    Boolean especial,
-    List<DiaSemana> diasSemana
+    Boolean especial
 ) {}

@@ -55,16 +55,6 @@ public interface DailyChoiceRepository extends JpaRepository<DailyChoice, Long> 
         UPDATE DailyChoice d
         SET d.estado = com.arias.orders.OrderEstado.COMANDADO,
             d.comandadoAt = :now
-        WHERE d.id = :id
-          AND d.estado = com.arias.orders.OrderEstado.CONFIRMADO
-    """)
-    int markComandado(@Param("id") Long id, @Param("now") Instant now);
-
-    @Modifying
-    @Query("""
-        UPDATE DailyChoice d
-        SET d.estado = com.arias.orders.OrderEstado.COMANDADO,
-            d.comandadoAt = :now
         WHERE d.company.id = :companyId
           AND d.fecha = :fecha
           AND d.estado = com.arias.orders.OrderEstado.CONFIRMADO
@@ -72,16 +62,6 @@ public interface DailyChoiceRepository extends JpaRepository<DailyChoice, Long> 
     int markComandadoByCompany(@Param("companyId") Long companyId,
                                @Param("fecha") LocalDate fecha,
                                @Param("now") Instant now);
-
-    @Modifying
-    @Query("""
-        UPDATE DailyChoice d
-        SET d.estado = com.arias.orders.OrderEstado.ENTREGADO,
-            d.deliveredAt = :now
-        WHERE d.id = :id
-          AND d.estado IN (com.arias.orders.OrderEstado.CONFIRMADO, com.arias.orders.OrderEstado.COMANDADO)
-    """)
-    int markDelivered(@Param("id") Long id, @Param("now") Instant now);
 
     @Modifying
     @Query("""
@@ -109,6 +89,34 @@ public interface DailyChoiceRepository extends JpaRepository<DailyChoice, Long> 
 
     /** Último pedido del usuario para un plato específico — usado para sugerir preferencias. */
     Optional<DailyChoice> findFirstByUserIdAndDishIdOrderByFechaDesc(Long userId, Long dishId);
+
+    /**
+     * Último pedido del usuario en el MISMO día de la semana (anterior a hoy).
+     * Usa Postgres EXTRACT(DOW): Sun=0, Mon=1, ..., Sat=6.
+     */
+    @Query(value = """
+        SELECT * FROM daily_choice
+        WHERE user_id = :userId
+          AND EXTRACT(DOW FROM fecha) = :dow
+          AND fecha < CURRENT_DATE
+        ORDER BY fecha DESC
+        LIMIT 1
+        """, nativeQuery = true)
+    Optional<DailyChoice> findLastSameWeekdayBeforeToday(
+        @Param("userId") Long userId,
+        @Param("dow") int dow);
+
+    /** Pedidos para una fecha + plato + estado — usado cuando se remueve un especial del calendario. */
+    @Query("""
+        SELECT d FROM DailyChoice d
+        WHERE d.fecha = :fecha
+          AND d.dish.id = :dishId
+          AND d.estado = :estado
+    """)
+    List<DailyChoice> findByFechaAndDishIdAndEstado(
+        @Param("fecha") LocalDate fecha,
+        @Param("dishId") Long dishId,
+        @Param("estado") OrderEstado estado);
 
     /** Pedidos PENDIENTE que tienen este plato — usado al desactivar un dish. */
     @Query("""

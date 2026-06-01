@@ -45,6 +45,18 @@ public class OrderController {
             .orElseGet(() -> ResponseEntity.noContent().build());
     }
 
+    /**
+     * Sugerencia de pedido para hoy basada en el último pedido del usuario en el
+     * mismo día de la semana. Usado por el modal "El último [día] pediste:".
+     * Devuelve 204 si no hay historial para ese día de la semana.
+     */
+    @GetMapping("/suggestion")
+    public ResponseEntity<DailyChoiceDto> getSuggestion(@AuthenticationPrincipal JwtUser user) {
+        return orderService.findLastSameWeekdayOrder(user.userId())
+            .map(ResponseEntity::ok)
+            .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
     @PostMapping
     public DailyChoiceDto place(
         @AuthenticationPrincipal JwtUser user,

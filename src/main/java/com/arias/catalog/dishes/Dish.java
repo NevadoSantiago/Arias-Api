@@ -10,7 +10,6 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.Instant;
-import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -31,6 +30,9 @@ import java.util.Set;
  *   <li>{@code stockDiarioDefault}: cantidad a la que se resetea cada mañana (cron)</li>
  *   <li>{@code stockActual}: cantidad disponible HOY, decrementa con cada pedido</li>
  * </ul>
+ *
+ * <p>Si {@code especial} es true, el plato solo aparece los días asignados explícitamente
+ * en {@link DishCalendarEntry} (tabla {@code dish_calendario}).
  */
 @Entity
 @Table(name = "dish")
@@ -72,13 +74,6 @@ public class Dish {
     @Column(nullable = false)
     @Builder.Default
     private Boolean especial = false;
-
-    @ElementCollection(fetch = FetchType.LAZY)
-    @CollectionTable(name = "dish_dia_semana", joinColumns = @JoinColumn(name = "dish_id"))
-    @Column(name = "dia")
-    @Enumerated(EnumType.STRING)
-    @Builder.Default
-    private Set<DiaSemana> diasSemana = EnumSet.noneOf(DiaSemana.class);
 
     @Column(name = "stock_diario_default", nullable = false)
     private Integer stockDiarioDefault = 0;

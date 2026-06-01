@@ -51,7 +51,7 @@ public class CompanyAdminEmployeeService {
 
     @Transactional(readOnly = true)
     public List<EmployeeDto> listEmployees(Long companyId) {
-        return userRepo.findAllByCompanyIdAndRoleOrderByEmailAsc(companyId, Role.EMPLOYEE).stream()
+        return userRepo.findAllStaffByCompanyId(companyId).stream()
             .map(EmployeeDto::from)
             .toList();
     }
@@ -186,6 +186,10 @@ public class CompanyAdminEmployeeService {
     @Transactional
     public void disable(Long companyId, Long employeeId) {
         User user = findOwn(companyId, employeeId);
+        if (user.getRole() == Role.COMPANY_ADMIN) {
+            throw BusinessException.badRequest("cannot-disable-admin",
+                "No se puede deshabilitar al administrador de la empresa");
+        }
         user.setActive(false);
 
         LocalDate today = LocalDate.now(clock);
@@ -209,6 +213,10 @@ public class CompanyAdminEmployeeService {
     @Transactional
     public void enable(Long companyId, Long employeeId) {
         User user = findOwn(companyId, employeeId);
+        if (user.getRole() == Role.COMPANY_ADMIN) {
+            throw BusinessException.badRequest("cannot-toggle-admin",
+                "El administrador de la empresa siempre está activo");
+        }
         user.setActive(true);
     }
 
@@ -224,6 +232,10 @@ public class CompanyAdminEmployeeService {
     @Transactional
     public void archive(Long companyId, Long employeeId) {
         User user = findOwn(companyId, employeeId);
+        if (user.getRole() == Role.COMPANY_ADMIN) {
+            throw BusinessException.badRequest("cannot-archive-admin",
+                "No se puede eliminar al administrador de la empresa");
+        }
         if (Boolean.TRUE.equals(user.getActive())) {
             throw BusinessException.badRequest("must-disable-first",
                 "Primero desactivá al empleado, después podés borrarlo");
@@ -244,7 +256,7 @@ public class CompanyAdminEmployeeService {
             .orElseThrow(() -> BusinessException.notFound("employee-not-found",
                 "Empleado no encontrado"));
 
-        if (user.getRole() != Role.EMPLOYEE
+        if ((user.getRole() != Role.EMPLOYEE && user.getRole() != Role.COMPANY_ADMIN)
             || user.getCompany() == null
             || !user.getCompany().getId().equals(companyId)) {
             throw BusinessException.notFound("employee-not-found", "Empleado no encontrado");
