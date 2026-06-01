@@ -63,6 +63,7 @@ public class User {
     private Category category;
 
     @Column(nullable = false)
+    @lombok.Builder.Default
     private Boolean active = true;
 
     /**
@@ -71,6 +72,7 @@ public class User {
      * o haciendo click en el link de unsubscribe del mismo mail.
      */
     @Column(name = "recibe_recordatorio_pedido", nullable = false)
+    @lombok.Builder.Default
     private Boolean recibeRecordatorioPedido = true;
 
     /**
