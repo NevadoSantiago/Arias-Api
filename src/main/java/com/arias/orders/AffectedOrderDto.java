@@ -1,11 +1,14 @@
 package com.arias.orders;
 
+import java.time.LocalDate;
+
 /**
  * Vista resumida de un pedido afectado por la desactivación de un plato o side.
  * Se muestra al admin en el modal de confirmación.
  */
 public record AffectedOrderDto(
     Long orderId,
+    LocalDate fecha,
     String userFirstName,
     String userLastName,
     String userEmail,
@@ -17,6 +20,7 @@ public record AffectedOrderDto(
         var user = c.getUser();
         return new AffectedOrderDto(
             c.getId(),
+            c.getFecha(),
             user.getFirstName(),
             user.getLastName(),
             user.getEmail(),

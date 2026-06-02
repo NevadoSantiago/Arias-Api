@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalTime;
+import java.util.Map;
 
 public record UpdateCompanyRequest(
     @NotBlank @Size(max = 150) String nombre,
@@ -20,5 +21,8 @@ public record UpdateCompanyRequest(
 
     /** Email del COMPANY_ADMIN. Si se manda y cambió respecto al actual,
      *  se actualiza el email del admin (un solo user). Opcional. */
-    @Email @Size(max = 255) String adminEmail
+    @Email @Size(max = 255) String adminEmail,
+
+    /** Precios acordados por categoría. Required: una entry por cada categoría existente. */
+    @NotNull Map<Long, Integer> categoryPrices
 ) {}

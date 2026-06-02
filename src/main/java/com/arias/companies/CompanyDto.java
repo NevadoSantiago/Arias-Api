@@ -1,6 +1,7 @@
 package com.arias.companies;
 
 import java.time.LocalTime;
+import java.util.Map;
 
 public record CompanyDto(
     Long id,
@@ -14,9 +15,11 @@ public record CompanyDto(
     String categoriaDefaultNombre,
     Boolean enabled,
     /** Email del COMPANY_ADMIN principal — null si por algún motivo no tiene admin. */
-    String adminEmail
+    String adminEmail,
+    /** Map categoryId → precio en pesos sin decimales. */
+    Map<Long, Integer> categoryPrices
 ) {
-    public static CompanyDto from(Company c, String adminEmail) {
+    public static CompanyDto from(Company c, String adminEmail, Map<Long, Integer> categoryPrices) {
         return new CompanyDto(
             c.getId(),
             c.getNombre(),
@@ -28,7 +31,8 @@ public record CompanyDto(
             c.getCategoriaDefault().getId(),
             c.getCategoriaDefault().getNombre(),
             c.getEnabled(),
-            adminEmail
+            adminEmail,
+            categoryPrices
         );
     }
 }

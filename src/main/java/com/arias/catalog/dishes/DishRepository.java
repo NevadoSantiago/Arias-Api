@@ -24,6 +24,7 @@ public interface DishRepository extends JpaRepository<Dish, Long> {
         LEFT JOIN FETCH d.allowedSides
         WHERE d.category.id IN :categoryIds
           AND d.enabled = true
+          AND d.deletedAt IS NULL
           AND d.stockActual > 0
           AND (d.especial = false OR EXISTS (
               SELECT 1 FROM DishCalendarEntry dc
@@ -52,7 +53,7 @@ public interface DishRepository extends JpaRepository<Dish, Long> {
 
     /** Reset diario del stock (lo dispara el cron a las 00:00). */
     @Modifying
-    @Query("UPDATE Dish d SET d.stockActual = d.stockDiarioDefault WHERE d.enabled = true")
+    @Query("UPDATE Dish d SET d.stockActual = d.stockDiarioDefault WHERE d.enabled = true AND d.deletedAt IS NULL")
     int resetAllStock();
 
     @Query("""
@@ -60,6 +61,7 @@ public interface DishRepository extends JpaRepository<Dish, Long> {
         LEFT JOIN FETCH d.allowedSides
         WHERE d.category.id IN :categoryIds
           AND d.enabled = true
+          AND d.deletedAt IS NULL
           AND (d.especial = false OR EXISTS (
               SELECT 1 FROM DishCalendarEntry dc
               WHERE dc.dishId = d.id AND dc.fecha = :fecha
@@ -75,6 +77,7 @@ public interface DishRepository extends JpaRepository<Dish, Long> {
             WHERE dc.dish_id = d.id AND dc.fecha = :fecha AND dc.estado = 'PENDIENTE'
         ))
         WHERE d.enabled = true
+        AND d.deleted_at IS NULL
         AND EXISTS (
             SELECT 1 FROM daily_choice dc
             WHERE dc.dish_id = d.id AND dc.fecha = :fecha AND dc.estado = 'PENDIENTE'

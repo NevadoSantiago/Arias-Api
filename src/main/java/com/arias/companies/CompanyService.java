@@ -11,8 +11,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -22,6 +27,7 @@ public class CompanyService {
     private final CompanyRepository companyRepo;
     private final UserRepository userRepo;
     private final CategoryRepository categoryRepo;
+    private final CompanyCategoryPriceRepository priceRepo;
 
     @Transactional(readOnly = true)
     public List<CompanyDto> listAll() {
@@ -59,6 +65,9 @@ public class CompanyService {
                 "Ya existe un usuario con ese email");
         }
 
+        // Validar que vengan precios para TODAS las categorías existentes
+        validateAllCategoriesPriced(req.categoryPrices());
+
         Company company = Company.builder()
             .nombre(req.nombre())
             .cuit(req.cuit())
@@ -79,6 +88,9 @@ public class CompanyService {
             .active(true)
             .build();
         userRepo.save(admin);
+
+        // Persistir precios por categoría
+        savePrices(company.getId(), req.categoryPrices());
 
         log.info("Empresa creada: {} (id={}) + admin {} (id={})",
             company.getNombre(), company.getId(), admin.getEmail(), admin.getId());
@@ -104,6 +116,9 @@ public class CompanyService {
             .orElseThrow(() -> BusinessException.notFound("category-not-found",
                 "La categoría seleccionada no existe"));
 
+        // Validar que vengan precios para todas las categorías existentes
+        validateAllCategoriesPriced(req.categoryPrices());
+
         company.setNombre(req.nombre());
         company.setCuit(req.cuit());
         company.setCalle(req.calle());
@@ -116,6 +131,11 @@ public class CompanyService {
         if (req.adminEmail() != null && !req.adminEmail().isBlank()) {
             updateAdminEmail(company, req.adminEmail().trim().toLowerCase());
         }
+
+        // Upsert de precios: borramos los previos y reinsertamos
+        priceRepo.deleteByCompanyId(id);
+        priceRepo.flush();
+        savePrices(id, req.categoryPrices());
 
         return toDto(company);
     }
@@ -141,13 +161,59 @@ public class CompanyService {
                 "Empresa no encontrada"));
     }
 
-    /** Arma el DTO incluyendo el email del COMPANY_ADMIN principal. */
+    /** Arma el DTO incluyendo el email del COMPANY_ADMIN principal y los precios. */
     private CompanyDto toDto(Company c) {
         String adminEmail = userRepo
             .findFirstByCompanyIdAndRoleOrderByIdAsc(c.getId(), Role.COMPANY_ADMIN)
             .map(User::getEmail)
             .orElse(null);
-        return CompanyDto.from(c, adminEmail);
+        Map<Long, Integer> prices = priceRepo.findByCompanyId(c.getId()).stream()
+            .collect(Collectors.toMap(
+                CompanyCategoryPrice::getCategoryId,
+                CompanyCategoryPrice::getPrecio));
+        return CompanyDto.from(c, adminEmail, prices);
+    }
+
+    /**
+     * Verifica que el map de precios incluya TODAS las categorías existentes.
+     * Si falta alguna o sobra una inexistente, error.
+     */
+    private void validateAllCategoriesPriced(Map<Long, Integer> prices) {
+        Set<Long> existing = categoryRepo.findAll().stream()
+            .map(Category::getId)
+            .collect(Collectors.toSet());
+        Set<Long> provided = prices == null ? Set.of() : prices.keySet();
+
+        Set<Long> missing = new HashSet<>(existing);
+        missing.removeAll(provided);
+        if (!missing.isEmpty()) {
+            throw BusinessException.badRequest("missing-category-prices",
+                "Faltan precios para las categorías: " + missing);
+        }
+
+        Set<Long> extra = new HashSet<>(provided);
+        extra.removeAll(existing);
+        if (!extra.isEmpty()) {
+            throw BusinessException.badRequest("invalid-category-prices",
+                "Hay precios para categorías que no existen: " + extra);
+        }
+
+        for (Integer precio : prices.values()) {
+            if (precio == null || precio < 0) {
+                throw BusinessException.badRequest("invalid-precio",
+                    "El precio debe ser un número mayor o igual a 0");
+            }
+        }
+    }
+
+    private void savePrices(Long companyId, Map<Long, Integer> prices) {
+        for (var entry : prices.entrySet()) {
+            priceRepo.save(CompanyCategoryPrice.builder()
+                .companyId(companyId)
+                .categoryId(entry.getKey())
+                .precio(entry.getValue())
+                .build());
+        }
     }
 
     /**

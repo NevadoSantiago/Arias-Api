@@ -101,4 +101,12 @@ public class Dish {
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    /**
+     * Soft delete. NULL = visible. Cuando se setea, el plato desaparece
+     * del listado del admin pero su id sigue referenciable desde DailyChoice
+     * (snapshots intactos: dish_nombre, dish_categoria, side_nombre).
+     */
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
 }

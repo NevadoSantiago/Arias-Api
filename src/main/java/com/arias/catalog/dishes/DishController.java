@@ -79,4 +79,15 @@ public class DishController {
         dishService.enable(id);
         return ResponseEntity.noContent().build();
     }
+
+    /**
+     * Soft-delete del plato. Requiere que esté deshabilitado primero.
+     * Mismo patrón que el archive de empleados.
+     */
+    @DeleteMapping("/{id}/archive")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public ResponseEntity<Void> archive(@PathVariable Long id) {
+        dishService.archive(id);
+        return ResponseEntity.noContent().build();
+    }
 }

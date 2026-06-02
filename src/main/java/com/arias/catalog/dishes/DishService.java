@@ -20,6 +20,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.*;
@@ -71,6 +72,7 @@ public class DishService {
     @Transactional(readOnly = true)
     public List<AdminDishDto> listAllForAdmin() {
         return dishRepo.findAll().stream()
+            .filter(d -> d.getDeletedAt() == null)
             .sorted(Comparator
                 .comparingInt((Dish d) -> d.getMenuSection().getOrdenDisplay())
                 .thenComparing(d -> d.getNombre().toLowerCase()))
@@ -81,7 +83,9 @@ public class DishService {
     @Transactional(readOnly = true)
     public List<AdminDishDto> listSpecialForAdmin() {
         return dishRepo.findAll().stream()
-            .filter(d -> Boolean.TRUE.equals(d.getEspecial()) && Boolean.TRUE.equals(d.getEnabled()))
+            .filter(d -> d.getDeletedAt() == null
+                && Boolean.TRUE.equals(d.getEspecial())
+                && Boolean.TRUE.equals(d.getEnabled()))
             .sorted(Comparator
                 .comparingInt((Dish d) -> d.getMenuSection().getOrdenDisplay())
                 .thenComparing(d -> d.getNombre().toLowerCase()))
@@ -178,11 +182,33 @@ public class DishService {
         findDish(id).setEnabled(true);
     }
 
+    /**
+     * Soft-delete del plato. Setea {@code deletedAt = now} y desaparece del
+     * listado del admin. Los pedidos históricos (DailyChoice) lo siguen
+     * referenciando pero con los snapshots intactos.
+     *
+     * <p>Solo permitimos archivar platos ya deshabilitados — fuerza el 2-step
+     * "primero desactivar, después borrar". Reduce errores accidentales.
+     */
+    @Transactional
+    public void archive(Long id) {
+        Dish dish = findDish(id);
+        if (Boolean.TRUE.equals(dish.getEnabled())) {
+            throw BusinessException.badRequest("must-disable-first",
+                "Primero desactivá el plato, después podés borrarlo");
+        }
+        dish.setDeletedAt(Instant.now());
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────────
 
     private Dish findDish(Long id) {
-        return dishRepo.findById(id)
+        Dish d = dishRepo.findById(id)
             .orElseThrow(() -> BusinessException.notFound("dish-not-found", "Plato no encontrado"));
+        if (d.getDeletedAt() != null) {
+            throw BusinessException.notFound("dish-not-found", "Plato no encontrado");
+        }
+        return d;
     }
 
     private Category findCategory(Long id) {
