@@ -73,13 +73,13 @@ public interface UserRepository extends JpaRepository<User, Long> {
     long countActiveEmployeesByCompany(@Param("companyId") Long companyId);
 
     /**
-     * Empleados elegibles para recibir el recordatorio diario de pedido:
-     * rol EMPLOYEE, activos, no soft-deleted, empresa activa, opt-in al
-     * recordatorio, y SIN un pedido para la fecha dada.
+     * Usuarios elegibles para recibir el recordatorio diario de pedido:
+     * EMPLOYEE o COMPANY_ADMIN (ambos hacen pedidos), activos, no soft-deleted,
+     * empresa activa, opt-in al recordatorio, y SIN un pedido para la fecha dada.
      */
     @Query("""
         SELECT u FROM User u
-        WHERE u.role = com.arias.users.Role.EMPLOYEE
+        WHERE u.role IN (com.arias.users.Role.EMPLOYEE, com.arias.users.Role.COMPANY_ADMIN)
           AND u.active = true
           AND u.deletedAt IS NULL
           AND u.recibeRecordatorioPedido = true
