@@ -56,6 +56,25 @@ public interface DishRepository extends JpaRepository<Dish, Long> {
     @Query("UPDATE Dish d SET d.stockActual = d.stockDiarioDefault WHERE d.enabled = true AND d.deletedAt IS NULL")
     int resetAllStock();
 
+    /** Conteo de platos activos (enabled + no soft-deleted) de una categoría. */
+    @Query("""
+        SELECT COUNT(d) FROM Dish d
+        WHERE d.category.id = :categoryId
+          AND d.enabled = true
+          AND d.deletedAt IS NULL
+    """)
+    long countActiveByCategoryId(@Param("categoryId") Long categoryId);
+
+    /** Deshabilita en bulk todos los platos activos de una categoría. Usado al archivar. */
+    @Modifying
+    @Query("""
+        UPDATE Dish d SET d.enabled = false
+        WHERE d.category.id = :categoryId
+          AND d.enabled = true
+          AND d.deletedAt IS NULL
+    """)
+    int disableAllByCategoryId(@Param("categoryId") Long categoryId);
+
     @Query("""
         SELECT DISTINCT d FROM Dish d
         LEFT JOIN FETCH d.allowedSides

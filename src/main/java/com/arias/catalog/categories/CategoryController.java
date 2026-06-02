@@ -60,4 +60,21 @@ public class CategoryController {
     public void enable(@PathVariable Long id) {
         service.enable(id);
     }
+
+    /**
+     * Soft-delete de la categoría. Requiere que esté deshabilitada primero.
+     * Cascade: deshabilita todos los platos activos asociados.
+     */
+    @DeleteMapping("/{id}/archive")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public void archive(@PathVariable Long id) {
+        service.archive(id);
+    }
+
+    /** Preview: cuántos platos activos quedarían deshabilitados al archivar esta categoría. */
+    @GetMapping("/{id}/affected-dishes-count")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public long affectedDishesCount(@PathVariable Long id) {
+        return service.countActiveDishesForCategory(id);
+    }
 }

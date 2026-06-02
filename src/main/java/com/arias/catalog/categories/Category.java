@@ -53,4 +53,12 @@ public class Category {
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    /**
+     * Soft delete. NULL = visible. Cuando se setea, la categoría desaparece
+     * de listados, dropdowns y queries de visibilidad — pero los registros
+     * que la referencian (dish, user, company_category_price) siguen apuntando.
+     */
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
 }

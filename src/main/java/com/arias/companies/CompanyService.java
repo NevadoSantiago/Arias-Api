@@ -179,7 +179,7 @@ public class CompanyService {
      * Si falta alguna o sobra una inexistente, error.
      */
     private void validateAllCategoriesPriced(Map<Long, Integer> prices) {
-        Set<Long> existing = categoryRepo.findAll().stream()
+        Set<Long> existing = categoryRepo.findAllNotDeleted().stream()
             .map(Category::getId)
             .collect(Collectors.toSet());
         Set<Long> provided = prices == null ? Set.of() : prices.keySet();

@@ -31,7 +31,7 @@ public class CategoryHierarchyService {
         // Iterativo + BFS: cargamos todas las categorías una vez y armamos el árbol en memoria.
         // Es O(n) por usuario, y n es pequeño (≤ 10 típicamente), así que no vale la pena
         // optimizar con CTE recursivo todavía.
-        var all = repo.findAll();
+        var all = repo.findAllNotDeleted();
         boolean changed = true;
         while (changed) {
             changed = false;

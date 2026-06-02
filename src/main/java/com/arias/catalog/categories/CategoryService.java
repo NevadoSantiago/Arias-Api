@@ -1,11 +1,13 @@
 package com.arias.catalog.categories;
 
+import com.arias.catalog.dishes.DishRepository;
 import com.arias.common.exception.BusinessException;
 import com.arias.companies.Company;
 import com.arias.companies.CompanyCategoryPrice;
 import com.arias.companies.CompanyCategoryPriceRepository;
 import com.arias.companies.CompanyRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,15 +20,17 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CategoryService {
 
     private final CategoryRepository repo;
     private final CompanyRepository companyRepo;
     private final CompanyCategoryPriceRepository priceRepo;
+    private final DishRepository dishRepo;
 
     @Transactional(readOnly = true)
     public List<AdminCategoryDto> listAllForAdmin() {
-        return repo.findAll().stream()
+        return repo.findAllNotDeleted().stream()
             .sorted(Comparator
                 .comparingInt(Category::getOrdenDisplay)
                 .thenComparing(c -> c.getNombre().toLowerCase()))
@@ -86,9 +90,18 @@ public class CategoryService {
         return toDto(category);
     }
 
+    /**
+     * Deshabilita la categoría. Cascade: también deshabilita todos los platos
+     * activos asociados (para que no queden visibles en el menú con su categoría
+     * apagada).
+     */
     @Transactional
     public void disable(Long id) {
-        findOrThrow(id).setEnabled(false);
+        Category category = findOrThrow(id);
+        int disabled = dishRepo.disableAllByCategoryId(id);
+        category.setEnabled(false);
+        log.info("Categoría deshabilitada: {} (id={}) — {} platos deshabilitados en cascada",
+            category.getNombre(), id, disabled);
     }
 
     @Transactional
@@ -96,12 +109,44 @@ public class CategoryService {
         findOrThrow(id).setEnabled(true);
     }
 
+    /**
+     * Soft-delete de la categoría. Setea {@code deletedAt = now}. Requiere
+     * estar previamente deshabilitada.
+     *
+     * <p>Cascade: deshabilita TODOS los platos activos asociados a esta categoría
+     * para evitar que queden huérfanos (categoría no visible pero plato apuntando
+     * a ella). Los pedidos históricos quedan intactos (snapshots preservados).
+     */
+    @Transactional
+    public void archive(Long id) {
+        Category category = findOrThrow(id);
+        if (Boolean.TRUE.equals(category.getEnabled())) {
+            throw BusinessException.badRequest("must-disable-first",
+                "Primero desactivá la categoría, después podés borrarla");
+        }
+        int disabled = dishRepo.disableAllByCategoryId(id);
+        category.setDeletedAt(java.time.Instant.now());
+        log.info("Categoría archivada: {} (id={}) — {} platos deshabilitados en cascada",
+            category.getNombre(), id, disabled);
+    }
+
+    /** Conteo de platos activos asociados a la categoría — para preview del modal. */
+    @Transactional(readOnly = true)
+    public long countActiveDishesForCategory(Long id) {
+        findOrThrow(id);
+        return dishRepo.countActiveByCategoryId(id);
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────────
 
     private Category findOrThrow(Long id) {
-        return repo.findById(id)
+        Category c = repo.findById(id)
             .orElseThrow(() -> BusinessException.notFound("category-not-found",
                 "Categoría no encontrada"));
+        if (c.getDeletedAt() != null) {
+            throw BusinessException.notFound("category-not-found", "Categoría no encontrada");
+        }
+        return c;
     }
 
     private AdminCategoryDto toDto(Category c) {
@@ -113,7 +158,7 @@ public class CategoryService {
     }
 
     /**
-     * Verifica que el map de precios incluya TODAS las empresas existentes.
+     * Verifica que el map de precios incluya TODAS las empresas existentes (no soft-deleted).
      * Si falta alguna o sobra una inexistente, error.
      */
     private void validateAllCompaniesPriced(Map<Long, Integer> prices) {

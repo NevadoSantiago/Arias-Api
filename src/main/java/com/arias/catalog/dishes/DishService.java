@@ -177,9 +177,16 @@ public class DishService {
         }
     }
 
+    /**
+     * Re-habilita el plato. Valida que la categoría actual del plato sea
+     * válida (no eliminada y no deshabilitada). Si no lo es, el admin debe
+     * editar el plato y asignarle otra categoría antes de habilitarlo.
+     */
     @Transactional
     public void enable(Long id) {
-        findDish(id).setEnabled(true);
+        Dish dish = findDish(id);
+        ensureCategoryValid(dish.getCategory());
+        dish.setEnabled(true);
     }
 
     /**
@@ -212,8 +219,26 @@ public class DishService {
     }
 
     private Category findCategory(Long id) {
-        return categoryRepo.findById(id)
+        Category cat = categoryRepo.findById(id)
             .orElseThrow(() -> BusinessException.notFound("category-not-found", "Categoría no encontrada"));
+        ensureCategoryValid(cat);
+        return cat;
+    }
+
+    /**
+     * Bloquea operaciones de dish (create/update/enable) si la categoría
+     * está eliminada o deshabilitada. Pedidos históricos no se ven afectados.
+     */
+    private void ensureCategoryValid(Category cat) {
+        if (cat.getDeletedAt() != null) {
+            throw BusinessException.badRequest("category-archived",
+                "La categoría del plato fue eliminada. Editá el plato y asignale otra categoría.");
+        }
+        if (!Boolean.TRUE.equals(cat.getEnabled())) {
+            throw BusinessException.badRequest("category-disabled",
+                "La categoría '" + cat.getNombre() + "' está deshabilitada. " +
+                "Reactivá la categoría o asignale otra al plato.");
+        }
     }
 
     private MenuSection findMenuSection(Long id) {
