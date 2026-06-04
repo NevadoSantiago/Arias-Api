@@ -79,6 +79,8 @@ public class SecurityConfig {
                 ).permitAll()
                 // Unsubscribe del recordatorio — link público del mail
                 .requestMatchers(HttpMethod.POST, "/api/v1/me/unsubscribe-reminder").permitAll()
+                // Cotización desde la landing pública
+                .requestMatchers(HttpMethod.POST, "/api/v1/contact/quote").permitAll()
                 // Health check
                 .requestMatchers("/actuator/health/**").permitAll()
                 // Todo lo demás autenticado
