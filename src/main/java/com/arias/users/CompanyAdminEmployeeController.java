@@ -2,6 +2,7 @@ package com.arias.users;
 
 import com.arias.common.exception.BusinessException;
 import com.arias.common.security.JwtUser;
+import com.arias.email.WelcomeEmails;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +23,7 @@ import java.util.List;
 public class CompanyAdminEmployeeController {
 
     private final CompanyAdminEmployeeService service;
+    private final WelcomeEmails welcomeEmails;
 
     @GetMapping
     public List<EmployeeDto> list(@AuthenticationPrincipal JwtUser user) {
@@ -33,7 +35,10 @@ public class CompanyAdminEmployeeController {
         @AuthenticationPrincipal JwtUser user,
         @Valid @RequestBody CreateEmployeeRequest req
     ) {
-        return service.create(ensureCompany(user), req);
+        EmployeeDto dto = service.create(ensureCompany(user), req);
+        // Bienvenida al empleado recién asociado (post-commit, best-effort).
+        welcomeEmails.sendEmployeeWelcome(dto.email());
+        return dto;
     }
 
     @PostMapping("/bulk")
@@ -41,7 +46,10 @@ public class CompanyAdminEmployeeController {
         @AuthenticationPrincipal JwtUser user,
         @Valid @RequestBody BulkCreateEmployeesRequest req
     ) {
-        return service.bulkCreate(ensureCompany(user), req);
+        BulkCreateEmployeesResult result = service.bulkCreate(ensureCompany(user), req);
+        // Un mail de bienvenida por cada empleado efectivamente creado.
+        result.created().forEach(e -> welcomeEmails.sendEmployeeWelcome(e.email()));
+        return result;
     }
 
     @PutMapping("/{id}/category")

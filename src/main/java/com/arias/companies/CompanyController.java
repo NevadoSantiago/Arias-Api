@@ -1,5 +1,6 @@
 package com.arias.companies;
 
+import com.arias.email.WelcomeEmails;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -15,6 +16,7 @@ import java.util.List;
 public class CompanyController {
 
     private final CompanyService companyService;
+    private final WelcomeEmails welcomeEmails;
 
     @GetMapping
     public List<CompanyDto> list() {
@@ -28,7 +30,10 @@ public class CompanyController {
 
     @PostMapping
     public CompanyDto create(@Valid @RequestBody CreateCompanyRequest req) {
-        return companyService.create(req);
+        CompanyDto dto = companyService.create(req);
+        // Bienvenida al CompanyAdmin recién creado (post-commit, best-effort).
+        welcomeEmails.sendCompanyAdminWelcome(dto.adminEmail(), dto.nombre());
+        return dto;
     }
 
     @PutMapping("/{id}")
