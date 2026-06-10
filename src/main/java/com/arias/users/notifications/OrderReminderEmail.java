@@ -2,9 +2,12 @@ package com.arias.users.notifications;
 
 import com.arias.email.EmailProperties;
 import com.arias.email.EmailService;
+import com.arias.email.OutgoingEmail;
 import com.arias.users.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
+
+import java.util.List;
 
 /**
  * Template HTML del recordatorio diario "¿te olvidaste tu almuerzo?".
@@ -18,13 +21,27 @@ public class OrderReminderEmail {
     private final EmailProperties props;
     private final ReminderUnsubscribeToken tokens;
 
+    private static final String SUBJECT = "¿Te olvidaste tu almuerzo de hoy?";
+
     public void send(User user) {
+        emailService.send(user.getEmail(), SUBJECT, buildHtml(user));
+    }
+
+    /** Recordatorios en una sola request a Resend (batch) — evita el rate limit de 2 req/s. */
+    public void sendBatch(List<User> users) {
+        List<OutgoingEmail> batch = users.stream()
+            .map(u -> new OutgoingEmail(u.getEmail(), SUBJECT, buildHtml(u)))
+            .toList();
+        emailService.sendBatch(batch);
+    }
+
+    private String buildHtml(User user) {
         String firstName = safeName(user.getFirstName());
         String token = tokens.generate(user.getId());
         String unsubscribeUrl = props.appUrl() + "/unsubscribe-reminder?t=" + token;
         String menuUrl = props.appUrl() + "/orders/today";
 
-        String html = """
+        return """
             <!DOCTYPE html>
             <html>
             <head><meta charset="utf-8"></head>
@@ -50,8 +67,6 @@ public class OrderReminderEmail {
             </body>
             </html>
             """.formatted(firstName, menuUrl, unsubscribeUrl);
-
-        emailService.send(user.getEmail(), "¿Te olvidaste tu almuerzo de hoy?", html);
     }
 
     private static String safeName(String name) {

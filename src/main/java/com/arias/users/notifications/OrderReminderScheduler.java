@@ -78,9 +78,7 @@ public class OrderReminderScheduler {
             return;
         }
 
-        for (User u : recipients) {
-            email.send(u);
-        }
+        email.sendBatch(recipients);
         log.info("[CRON-REMINDER] {} — enviado a {} empleados", today, recipients.size());
         updateRecipientCount(today, recipients.size());
     }

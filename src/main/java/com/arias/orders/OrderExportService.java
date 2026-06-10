@@ -62,6 +62,10 @@ public class OrderExportService {
             Sheet sheet = workbook.createSheet(sanitizeSheetName(company.getNombre()));
 
             String[] headers = {"Nombre y Apellido", "Plato", "Acompañamiento", "Notas", "Comandado"};
+            // Anchos fijos (en caracteres). autoSizeColumn usa AWT/fontconfig
+            // para medir texto y explota en contenedores sin fuentes instaladas
+            // (UnsatisfiedLinkError: libfreetype.so.6 en Railway).
+            int[] columnWidths = {28, 30, 25, 40, 12};
             Row headerRow = sheet.createRow(0);
             for (int i = 0; i < headers.length; i++) {
                 Cell cell = headerRow.createCell(i);
@@ -96,8 +100,8 @@ public class OrderExportService {
             totalValue.setCellValue(orders.size());
             totalValue.setCellStyle(totalStyle);
 
-            for (int i = 0; i < headers.length; i++) {
-                sheet.autoSizeColumn(i);
+            for (int i = 0; i < columnWidths.length; i++) {
+                sheet.setColumnWidth(i, columnWidths[i] * 256);
             }
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();

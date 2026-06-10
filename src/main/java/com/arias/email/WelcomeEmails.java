@@ -6,6 +6,7 @@ import org.springframework.web.util.HtmlUtils;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
  * Mails de bienvenida / activación de cuenta. Se disparan cuando se asocia
@@ -39,18 +40,32 @@ public class WelcomeEmails {
             buildHtml("¡Bienvenido a Arias!", intro, "Activar mi cuenta", loginUrl(toEmail)));
     }
 
+    private static final String EMPLOYEE_SUBJECT = "Bienvenido a Arias — Activá tu cuenta";
+    private static final String EMPLOYEE_INTRO = """
+        <p style="line-height: 1.6; margin: 0 0 16px;">Tu empresa te sumó a Arias, así que andá preparando la servilleta. \
+        De ahora en más vas a poder elegir tu almuerzo entre nuestros platos caseros de bodegón, y te lo llevamos directo a la oficina.</p>
+        <p style="line-height: 1.6; margin: 0 0 24px;">Para empezar, activá tu cuenta creando tu contraseña.</p>
+        """;
+
     /** Bienvenida a un empleado recién asociado a una empresa. */
     public void sendEmployeeWelcome(String toEmail) {
         if (toEmail == null || toEmail.isBlank()) return;
 
-        String intro = """
-            <p style="line-height: 1.6; margin: 0 0 16px;">Tu empresa te sumó a Arias, así que andá preparando la servilleta. \
-            De ahora en más vas a poder elegir tu almuerzo entre nuestros platos caseros de bodegón, y te lo llevamos directo a la oficina.</p>
-            <p style="line-height: 1.6; margin: 0 0 24px;">Para empezar, activá tu cuenta creando tu contraseña.</p>
-            """;
+        emailService.send(toEmail, EMPLOYEE_SUBJECT,
+            buildHtml("¡Bienvenido a Arias!", EMPLOYEE_INTRO, "Activar mi cuenta", loginUrl(toEmail)));
+    }
 
-        emailService.send(toEmail, "Bienvenido a Arias — Activá tu cuenta",
-            buildHtml("¡Bienvenido a Arias!", intro, "Activar mi cuenta", loginUrl(toEmail)));
+    /**
+     * Bienvenida a varios empleados en una sola request a Resend (batch).
+     * Para el alta masiva: evita el rate limit de 2 req/s.
+     */
+    public void sendEmployeeWelcomeBatch(List<String> toEmails) {
+        List<OutgoingEmail> batch = toEmails.stream()
+            .filter(e -> e != null && !e.isBlank())
+            .map(e -> new OutgoingEmail(e, EMPLOYEE_SUBJECT,
+                buildHtml("¡Bienvenido a Arias!", EMPLOYEE_INTRO, "Activar mi cuenta", loginUrl(e))))
+            .toList();
+        emailService.sendBatch(batch);
     }
 
     /** Link al login con el email pre-cargado (cae en el flujo de first-login). */

@@ -3,6 +3,7 @@ package com.arias.common.exception;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -49,6 +50,35 @@ public class GlobalExceptionHandler {
         ProblemDetail pd = ProblemDetail.forStatusAndDetail(ex.getStatus(), ex.getMessage());
         pd.setTitle(ex.getErrorCode());
         pd.setType(URI.create("https://arias.com/errors/" + ex.getErrorCode()));
+        return pd;
+    }
+
+    /**
+     * Denegación de @PreAuthorize. Tiene que ir ANTES del catch-all: si la
+     * agarra el handler genérico, un acceso denegado se vuelve 500 en vez de 403.
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ProblemDetail handleAccessDenied(AccessDeniedException ex) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(
+            HttpStatus.FORBIDDEN, "No tenés permisos para esta operación");
+        pd.setTitle("Acceso denegado");
+        pd.setType(URI.create("https://arias.com/errors/forbidden"));
+        return pd;
+    }
+
+    /**
+     * Catch-all. Sin esto, cualquier excepción no manejada forwardea a /error
+     * (no whitelisteado en Security) y el cliente ve un 401 falso en vez del
+     * 500 real — imposible de diagnosticar desde el front.
+     */
+    @ExceptionHandler(Exception.class)
+    public ProblemDetail handleUnexpected(Exception ex) {
+        log.error("Excepción no manejada", ex);
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            "Ocurrió un error inesperado. Probá de nuevo en unos minutos.");
+        pd.setTitle("Error interno");
+        pd.setType(URI.create("https://arias.com/errors/internal"));
         return pd;
     }
 }

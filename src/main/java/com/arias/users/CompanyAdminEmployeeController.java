@@ -47,8 +47,9 @@ public class CompanyAdminEmployeeController {
         @Valid @RequestBody BulkCreateEmployeesRequest req
     ) {
         BulkCreateEmployeesResult result = service.bulkCreate(ensureCompany(user), req);
-        // Un mail de bienvenida por cada empleado efectivamente creado.
-        result.created().forEach(e -> welcomeEmails.sendEmployeeWelcome(e.email()));
+        // Bienvenidas en UNA sola request a Resend (batch) — evita el rate limit.
+        welcomeEmails.sendEmployeeWelcomeBatch(
+            result.created().stream().map(EmployeeDto::email).toList());
         return result;
     }
 
