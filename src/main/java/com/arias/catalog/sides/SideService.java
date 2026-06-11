@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalTime;
 import java.util.Comparator;
 import java.util.List;
@@ -27,6 +28,7 @@ public class SideService {
     @Transactional(readOnly = true)
     public List<SideDto> listAll() {
         return repo.findAll().stream()
+            .filter(s -> s.getDeletedAt() == null)
             .sorted(Comparator
                 .comparing(Side::getTipo)
                 .thenComparing(s -> s.getNombre().toLowerCase()))
@@ -36,18 +38,46 @@ public class SideService {
 
     @Transactional
     public SideDto create(CreateSideRequest req) {
-        if (repo.findAll().stream()
-            .anyMatch(s -> s.getNombre().equalsIgnoreCase(req.nombre()))) {
-            throw BusinessException.conflict("side-name-duplicate",
-                "Ya existe un acompañamiento con ese nombre");
+        String nombre = req.nombre().trim();
+        Side existing = repo.findAll().stream()
+            .filter(s -> s.getNombre().equalsIgnoreCase(nombre))
+            .findFirst()
+            .orElse(null);
+
+        if (existing != null) {
+            if (existing.getDeletedAt() == null) {
+                throw BusinessException.conflict("side-name-duplicate",
+                    "Ya existe un acompañamiento con ese nombre");
+            }
+            return SideDto.from(resurrect(existing, nombre, req.tipo()));
         }
 
         Side side = Side.builder()
-            .nombre(req.nombre().trim())
+            .nombre(nombre)
             .tipo(req.tipo())
             .enabled(true)
             .build();
         return SideDto.from(repo.save(side));
+    }
+
+    /**
+     * Crear un side con el nombre de uno archivado lo RESUCITA en vez de
+     * chocar con el UNIQUE de nombre. Reusar la fila preserva el historial
+     * (daily_choice.side_id) intacto.
+     *
+     * <p>Si el tipo cambia (era guarnición, vuelve como salsa), las
+     * asociaciones viejas en dish_side quedarían con un tipo que el plato
+     * no admite — se limpian y el admin lo asocia de nuevo donde quiera.
+     */
+    private Side resurrect(Side side, String nombre, SideType tipo) {
+        if (side.getTipo() != tipo) {
+            repo.removeFromAllDishes(side.getId());
+        }
+        side.setNombre(nombre);
+        side.setTipo(tipo);
+        side.setEnabled(true);
+        side.setDeletedAt(null);
+        return side;
     }
 
     @Transactional
@@ -101,8 +131,24 @@ public class SideService {
         findOrThrow(id).setEnabled(true);
     }
 
+    /**
+     * Soft-delete del acompañamiento. Requiere estar deshabilitado primero
+     * (2-step disable → delete, mismo patrón que Dish/Category). Los pedidos
+     * históricos conservan el snapshot sideNombre y el FK side_id intacto.
+     */
+    @Transactional
+    public void archive(Long id) {
+        Side side = findOrThrow(id);
+        if (Boolean.TRUE.equals(side.getEnabled())) {
+            throw BusinessException.badRequest("must-disable-first",
+                "Primero desactivá el acompañamiento, después podés borrarlo");
+        }
+        side.setDeletedAt(Instant.now());
+    }
+
     private Side findOrThrow(Long id) {
         return repo.findById(id)
+            .filter(s -> s.getDeletedAt() == null)
             .orElseThrow(() -> BusinessException.notFound("side-not-found",
                 "Acompañamiento no encontrado"));
     }

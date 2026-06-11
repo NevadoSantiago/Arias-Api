@@ -75,8 +75,8 @@ public class DemoDataBootstrap implements CommandLineRunner {
         MenuSection sandwich  = menuSectionRepo.findByNombre("Sandwich").orElseThrow();
         MenuSection ensaladas = menuSectionRepo.findByNombre("Ensaladas").orElseThrow();
 
-        Set<Side> guarniciones = Set.copyOf(sideRepo.findAllByTipoAndEnabledTrueOrderByNombreAsc(SideType.GUARNICION));
-        Set<Side> salsas       = Set.copyOf(sideRepo.findAllByTipoAndEnabledTrueOrderByNombreAsc(SideType.SALSA));
+        Set<Side> guarniciones = Set.copyOf(sideRepo.findAllByTipoAndEnabledTrueAndDeletedAtIsNullOrderByNombreAsc(SideType.GUARNICION));
+        Set<Side> salsas       = Set.copyOf(sideRepo.findAllByTipoAndEnabledTrueAndDeletedAtIsNullOrderByNombreAsc(SideType.SALSA));
 
         // ─── Company de prueba ─────────────────────────────────────────────
         Company techCorp = Company.builder()

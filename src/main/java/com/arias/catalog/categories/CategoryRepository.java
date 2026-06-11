@@ -12,6 +12,13 @@ public interface CategoryRepository extends JpaRepository<Category, Long> {
     @Query("SELECT c FROM Category c WHERE c.nombre = :nombre AND c.deletedAt IS NULL")
     Optional<Category> findByNombre(@Param("nombre") String nombre);
 
+    /**
+     * Incluye archivadas. Para el create: una archivada con ese nombre se
+     * resucita en vez de chocar contra el UNIQUE uq_category_nombre.
+     */
+    @Query("SELECT c FROM Category c WHERE c.nombre = :nombre")
+    Optional<Category> findByNombreIncludingDeleted(@Param("nombre") String nombre);
+
     @Query("""
         SELECT c FROM Category c
         WHERE c.enabled = true AND c.deletedAt IS NULL

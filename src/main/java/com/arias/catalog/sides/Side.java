@@ -37,6 +37,10 @@ public class Side {
     @Column(nullable = false)
     private Boolean enabled = true;
 
+    /** Soft delete — NULL = visible. Mismo patrón que Dish/Category. */
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

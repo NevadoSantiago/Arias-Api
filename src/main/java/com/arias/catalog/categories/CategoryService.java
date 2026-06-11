@@ -40,16 +40,37 @@ public class CategoryService {
 
     @Transactional
     public AdminCategoryDto create(CreateCategoryRequest req) {
-        repo.findByNombre(req.nombre().trim()).ifPresent(c -> {
+        String nombre = req.nombre().trim();
+        Category existing = repo.findByNombreIncludingDeleted(nombre).orElse(null);
+
+        if (existing != null && existing.getDeletedAt() == null) {
             throw BusinessException.conflict("category-name-duplicate",
                 "Ya existe una categoría con ese nombre");
-        });
+        }
 
-        Category parent = resolveParent(req.parentId(), null);
+        Category parent = resolveParent(req.parentId(), existing != null ? existing.getId() : null);
         validateAllCompaniesPriced(req.companyPrices());
 
+        // Resurrección: crear con el nombre de una categoría archivada la
+        // restaura, pero con TODOS los datos del request (parent, orden,
+        // precios) — no el estado zombie que tenía al archivarse. Los platos
+        // que el archive deshabilitó en cascada NO se reactivan solos.
+        if (existing != null) {
+            existing.setNombre(nombre);
+            existing.setParent(parent);
+            existing.setOrdenDisplay(req.ordenDisplay());
+            existing.setEnabled(true);
+            existing.setDeletedAt(null);
+
+            priceRepo.deleteByCategoryId(existing.getId());
+            priceRepo.flush();
+            savePrices(existing.getId(), req.companyPrices());
+
+            return toDto(existing);
+        }
+
         Category category = Category.builder()
-            .nombre(req.nombre().trim())
+            .nombre(nombre)
             .parent(parent)
             .ordenDisplay(req.ordenDisplay())
             .enabled(true)
@@ -66,10 +87,15 @@ public class CategoryService {
         Category category = findOrThrow(id);
 
         if (!category.getNombre().equalsIgnoreCase(req.nombre())) {
-            repo.findByNombre(req.nombre().trim()).ifPresent(other -> {
+            // Incluye archivadas: el UNIQUE de la base las cuenta igual, y sin
+            // este chequeo el rename explotaría con un 500 de constraint.
+            repo.findByNombreIncludingDeleted(req.nombre().trim()).ifPresent(other -> {
                 if (!other.getId().equals(id)) {
                     throw BusinessException.conflict("category-name-duplicate",
-                        "Ya existe otra categoría con ese nombre");
+                        other.getDeletedAt() == null
+                            ? "Ya existe otra categoría con ese nombre"
+                            : "Ese nombre pertenece a una categoría eliminada. " +
+                              "Crearla de nuevo desde 'Nueva categoría' la restaura.");
                 }
             });
         }

@@ -20,7 +20,7 @@ public class SideController {
     @GetMapping
     @PreAuthorize("isAuthenticated()")
     public List<SideDto> list() {
-        return repo.findAllByEnabledTrueOrderByTipoAscNombreAsc().stream()
+        return repo.findAllByEnabledTrueAndDeletedAtIsNullOrderByTipoAscNombreAsc().stream()
             .map(SideDto::from)
             .toList();
     }
@@ -62,6 +62,17 @@ public class SideController {
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<Void> enable(@PathVariable Long id) {
         service.enable(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Soft-delete del acompañamiento. Requiere que esté deshabilitado primero.
+     * Mismo patrón que el archive de platos y categorías.
+     */
+    @DeleteMapping("/{id}/archive")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public ResponseEntity<Void> archive(@PathVariable Long id) {
+        service.archive(id);
         return ResponseEntity.noContent().build();
     }
 }
