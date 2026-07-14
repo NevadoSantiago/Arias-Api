@@ -83,6 +83,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/contact/quote").permitAll()
                 // Health check
                 .requestMatchers("/actuator/health/**").permitAll()
+                // Swagger UI / OpenAPI spec — documentación pública de la API
+                .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                 // Todo lo demás autenticado
                 .anyRequest().authenticated()
             )
