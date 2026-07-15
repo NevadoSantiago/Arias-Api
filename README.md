@@ -148,7 +148,7 @@ En dev, Vite corre en `http://localhost:5173` y proxea `/api` hacia `http://loca
 
 ## Slides
 
-[`docs/slides/Arias-TFM-Slides.pptx`](docs/slides/Arias-TFM-Slides.pptx) — presentación del
+[`docs/slides/Arias-TFM-Slides-Final.pptx`](docs/slides/Arias-TFM-Slides.pptx) — presentación del
 proyecto (contexto, funcionalidades, stack, arquitectura, despliegue).
 
 ## Video explicativo
