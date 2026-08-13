@@ -22,6 +22,69 @@ public interface DailyChoiceRepository extends JpaRepository<DailyChoice, Long> 
     List<DailyChoice> findAllByFechaOrderByCompanyIdAscHoraEntregaAsc(LocalDate fecha);
 
     /**
+     * Agregación de facturación: pedidos servidos en un rango, agrupados por
+     * empresa × categoría × precio congelado.
+     *
+     * <p>El criterio facturable es {@code confirmedAt IS NOT NULL}, NO
+     * {@code estado = CONFIRMADO}. El campo {@code estado} se SOBREESCRIBE al
+     * avanzar (CONFIRMADO → COMANDADO → ENTREGADO), así que filtrar por él
+     * devolvería solo los pedidos que nunca se cocinaron. {@code confirmedAt}
+     * lo setea el cron de corte y no se pisa nunca más.
+     *
+     * <p>Los pedidos cancelados no requieren filtro: {@code OrderService.cancel}
+     * borra la fila, no existe estado CANCELADO.
+     *
+     * <p>{@code LEFT JOIN} en category a propósito — un inner join descartaría
+     * en silencio los pedidos anteriores a V14 sin categoría, que es justo lo
+     * que el reporte necesita mostrar como alerta.
+     */
+    /**
+     * @param companyId null = todas las empresas. El {@code :companyId IS NULL}
+     *                  evita duplicar la query para el caso filtrado.
+     */
+    @Query("""
+        SELECT new com.arias.billing.BillingRow(
+            c.id, c.nombre, cat.id, cat.nombre, d.dishCategoria, d.precioSnapshot, COUNT(d))
+        FROM DailyChoice d
+        JOIN d.company c
+        LEFT JOIN d.category cat
+        WHERE d.confirmedAt IS NOT NULL
+          AND d.fecha BETWEEN :desde AND :hasta
+          AND (:companyId IS NULL OR c.id = :companyId)
+        GROUP BY c.id, c.nombre, cat.id, cat.nombre, d.dishCategoria, d.precioSnapshot
+        ORDER BY c.nombre ASC, d.dishCategoria ASC
+    """)
+    List<com.arias.billing.BillingRow> aggregateBilling(@Param("desde") LocalDate desde,
+                                                        @Param("hasta") LocalDate hasta,
+                                                        @Param("companyId") Long companyId);
+
+    /**
+     * Totales por día del período — evolución de la facturación.
+     *
+     * <p>Mismo criterio y mismo filtro que {@link #aggregateBilling}: los dos
+     * cortes tienen que sumar lo mismo o el reporte se contradice a sí mismo.
+     *
+     * <p>{@code COALESCE} adentro del SUM: sin él, un día donde TODOS los pedidos
+     * son anteriores a V14 (precio null) devolvería total null en vez de 0.
+     *
+     * <p>Solo devuelve días CON pedidos. Los días sin actividad no existen como
+     * fila — el frontend los muestra como hueco, que es la verdad.
+     */
+    @Query("""
+        SELECT new com.arias.billing.DailyTotalRow(
+            d.fecha, COUNT(d), SUM(COALESCE(d.precioSnapshot, 0)))
+        FROM DailyChoice d
+        WHERE d.confirmedAt IS NOT NULL
+          AND d.fecha BETWEEN :desde AND :hasta
+          AND (:companyId IS NULL OR d.company.id = :companyId)
+        GROUP BY d.fecha
+        ORDER BY d.fecha ASC
+    """)
+    List<com.arias.billing.DailyTotalRow> aggregateDailyTotals(@Param("desde") LocalDate desde,
+                                                               @Param("hasta") LocalDate hasta,
+                                                               @Param("companyId") Long companyId);
+
+    /**
      * Cron de corte: pasa todos los pedidos PENDIENTE → CONFIRMADO para una fecha.
      * Setea confirmed_at = NOW().
      */

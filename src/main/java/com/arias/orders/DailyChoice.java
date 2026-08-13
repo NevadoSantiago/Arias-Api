@@ -1,5 +1,6 @@
 package com.arias.orders;
 
+import com.arias.catalog.categories.Category;
 import com.arias.catalog.dishes.Dish;
 import com.arias.catalog.sides.Side;
 import com.arias.companies.Company;
@@ -83,6 +84,28 @@ public class DailyChoice {
 
     @Column(name = "hora_entrega", nullable = false)
     private LocalTime horaEntrega;
+
+    /**
+     * Categoría (tier) del plato al momento del pedido. Se guarda además del
+     * snapshot {@code dishCategoria} porque agrupar la facturación por NOMBRE
+     * se rompe en silencio si el admin renombra la categoría.
+     *
+     * <p>Nullable solo por los pedidos anteriores a V14.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "category_id")
+    private Category category;
+
+    /**
+     * Precio acordado (company × category) CONGELADO al momento del pedido.
+     * Renegociar la tarifa con la empresa NO reescribe los pedidos ya hechos:
+     * el precio nuevo aplica solo a pedidos futuros.
+     *
+     * <p>Nullable solo por los pedidos anteriores a V14 — el reporte de
+     * facturación los excluye del monto.
+     */
+    @Column(name = "precio_snapshot")
+    private Integer precioSnapshot;
 
     // ── Timestamps ─────────────────────────────────────────────────────
     @CreationTimestamp

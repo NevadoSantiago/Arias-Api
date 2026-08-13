@@ -1,15 +1,20 @@
 package com.arias.orders;
 
+import com.arias.catalog.categories.Category;
 import com.arias.catalog.dishes.Dish;
 import com.arias.catalog.dishes.DishRepository;
 import com.arias.catalog.sides.Side;
 import com.arias.catalog.sides.SideRepository;
 import com.arias.common.exception.BusinessException;
+import com.arias.companies.CompanyCategoryPrice;
+import com.arias.companies.CompanyCategoryPriceId;
+import com.arias.companies.CompanyCategoryPriceRepository;
 import com.arias.restaurantconfig.FechaDeshabilitadaRepository;
 import com.arias.restaurantconfig.RestaurantConfigRepository;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,6 +39,7 @@ import java.util.Optional;
  * </ul>
  */
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class OrderService {
 
@@ -43,6 +49,7 @@ public class OrderService {
     private final SideRepository sideRepo;
     private final RestaurantConfigRepository configRepo;
     private final FechaDeshabilitadaRepository fechaDeshabilitadaRepo;
+    private final CompanyCategoryPriceRepository priceRepo;
     private final Clock clock;
 
     @Transactional(readOnly = true)
@@ -169,6 +176,8 @@ public class OrderService {
             .dishCategoria(dish.getCategory().getNombre())
             .sideNombre(side != null ? side.getNombre() : null)
             .horaEntrega(user.getCompany().getHoraEntrega())
+            .category(dish.getCategory())
+            .precioSnapshot(resolvePrecio(user.getCompany().getId(), dish.getCategory()))
             .build();
 
         return orderRepo.save(order);
@@ -209,6 +218,12 @@ public class OrderService {
             existing.setDish(newDish);
             existing.setDishNombre(newDish.getNombre());
             existing.setDishCategoria(newDish.getCategory().getNombre());
+
+            // Cambiar de plato puede cambiar de categoría, y la categoría define
+            // el precio. Se recongela igual que el resto de los snapshots.
+            existing.setCategory(newDish.getCategory());
+            existing.setPrecioSnapshot(
+                resolvePrecio(existing.getCompany().getId(), newDish.getCategory()));
         }
 
         Side side = validateAndResolveSide(existing.getDish(), req.sideId());
@@ -265,6 +280,24 @@ public class OrderService {
     }
 
     // ─── helpers ──────────────────────────────────────────────────────────
+
+    /**
+     * Precio acordado (empresa × categoría) al momento del pedido.
+     *
+     * <p>Si la empresa no tiene precio configurado para esa categoría devuelve 0
+     * en vez de fallar. Un empleado NO puede quedarse sin almorzar porque falta
+     * una fila de configuración administrativa. El reporte de facturación expone
+     * esos pedidos como "sin tarifa" para que el admin los corrija.
+     */
+    private Integer resolvePrecio(Long companyId, Category category) {
+        return priceRepo.findById(new CompanyCategoryPriceId(companyId, category.getId()))
+            .map(CompanyCategoryPrice::getPrecio)
+            .orElseGet(() -> {
+                log.warn("Sin precio configurado para company={} category={} — pedido guardado en 0",
+                    companyId, category.getId());
+                return 0;
+            });
+    }
 
     private DailyChoice mustOwn(Long userId, Long orderId) {
         DailyChoice existing = orderRepo.findById(orderId)
