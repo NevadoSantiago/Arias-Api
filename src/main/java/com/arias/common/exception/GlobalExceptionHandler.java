@@ -5,8 +5,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.net.URI;
 import java.util.stream.Collectors;
@@ -42,6 +44,34 @@ public class GlobalExceptionHandler {
         );
         pd.setTitle("Datos inválidos");
         pd.setType(URI.create("https://arias.com/errors/validation"));
+        return pd;
+    }
+
+    /**
+     * Falta un @RequestParam obligatorio. Sin este handler cae en el catch-all
+     * y devuelve 500 — le dice al cliente "el server se rompió" cuando en
+     * realidad la request vino mal armada.
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ProblemDetail handleMissingParam(MissingServletRequestParameterException ex) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(
+            HttpStatus.BAD_REQUEST, "Falta el parámetro '" + ex.getParameterName() + "'");
+        pd.setTitle("Parámetro faltante");
+        pd.setType(URI.create("https://arias.com/errors/missing-parameter"));
+        return pd;
+    }
+
+    /**
+     * Parámetro con formato inválido (ej: ?desde=ayer donde se espera una fecha
+     * ISO). Mismo caso que el anterior: es culpa del cliente, no del server.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ProblemDetail handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(
+            HttpStatus.BAD_REQUEST,
+            "El parámetro '" + ex.getName() + "' tiene un formato inválido");
+        pd.setTitle("Parámetro inválido");
+        pd.setType(URI.create("https://arias.com/errors/invalid-parameter"));
         return pd;
     }
 
