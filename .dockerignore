@@ -1,0 +1,12 @@
+target/
+.git/
+.idea/
+.mvn/wrapper/maven-wrapper.jar
+*.iml
+docs/
+docker-compose.yml
+HELP.md
+README.md
+
+# NUNCA meter credenciales locales en la imagen
+src/main/resources/application-local.yml

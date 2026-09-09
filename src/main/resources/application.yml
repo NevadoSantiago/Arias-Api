@@ -131,6 +131,28 @@ spring:
   jpa:
     show-sql: false
 
+  datasource:
+    hikari:
+      # Cada conexión cuesta memoria acá Y en el Postgres del otro lado.
+      # Con el tráfico de Arias, 5 sobran de largo.
+      maximum-pool-size: 5
+      minimum-idle: 1
+
+server:
+  tomcat:
+    threads:
+      # Default de Tomcat: 200. Cada thread reserva su propio stack.
+      max: 20
+      min-spare: 2
+
+# Swagger fuera de producción: carga muchísimas clases en metaspace
+# y además publica la superficie completa de la API.
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
 logging:
   level:
     root: WARN
