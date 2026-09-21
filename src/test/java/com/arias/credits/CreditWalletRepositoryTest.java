@@ -147,4 +147,38 @@ class CreditWalletRepositoryTest {
         CreditWallet reloaded = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
         assertThat(reloaded.getExpiresAt()).isEqualTo(expiry);
     }
+
+    /**
+     * {@code findUserIdsDueForExpiration} alimenta el barrido horario de
+     * {@code CreditExpiryScheduler} (unidad 3) — solo debe traer billeteras
+     * vencidas con saldo AVAILABLE a favor; excluye las sin fecha, las
+     * futuras y las que ya están en cero.
+     */
+    @Test
+    void findUserIdsDueForExpirationSoloTraeBilleterasVencidasConSaldo() {
+        Instant now = Instant.now();
+        User vencidoConSaldo = persistTestUser("ledger-due-1-" + System.nanoTime() + "@test.arias.com");
+        User vencidoSinSaldo = persistTestUser("ledger-due-2-" + System.nanoTime() + "@test.arias.com");
+        User noVencidoTodavia = persistTestUser("ledger-due-3-" + System.nanoTime() + "@test.arias.com");
+        User sinFechaDeVencimiento = persistTestUser("ledger-due-4-" + System.nanoTime() + "@test.arias.com");
+
+        walletRepo.saveAndFlush(CreditWallet.builder()
+            .userId(vencidoConSaldo.getId()).available(3).committed(0)
+            .expiresAt(now.minus(1, ChronoUnit.DAYS)).build());
+        walletRepo.saveAndFlush(CreditWallet.builder()
+            .userId(vencidoSinSaldo.getId()).available(0).committed(2)
+            .expiresAt(now.minus(1, ChronoUnit.DAYS)).build());
+        walletRepo.saveAndFlush(CreditWallet.builder()
+            .userId(noVencidoTodavia.getId()).available(3).committed(0)
+            .expiresAt(now.plus(10, ChronoUnit.DAYS)).build());
+        walletRepo.saveAndFlush(CreditWallet.builder()
+            .userId(sinFechaDeVencimiento.getId()).available(3).committed(0)
+            .expiresAt(null).build());
+
+        var due = walletRepo.findUserIdsDueForExpiration(now);
+
+        assertThat(due).contains(vencidoConSaldo.getId());
+        assertThat(due).doesNotContain(
+            vencidoSinSaldo.getId(), noVencidoTodavia.getId(), sinFechaDeVencimiento.getId());
+    }
 }

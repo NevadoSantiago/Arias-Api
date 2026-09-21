@@ -63,10 +63,10 @@ Verificación: `./mvnw test -Dtest=CreditWalletRepositoryTest` (contexto Spring 
 
 ## Unidad 3 — `CreditLedgerService` + expiración (backend)
 
-- [ ] 3.1 `backend/src/main/java/com/arias/credits/CreditLedgerService.java`: método `apply(userId, type, deltaAvailable, deltaCommitted, ref)` único punto de mutación de saldo; `commit()`, `release()`, `consume()`; `expireIfDue()` como guard perezoso.
-- [ ] 3.2 `backend/src/main/java/com/arias/credits/CreditController.java`: `GET /api/v1/credits/wallet`, `GET /api/v1/credits/movements`.
-- [ ] 3.3 `backend/src/main/java/com/arias/credits/CreditExpiryScheduler.java`: job horario sobre `expires_at <= now AND available > 0` → movimiento `EXPIRATION`, `committed` intacto (decisión confirmada: expiración solo toca AVAILABLE).
-- [ ] 3.4 RED→GREEN: `backend/src/test/java/com/arias/credits/CreditLedgerServiceTest.java` — máquina de estados COMMIT/RELEASE/CONSUME/EXPIRATION, invariante `saldo == SUM(deltas)`, test de compromisos paralelos sobre la misma billetera (sin sobregiro) — cubre spec `credit-ledger` completa.
+- [x] 3.1 `backend/src/main/java/com/arias/credits/CreditLedgerService.java`: método `apply(userId, type, deltaAvailable, deltaCommitted, ref)` único punto de mutación de saldo; `commit()`, `release()`, `consume()`; `expireIfDue()` como guard perezoso.
+- [x] 3.2 `backend/src/main/java/com/arias/credits/CreditController.java`: `GET /api/v1/credits/wallet`, `GET /api/v1/credits/movements`.
+- [x] 3.3 `backend/src/main/java/com/arias/credits/CreditExpiryScheduler.java`: job horario sobre `expires_at <= now AND available > 0` → movimiento `EXPIRATION`, `committed` intacto (decisión confirmada: expiración solo toca AVAILABLE).
+- [x] 3.4 RED→GREEN: `backend/src/test/java/com/arias/credits/CreditLedgerServiceTest.java` — máquina de estados COMMIT/RELEASE/CONSUME/EXPIRATION, invariante `saldo == SUM(deltas)`, test de compromisos paralelos sobre la misma billetera (sin sobregiro) — cubre spec `credit-ledger` completa.
 
 Verificación: `./mvnw test -Dtest=CreditLedgerServiceTest`.
 
