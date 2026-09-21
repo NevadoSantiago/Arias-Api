@@ -55,9 +55,9 @@ Verificación: `./mvnw test -Dtest=CategoryServiceTest` (desde `backend/`).
 
 ## Unidad 2 — Esquema del libro mayor (backend)
 
-- [ ] 2.1 Migración `backend/src/main/resources/db/migration/V17__credit_ledger.sql` (tablas `credit_wallet`, `credit_movement`, índice único parcial `WELCOME_GRANT`, ver diseño §Modelo de datos).
-- [ ] 2.2 Crear `backend/src/main/java/com/arias/credits/{CreditWallet,CreditMovement,MovementType}.java`.
-- [ ] 2.3 Crear `backend/src/main/java/com/arias/credits/{CreditWalletRepository,CreditMovementRepository}.java` con `findByIdForUpdate` (patrón `SELECT ... FOR UPDATE` de CeroComa).
+- [x] 2.1 Migración `backend/src/main/resources/db/migration/V17__credit_ledger.sql` (tablas `credit_wallet`, `credit_movement`, índice único parcial `WELCOME_GRANT`, ver diseño §Modelo de datos).
+- [x] 2.2 Crear `backend/src/main/java/com/arias/credits/{CreditWallet,CreditMovement,MovementType}.java`.
+- [x] 2.3 Crear `backend/src/main/java/com/arias/credits/{CreditWalletRepository,CreditMovementRepository}.java` con `findByIdForUpdate` (patrón `SELECT ... FOR UPDATE` de CeroComa).
 
 Verificación: `./mvnw test -Dtest=CreditWalletRepositoryTest` (contexto Spring levanta con las nuevas tablas).
 
