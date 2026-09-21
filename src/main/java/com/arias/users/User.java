@@ -89,6 +89,27 @@ public class User {
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 
+    /** Teléfono normalizado a E.164 (ej. {@code +5491122334455}). Solo lo tienen los B2C. */
+    @Column(length = 30)
+    private String phone;
+
+    /** Apodo para mostrar en el ticket de cocina. Solo lo tienen los B2C. */
+    @Column(length = 50)
+    private String nickname;
+
+    /**
+     * NULL hasta que el correo se verifica (autorregistro) o hasta que Google
+     * confirma la identidad (login con Google, unidad 5). Se rellena con
+     * {@code created_at} para todos los usuarios preexistentes al alta de esta
+     * columna (V16) — ningún empleado de empresa queda bloqueado.
+     */
+    @Column(name = "email_verified_at")
+    private Instant emailVerifiedAt;
+
+    /** Subject id de Google — solo presente si la cuenta se vinculó con Google (unidad 5). */
+    @Column(name = "google_sub", length = 64)
+    private String googleSub;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

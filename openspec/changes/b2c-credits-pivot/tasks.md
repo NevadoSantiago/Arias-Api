@@ -72,12 +72,12 @@ Verificación: `./mvnw test -Dtest=CreditLedgerServiceTest`.
 
 ## Unidad 4 — Autorregistro + verificación de correo (backend)
 
-- [ ] 4.1 Migración `backend/src/main/resources/db/migration/V16__user_self_registration.sql` (columnas `phone`, `nickname`, `email_verified_at`, `google_sub`; `UNIQUE` parciales; `UPDATE ... email_verified_at = created_at`; tabla `email_verification_token`).
-- [ ] 4.2 `backend/src/main/java/com/arias/auth/{EmailVerificationToken,EmailVerificationTokenRepository}.java` (mismo patrón que `PasswordResetToken`).
-- [ ] 4.3 `backend/src/main/java/com/arias/auth/RegistrationService.java`: alta pública, normalización E.164 + `UNIQUE(phone)`, envío de verificación vía `EmailService`.
-- [ ] 4.4 DTOs y endpoints en `AuthController`/`AuthService`: `POST /api/v1/auth/{register,verify-email,resend-verification}`.
-- [ ] 4.5 Agregar rutas públicas en `backend/src/main/java/com/arias/common/security/SecurityConfig.java`.
-- [ ] 4.6 Test: `RegistrationServiceTest` — registro exitoso, campos faltantes, teléfono duplicado, cuenta no verificada bloqueada — cubre spec `self-registration` (excepto Google/welcome grant, unidad 5; solo requisitos de dominio/API — los de flujo de UI viven en la mitad frontend).
+- [x] 4.1 Migración `backend/src/main/resources/db/migration/V16__user_self_registration.sql` (columnas `phone`, `nickname`, `email_verified_at`, `google_sub`; `UNIQUE` parciales; `UPDATE ... email_verified_at = created_at`; tabla `email_verification_token`).
+- [x] 4.2 `backend/src/main/java/com/arias/auth/{EmailVerificationToken,EmailVerificationTokenRepository}.java` (mismo patrón que `PasswordResetToken`).
+- [x] 4.3 `backend/src/main/java/com/arias/auth/RegistrationService.java`: alta pública, normalización E.164 + `UNIQUE(phone)`, envío de verificación vía `EmailService`.
+- [x] 4.4 DTOs y endpoints en `AuthController`/`AuthService`: `POST /api/v1/auth/{register,verify-email,resend-verification}`.
+- [x] 4.5 Agregar rutas públicas en `backend/src/main/java/com/arias/common/security/SecurityConfig.java`.
+- [x] 4.6 Test: `RegistrationServiceTest` — registro exitoso, campos faltantes, teléfono duplicado, cuenta no verificada bloqueada — cubre spec `self-registration` (excepto Google/welcome grant, unidad 5; solo requisitos de dominio/API — los de flujo de UI viven en la mitad frontend).
 
 Verificación: `./mvnw test -Dtest=RegistrationServiceTest`.
 

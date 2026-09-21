@@ -93,6 +93,14 @@ public interface UserRepository extends JpaRepository<User, Long> {
     """)
     List<User> findReminderRecipientsForDate(@Param("fecha") LocalDate fecha);
 
+    /**
+     * Para el autorregistro público: rechaza un teléfono ya asociado a otra
+     * cuenta activa (spec {@code self-registration}, "Validación de teléfono
+     * contra duplicados"). Filtra soft-deleted, igual que {@link #findByEmail}.
+     */
+    @Query("SELECT COUNT(u) > 0 FROM User u WHERE u.phone = :phone AND u.deletedAt IS NULL")
+    boolean existsActivePhone(@Param("phone") String phone);
+
     /** Primer user con un role específico en una empresa — para CompanyAdmin principal. */
     @Query("""
         SELECT u FROM User u

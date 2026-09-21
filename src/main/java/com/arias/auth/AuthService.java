@@ -141,7 +141,8 @@ public class AuthService {
         );
     }
 
-    private AuthResult issueTokens(User user) {
+    /** Package-private: {@link RegistrationService} lo reutiliza para el auto-login post-registro. */
+    AuthResult issueTokens(User user) {
         String accessToken = jwtService.issueAccessToken(user);
         String refreshTokenValue = refreshTokenService.issueFor(user);
         return new AuthResult(accessToken, refreshTokenValue);

@@ -32,6 +32,7 @@ public class AuthController {
 
     private final AuthService authService;
     private final PasswordResetService passwordResetService;
+    private final RegistrationService registrationService;
     private final JwtProperties jwtProperties;
     private final boolean cookieSecure;
     private final String cookieSameSite;
@@ -39,12 +40,14 @@ public class AuthController {
     public AuthController(
         AuthService authService,
         PasswordResetService passwordResetService,
+        RegistrationService registrationService,
         JwtProperties jwtProperties,
         @Value("${arias.cookie.secure:false}") boolean cookieSecure,
         @Value("${arias.cookie.same-site:Lax}") String cookieSameSite
     ) {
         this.authService = authService;
         this.passwordResetService = passwordResetService;
+        this.registrationService = registrationService;
         this.jwtProperties = jwtProperties;
         this.cookieSecure = cookieSecure;
         this.cookieSameSite = cookieSameSite;
@@ -99,6 +102,30 @@ public class AuthController {
     public Map<String, String> resetPassword(@Valid @RequestBody ResetPasswordRequest req) {
         passwordResetService.resetPassword(req.token(), req.newPassword());
         return Map.of("message", "Contraseña actualizada correctamente.");
+    }
+
+    /**
+     * Autorregistro público (spec {@code self-registration}). Respuesta
+     * siempre genérica — no revela si el email ya existía (ver {@link
+     * RegistrationService#register}).
+     */
+    @PostMapping("/register")
+    public Map<String, String> register(@Valid @RequestBody RegisterRequest req) {
+        registrationService.register(req);
+        return Map.of("message", "Si los datos son válidos, revisá tu correo para verificar tu cuenta.");
+    }
+
+    /** Confirma el correo y emite sesión (auto-login) — spec "Verificación exitosa". */
+    @PostMapping("/verify-email")
+    public ResponseEntity<TokenResponse> verifyEmail(@Valid @RequestBody VerifyEmailRequest req) {
+        AuthResult result = registrationService.verifyEmail(req.token());
+        return withRefreshCookie(result);
+    }
+
+    @PostMapping("/resend-verification")
+    public Map<String, String> resendVerification(@Valid @RequestBody ResendVerificationRequest req) {
+        registrationService.resendVerification(req.email());
+        return Map.of("message", "Si la cuenta existe y no está verificada, te reenviamos el correo.");
     }
 
     @GetMapping("/me")

@@ -75,7 +75,12 @@ public class SecurityConfig {
                     "/api/v1/auth/refresh",
                     "/api/v1/auth/logout",
                     "/api/v1/auth/forgot-password",
-                    "/api/v1/auth/reset-password"
+                    "/api/v1/auth/reset-password",
+                    // Autorregistro público (spec self-registration, unidad 4) — Google/
+                    // complete-profile se agregan en la unidad 5, no antes.
+                    "/api/v1/auth/register",
+                    "/api/v1/auth/verify-email",
+                    "/api/v1/auth/resend-verification"
                 ).permitAll()
                 // Unsubscribe del recordatorio — link público del mail
                 .requestMatchers(HttpMethod.POST, "/api/v1/me/unsubscribe-reminder").permitAll()
