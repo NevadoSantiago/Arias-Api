@@ -12,6 +12,8 @@ public record UpdateCategoryRequest(
     Long parentId,
     @NotNull @PositiveOrZero Integer ordenDisplay,
     @NotNull Boolean enabled,
+    /** Costo en créditos ("almuerzos"). Entero positivo — validado en CategoryService. */
+    @NotNull Integer creditCost,
     /** Precios por empresa. Required: una entry por cada empresa existente. */
     @NotNull Map<Long, Integer> companyPrices
 ) {}

@@ -50,6 +50,7 @@ public class CategoryService {
 
         Category parent = resolveParent(req.parentId(), existing != null ? existing.getId() : null);
         validateAllCompaniesPriced(req.companyPrices());
+        validateCreditCost(req.creditCost());
 
         // Resurrección: crear con el nombre de una categoría archivada la
         // restaura, pero con TODOS los datos del request (parent, orden,
@@ -61,6 +62,7 @@ public class CategoryService {
             existing.setOrdenDisplay(req.ordenDisplay());
             existing.setEnabled(true);
             existing.setDeletedAt(null);
+            existing.setCreditCost(req.creditCost());
 
             priceRepo.deleteByCategoryId(existing.getId());
             priceRepo.flush();
@@ -74,6 +76,7 @@ public class CategoryService {
             .parent(parent)
             .ordenDisplay(req.ordenDisplay())
             .enabled(true)
+            .creditCost(req.creditCost())
             .build();
         Category saved = repo.save(category);
 
@@ -102,11 +105,13 @@ public class CategoryService {
 
         Category parent = resolveParent(req.parentId(), id);
         validateAllCompaniesPriced(req.companyPrices());
+        validateCreditCost(req.creditCost());
 
         category.setNombre(req.nombre().trim());
         category.setParent(parent);
         category.setOrdenDisplay(req.ordenDisplay());
         category.setEnabled(req.enabled());
+        category.setCreditCost(req.creditCost());
 
         // Upsert de precios
         priceRepo.deleteByCategoryId(id);
@@ -212,6 +217,19 @@ public class CategoryService {
                 throw BusinessException.badRequest("invalid-precio",
                     "El precio debe ser un número mayor o igual a 0");
             }
+        }
+    }
+
+    /**
+     * Costo en créditos ("almuerzos") de la categoría: entero positivo y fijo.
+     * Jackson ya impide que llegue un valor fraccionario en un campo
+     * {@code Integer}; acá se rechaza explícitamente el resto de los casos
+     * inválidos — spec catalog-credit-pricing, "Rechazo de costo fraccionario".
+     */
+    private void validateCreditCost(Integer creditCost) {
+        if (creditCost == null || creditCost <= 0) {
+            throw BusinessException.badRequest("invalid-credit-cost",
+                "El costo en créditos debe ser un entero mayor a 0");
         }
     }
 

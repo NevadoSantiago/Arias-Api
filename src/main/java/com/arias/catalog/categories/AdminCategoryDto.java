@@ -9,6 +9,7 @@ public record AdminCategoryDto(
     String parentNombre,
     Integer ordenDisplay,
     Boolean enabled,
+    Integer creditCost,
     /** Map companyId → precio en pesos sin decimales. */
     Map<Long, Integer> companyPrices
 ) {
@@ -20,6 +21,7 @@ public record AdminCategoryDto(
             c.getParent() != null ? c.getParent().getNombre() : null,
             c.getOrdenDisplay(),
             c.getEnabled(),
+            c.getCreditCost(),
             companyPrices
         );
     }
