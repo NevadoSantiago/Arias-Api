@@ -117,13 +117,14 @@ public class RegistrationService {
         tokenRepo.save(token);
 
         User user = token.getUser();
+        boolean welcomeLunchGranted = false;
         if (user.getEmailVerifiedAt() == null) {
             user.setEmailVerifiedAt(now);
             userRepo.save(user);
-            creditLedgerService.grantWelcomeLunch(user.getId());
+            welcomeLunchGranted = creditLedgerService.grantWelcomeLunch(user.getId());
         }
 
-        return authService.issueTokens(user);
+        return authService.issueTokens(user, welcomeLunchGranted);
     }
 
     /**

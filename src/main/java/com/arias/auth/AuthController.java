@@ -159,7 +159,7 @@ public class AuthController {
 
         return ResponseEntity.ok()
             .header(HttpHeaders.SET_COOKIE, cookie.toString())
-            .body(new TokenResponse(result.accessToken()));
+            .body(new TokenResponse(result.accessToken(), result.welcomeLunchGranted()));
     }
 
     private ResponseCookie.ResponseCookieBuilder baseCookie(String value, Duration maxAge) {

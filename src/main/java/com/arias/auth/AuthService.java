@@ -174,11 +174,22 @@ public class AuthService {
         );
     }
 
-    /** Package-private: {@link RegistrationService} lo reutiliza para el auto-login post-registro. */
+    /** Emite tokens sin otorgamiento de almuerzo de bienvenida (login/first-login normales). */
     AuthResult issueTokens(User user) {
+        return issueTokens(user, false);
+    }
+
+    /**
+     * Package-private: {@link RegistrationService#verifyEmail} y {@link
+     * GoogleAuthService#loginWithGoogle} la reutilizan para el auto-login,
+     * reportando en el mismo response si ESTA llamada otorgó el almuerzo de
+     * bienvenida (spec {@code self-registration}, "Otorgamiento único") —
+     * ver {@code CreditLedgerService#grantWelcomeLunch}.
+     */
+    AuthResult issueTokens(User user, boolean welcomeLunchGranted) {
         String accessToken = jwtService.issueAccessToken(user);
         String refreshTokenValue = refreshTokenService.issueFor(user);
-        return new AuthResult(accessToken, refreshTokenValue);
+        return new AuthResult(accessToken, refreshTokenValue, welcomeLunchGranted);
     }
 
     private String normalize(String email) {
@@ -188,6 +199,10 @@ public class AuthService {
     /**
      * Resultado interno: contiene el access token (para el body) y el refresh
      * token CRUDO (para meter en la cookie httpOnly). El controller los separa.
+     *
+     * <p>{@code welcomeLunchGranted} es {@code true} únicamente cuando ESTA
+     * llamada disparó el movimiento {@code WELCOME_GRANT} — nunca en un
+     * login posterior de la misma cuenta (spec "Sin doble otorgamiento").
      */
-    public record AuthResult(String accessToken, String refreshTokenValue) {}
+    public record AuthResult(String accessToken, String refreshTokenValue, boolean welcomeLunchGranted) {}
 }

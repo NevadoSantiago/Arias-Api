@@ -326,6 +326,40 @@ class CreditLedgerServiceTest {
         assertThat(wallet.getCommitted()).isEqualTo(0);
     }
 
+    // ─── WELCOME_GRANT ──────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("grantWelcomeLunch reporta true la primera vez y crea exactamente un movimiento")
+    void grantWelcomeLunchReportaTrueLaPrimeraVez() {
+        User user = persistTestUser("welcome-first");
+
+        boolean granted = ledgerService.grantWelcomeLunch(user.getId());
+
+        assertThat(granted).isTrue();
+        List<CreditMovement> welcomeMovements = movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId()).stream()
+            .filter(m -> m.getType() == MovementType.WELCOME_GRANT)
+            .toList();
+        assertThat(welcomeMovements).hasSize(1);
+        assertThat(walletRepo.findById(user.getId()).orElseThrow().getAvailable()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("grantWelcomeLunch reporta false en un segundo intento y no crea un segundo movimiento")
+    void grantWelcomeLunchReportaFalseEnSegundoIntento() {
+        User user = persistTestUser("welcome-second");
+
+        boolean first = ledgerService.grantWelcomeLunch(user.getId());
+        boolean second = ledgerService.grantWelcomeLunch(user.getId());
+
+        assertThat(first).isTrue();
+        assertThat(second).isFalse();
+        long welcomeCount = movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId()).stream()
+            .filter(m -> m.getType() == MovementType.WELCOME_GRANT)
+            .count();
+        assertThat(welcomeCount).isEqualTo(1);
+        assertThat(walletRepo.findById(user.getId()).orElseThrow().getAvailable()).isEqualTo(1);
+    }
+
     // ─── Concurrencia ───────────────────────────────────────────────────────
 
     /**

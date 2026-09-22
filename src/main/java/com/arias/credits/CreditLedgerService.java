@@ -175,13 +175,20 @@ public class CreditLedgerService {
      * simultánea (no un reintento secuencial) puede chocar contra el índice
      * y abortar esa request puntual — preferible a otorgar dos veces o a
      * dejar la conexión de otro reintento en estado abortado.
+     *
+     * @return {@code true} si ESTA llamada creó el movimiento {@code
+     *         WELCOME_GRANT} (primer otorgamiento real); {@code false} si ya
+     *         existía y la llamada fue un no-op — así el caller (login con
+     *         Google o verificación de correo) sabe si debe reportar el
+     *         otorgamiento en su response sin depender de un side-channel.
      */
     @Transactional
-    public void grantWelcomeLunch(Long userId) {
+    public boolean grantWelcomeLunch(Long userId) {
         if (movementRepo.existsByUserIdAndType(userId, MovementType.WELCOME_GRANT)) {
-            return;
+            return false;
         }
         apply(userId, MovementType.WELCOME_GRANT, 1, 0, MovementRef.none("Almuerzo de bienvenida"));
+        return true;
     }
 
     /**

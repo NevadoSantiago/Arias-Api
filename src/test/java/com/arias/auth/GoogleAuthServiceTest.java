@@ -97,6 +97,7 @@ class GoogleAuthServiceTest {
 
         assertThat(result.accessToken()).isNotBlank();
         assertThat(result.refreshTokenValue()).isNotBlank();
+        assertThat(result.welcomeLunchGranted()).isTrue();
 
         User created = userRepo.findByEmail(email).orElseThrow();
         assertThat(created.getRole()).isEqualTo(Role.EMPLOYEE);
@@ -177,8 +178,9 @@ class GoogleAuthServiceTest {
 
         when(verifier.verify("primer-token"))
             .thenReturn(validToken(sub, email, true, "Dana", null));
-        googleAuthService.loginWithGoogle("primer-token");
+        AuthService.AuthResult firstLogin = googleAuthService.loginWithGoogle("primer-token");
 
+        assertThat(firstLogin.welcomeLunchGranted()).isTrue();
         User user = userRepo.findByEmail(email).orElseThrow();
         assertThat(welcomeGrantCount(user.getId())).isEqualTo(1);
 
@@ -187,6 +189,7 @@ class GoogleAuthServiceTest {
         AuthService.AuthResult secondLogin = googleAuthService.loginWithGoogle("segundo-token");
 
         assertThat(secondLogin.accessToken()).isNotBlank();
+        assertThat(secondLogin.welcomeLunchGranted()).isFalse();
         assertThat(welcomeGrantCount(user.getId())).isEqualTo(1); // sigue siendo 1, no 2
     }
 

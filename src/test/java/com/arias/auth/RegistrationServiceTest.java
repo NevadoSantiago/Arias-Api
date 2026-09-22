@@ -153,6 +153,7 @@ class RegistrationServiceTest {
 
         assertThat(result.accessToken()).isNotBlank();
         assertThat(result.refreshTokenValue()).isNotBlank();
+        assertThat(result.welcomeLunchGranted()).isTrue();
 
         User verified = userRepo.findByEmail(email).orElseThrow();
         assertThat(verified.getEmailVerifiedAt()).isNotNull(); // habilitada — spec "Verificación exitosa"

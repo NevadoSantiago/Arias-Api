@@ -96,11 +96,9 @@ public class GoogleAuthService {
             }
         }
 
-        if (firstValidation) {
-            creditLedgerService.grantWelcomeLunch(user.getId());
-        }
+        boolean welcomeLunchGranted = firstValidation && creditLedgerService.grantWelcomeLunch(user.getId());
 
-        return authService.issueTokens(user);
+        return authService.issueTokens(user, welcomeLunchGranted);
     }
 
     private GoogleIdToken.Payload verifyToken(String idTokenValue) {
