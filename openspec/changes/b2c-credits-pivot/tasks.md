@@ -93,8 +93,8 @@ Verificación: `./mvnw test -Dtest=GoogleAuthServiceTest`.
 
 ## Unidad 6 — RED: proteger el flujo de pedidos de empresa (backend, protección B2B)
 
-- [ ] 6.1 Escribir `backend/src/test/java/com/arias/orders/OrderServiceCompanyFlowTest.java` **antes** de tocar `OrderService`: un empleado de empresa realiza un pedido y consume créditos de su propio saldo, y el pedido sigue apareciendo en `AdminOrderController` agrupado por `companyId`. Debe fallar (`Order`/reroute aún no existen).
-- [ ] 6.2 Confirmar baseline verde: `./mvnw test -Dtest=BillingServiceTest` (documentar que pasa ANTES de la unidad 7).
+- [x] 6.1 Escribir `backend/src/test/java/com/arias/orders/OrderServiceCompanyFlowTest.java` **antes** de tocar `OrderService`: caracteriza el flujo de pedido de empresa TAL COMO funciona hoy sobre `DailyChoice` (lookup de `CompanyCategoryPrice`, `precioSnapshot`/`horaEntrega` congelados, decremento de stock, un pedido por usuario por día, tarifa faltante cae a 0 sin bloquear, `update`/`cancel` con restauración de stock, y el consolidado agrupado por `companyId` que respalda `AdminOrderController`). Son 8 tests, todos VERDES hoy — es la RED/safety-net que debe fallar si la unidad 7 rompe el camino B2B, no una prueba que hoy falle.
+- [x] 6.2 Confirmar baseline verde: `./mvnw test -Dtest=BillingServiceTest` (documentado abajo — pasa ANTES de la unidad 7, sin tocar el archivo).
 
 Verificación: `./mvnw test -Dtest=OrderServiceCompanyFlowTest` (rojo esperado) + `./mvnw test -Dtest=BillingServiceTest` (verde, baseline).
 
