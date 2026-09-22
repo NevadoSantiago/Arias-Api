@@ -21,12 +21,25 @@ public class DishController {
 
     // ─── Empleado: lista visible ──────────────────────────────────────
 
+    /**
+     * Empleados/admins de empresa (claim {@code categoryId} presente, o
+     * COMPANY_ADMIN sin categoría propia que cae a la {@code
+     * categoriaDefault} de su empresa — ver {@code JwtService}) ven el árbol
+     * de categorías filtrado, sin cambios. Solo un usuario B2C autorregistrado
+     * (role EMPLOYEE, sin empresa, sin categoría — diseño §Decisión 5) ve el
+     * menú completo. El chequeo es por ROL además de por claim: SUPER_ADMIN
+     * también tiene {@code categoryId == null} pero no es el caso B2C, así
+     * que sigue devolviendo la lista vacía de siempre si llama este endpoint.
+     */
     @GetMapping("/available")
     @PreAuthorize("isAuthenticated()")
     public List<DishDto> listAvailable(
         @AuthenticationPrincipal JwtUser user,
         @RequestParam(required = false) LocalDate fecha
     ) {
+        if (user.isEmployee() && user.categoryId() == null) {
+            return dishService.listAllAvailable(fecha);
+        }
         return dishService.listAvailableFor(user.categoryId(), fecha);
     }
 

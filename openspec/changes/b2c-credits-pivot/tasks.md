@@ -100,16 +100,42 @@ Verificación: `./mvnw test -Dtest=OrderServiceCompanyFlowTest` (rojo esperado) 
 
 ## Unidad 7 — GREEN: `Order`/`OrderItem` + reroute de consumo a créditos (backend, riesgo alto)
 
-- [ ] 7.1 Migración `backend/src/main/resources/db/migration/V18__orders.sql` (tablas `orders`, `order_item`, ver diseño; sin `UNIQUE(user_id, fecha)`).
-- [ ] 7.2 Crear `backend/src/main/java/com/arias/orders/{Order,OrderItem,OrderRepository,OrderItemRepository,OrderDto,OrderItemDto,PlaceOrderV2Request}.java`.
-- [ ] 7.3 Agregar `CANCELADO` a `backend/src/main/java/com/arias/orders/OrderEstado.java`.
-- [ ] 7.4 Reescribir `backend/src/main/java/com/arias/orders/OrderService.java`: `place()` valida ventana + `decrementStock` + `CreditLedgerService.commit()`; `cancel()` valida `now < pickupAt - lead`, `RELEASE` + `incrementStock`; elimina la llamada a `resolvePrecio(...)`. `company_id` se copia como instantánea de `user.company` — NO se toca `DailyChoice`, `CompanyCategoryPrice` ni `BillingService`.
-- [ ] 7.5 Bloqueo por saldo insuficiente sin compromiso parcial — cubre spec `order-placement`, "Bloqueo por saldo insuficiente".
-- [ ] 7.6 `DishService.listAllAvailable(fecha)` en `backend/src/main/java/com/arias/catalog/dishes/DishService.java` para usuarios sin `categoryId` (B2C); el camino con claim (`listAvailableFor`) no se toca.
-- [ ] 7.7 Confirmar GREEN: el test de la unidad 6 (`OrderServiceCompanyFlowTest`) pasa; `BillingServiceTest` sigue verde sin modificaciones.
-- [ ] 7.8 `OrderServiceTest`: múltiples pedidos por día, múltiples ítems, total = suma de ítems, stock agotado rechaza el ítem antes de comprometer créditos.
+> **Nota de transición (resuelve la contradicción 7.4/7.7 original)**: la
+> primera versión de esta unidad decía "reescribir `OrderService`" (7.4) Y a
+> la vez "`OrderServiceCompanyFlowTest` debe seguir verde SIN ediciones"
+> (7.7). Ambas no pueden ser ciertas a la vez: ese test caracteriza —
+> literalmente asserts sobre — el comportamiento de HOY de `OrderService`
+> sobre `DailyChoice`/`CompanyCategoryPrice`/`precioSnapshot` (un pedido por
+> día, tarifa faltante cae a 0, `cancel()` hace `DELETE`, etc.), justo lo que
+> una reescritura reemplazaría. Resolución (decisión del orquestador,
+> consistente con el cambio siendo ADITIVO y con `daily_choice` congelada
+> como historia — diseño §Decisión 1 y §Decisión 2):
+> - `OrderService`, `DailyChoice`, `resolvePrecio`, `CompanyCategoryPrice` y
+>   `BillingService` **NO se tocan**. `OrderServiceCompanyFlowTest` sigue
+>   verde sin ediciones porque el código que caracteriza no cambió.
+> - El flujo nuevo vive en **`OrderPlacementService`** (clase nueva), sobre
+>   `orders`/`order_item`, con sus propios endpoints bajo `POST /api/v2/orders`
+>   y `DELETE /api/v2/orders/{id}` (`OrderPlacementController`) — no
+>   colisionan con `/api/v1/orders` (`OrderController`, sin tocar). Todo
+>   pedido nuevo — B2C o empleado de empresa — consume créditos vía
+>   `CreditLedgerService`; `company_id` es solo instantánea de `user.company`.
+> - Los endpoints viejos (`/api/v1/orders`) siguen funcionando; el frontend
+>   migra a `/api/v2/orders` en su propia mitad del cambio.
+> - `7.4` se reinterpreta como "crear `OrderPlacementService`" en vez de
+>   "reescribir `OrderService`"; la verificación de `7.8` pasa a
+>   `OrderPlacementServiceTest` (no `OrderServiceTest`, para no sugerir que
+>   reemplaza al service viejo).
 
-Verificación: `./mvnw test -Dtest=OrderServiceTest,OrderServiceCompanyFlowTest,BillingServiceTest`.
+- [x] 7.1 Migración `backend/src/main/resources/db/migration/V18__orders.sql` (tablas `orders`, `order_item`, ver diseño; sin `UNIQUE(user_id, fecha)`).
+- [x] 7.2 Crear `backend/src/main/java/com/arias/orders/{Order,OrderItem,OrderRepository,OrderItemRepository,OrderDto,OrderItemDto,PlaceOrderV2Request}.java`.
+- [x] 7.3 Agregar `CANCELADO` a `backend/src/main/java/com/arias/orders/OrderEstado.java` (enum compartido con `DailyChoice`, que nunca usa ese valor).
+- [x] 7.4 Crear `backend/src/main/java/com/arias/orders/{OrderPlacementService,OrderPlacementController}.java`: `place()` valida ventana mínima + `decrementStock` + `CreditLedgerService.commit()`; `cancel()` valida `now < pickupAt - lead`, `RELEASE` + `incrementStock`, soft-cancel (`CANCELADO`, nunca `DELETE`). No usa `resolvePrecio(...)`: el costo sale de `Category.creditCost`. `company_id` se copia como instantánea de `user.company`. `OrderService`/`DailyChoice`/`CompanyCategoryPrice`/`BillingService` **sin tocar** (ver nota de transición arriba).
+- [x] 7.5 Bloqueo por saldo insuficiente sin compromiso parcial — cubre spec `order-placement`, "Bloqueo por saldo insuficiente" (decrementStock corre antes que `commit()`, misma transacción: si el commit falla, Spring revierte también el stock).
+- [x] 7.6 `DishService.listAllAvailable(fecha)` en `backend/src/main/java/com/arias/catalog/dishes/DishService.java` para usuarios sin `categoryId` (B2C); el camino con claim (`listAvailableFor`) no se toca. `DishController` rutea por rol EMPLOYEE + `categoryId == null` (no solo `categoryId == null`, para no cambiar el comportamiento de COMPANY_ADMIN/SUPER_ADMIN).
+- [x] 7.7 Confirmar GREEN: el test de la unidad 6 (`OrderServiceCompanyFlowTest`) pasa SIN modificaciones (el archivo no cambió); `BillingServiceTest` sigue verde sin modificaciones.
+- [x] 7.8 `OrderPlacementServiceTest`: múltiples pedidos por día, múltiples ítems, total = suma de ítems, stock agotado rechaza el ítem antes de comprometer créditos, saldo insuficiente bloquea todo el pedido sin stock decrementado, cancelación libera créditos y restaura stock, empleado de empresa consume créditos con `company` como instantánea.
+
+Verificación: `./mvnw test -Dtest=OrderPlacementServiceTest,OrderServiceCompanyFlowTest,BillingServiceTest`.
 
 ## Unidad 8 — Programación de retiro (backend)
 

@@ -89,6 +89,38 @@ public interface DishRepository extends JpaRepository<Dish, Long> {
     List<Dish> findAvailableForCategoriesNoStock(@Param("categoryIds") Set<Long> categoryIds,
                                                   @Param("fecha") LocalDate fecha);
 
+    /**
+     * Todos los platos disponibles sin filtro de categoría — camino B2C
+     * (unidad 7, diseño §Decisión 5): usuarios autorregistrados sin claim
+     * {@code categoryId} ven el menú completo, a diferencia del empleado de
+     * empresa que sigue filtrado por {@link #findAvailableForCategories}.
+     */
+    @Query("""
+        SELECT DISTINCT d FROM Dish d
+        LEFT JOIN FETCH d.allowedSides
+        WHERE d.enabled = true
+          AND d.deletedAt IS NULL
+          AND d.stockActual > 0
+          AND (d.especial = false OR EXISTS (
+              SELECT 1 FROM DishCalendarEntry dc
+              WHERE dc.dishId = d.id AND dc.fecha = :fecha
+          ))
+    """)
+    List<Dish> findAllAvailable(@Param("fecha") LocalDate fecha);
+
+    /** Variante sin filtro de stock, para fechas futuras — mismo criterio que {@link #findAvailableForCategoriesNoStock}. */
+    @Query("""
+        SELECT DISTINCT d FROM Dish d
+        LEFT JOIN FETCH d.allowedSides
+        WHERE d.enabled = true
+          AND d.deletedAt IS NULL
+          AND (d.especial = false OR EXISTS (
+              SELECT 1 FROM DishCalendarEntry dc
+              WHERE dc.dishId = d.id AND dc.fecha = :fecha
+          ))
+    """)
+    List<Dish> findAllAvailableNoStock(@Param("fecha") LocalDate fecha);
+
     @Modifying
     @Query(value = """
         UPDATE dish d SET stock_actual = GREATEST(0, d.stock_actual - (
