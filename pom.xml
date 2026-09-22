@@ -124,6 +124,16 @@
 			<artifactId>google-api-client</artifactId>
 			<version>2.7.0</version>
 		</dependency>
+
+		<!-- Mercado Pago SDK — Checkout Pro vía Preferences API (PreferenceClient +
+		     PaymentClient; NO usar OrderClient/Orders API, es un producto distinto —
+		     diseño §Enfoque técnico, unidad 10, investigación #607/#592).
+		     Versión resuelta en Maven Central al implementar: 3.7.0. -->
+		<dependency>
+			<groupId>com.mercadopago</groupId>
+			<artifactId>sdk-java</artifactId>
+			<version>3.7.0</version>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator-test</artifactId>

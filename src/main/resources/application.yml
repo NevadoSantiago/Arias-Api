@@ -93,6 +93,23 @@ arias:
   google:
     client-id: ${GOOGLE_CLIENT_ID:}
 
+  # Mercado Pago — Checkout Pro vía Preferences API (diseño §Configuración, unidad 10).
+  # Si enabled=false o access-token/webhook-secret están vacíos, la integración
+  # queda inerte: no falla el arranque, cada operación de pago responde con un
+  # error claro (mismo patrón que arias.r2 / UploadService).
+  mercadopago:
+    access-token: ${MP_ACCESS_TOKEN:}
+    webhook-secret: ${MP_WEBHOOK_SECRET:}
+    enabled: ${MP_ENABLED:false}
+
+  # URLs públicas de frontend/backend — se usan para construir back_urls y
+  # notification_url de Mercado Pago. Mercado Pago exige HTTPS y rechaza
+  # localhost; auto_return="approved" solo se activa si frontend-url es https
+  # (mismo criterio que CeroComa, diseño §Configuración).
+  public:
+    frontend-url: ${FRONTEND_URL:http://localhost:5173}
+    backend-url: ${BACKEND_URL:http://localhost:8080}
+
   # Contacto / leads de la landing pública
   contact:
     # Casilla donde llegan las solicitudes de cotización del formulario.

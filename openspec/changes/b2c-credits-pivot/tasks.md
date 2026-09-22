@@ -159,11 +159,11 @@ Verificación: checklist manual — no hay comando automatizado; evidencia = cap
 
 ## Unidad 10 — `PaymentGateway` port + `MercadoPagoAdapter` (backend)
 
-- [ ] 10.1 `backend/pom.xml`: agregar `com.mercadopago:sdk-java` (confirmar versión disponible, objetivo 3.7.0 según investigación #607).
-- [ ] 10.2 Crear `backend/src/main/java/com/arias/payments/{PaymentGateway,CheckoutRequest,CheckoutSession,PaymentSnapshot,PaymentStatus}.java` (sin `refund()` — decisión confirmada: el producto no inicia reembolsos de dinero).
-- [ ] 10.3 Crear `backend/src/main/java/com/arias/payments/mercadopago/{MercadoPagoAdapter,MercadoPagoProperties,SignatureVerifier}.java`: `PreferenceClient.create()`, `PaymentClient.get(id)`; manifiesto HMAC `id:<data.id minúsculas>;request-id:<x-request-id>;ts:<ts>;`, comparación en tiempo constante.
-- [ ] 10.4 Configuración `arias.mercadopago.{access-token,webhook-secret,enabled}`, `arias.google.client-id`, `arias.public.{frontend-url,backend-url}` vía `@ConfigurationProperties` (patrón R2/Resend).
-- [ ] 10.5 Test: `SignatureVerifierTest` con vectores HMAC válidos e inválidos.
+- [x] 10.1 `backend/pom.xml`: agregar `com.mercadopago:sdk-java` (confirmar versión disponible, objetivo 3.7.0 según investigación #607). **Versión resuelta: 3.7.0** (existe en Maven Central, jar+pom verificados con `curl`, `./mvnw -o test` la resuelve desde el repo local sin problemas).
+- [x] 10.2 Crear `backend/src/main/java/com/arias/payments/{PaymentGateway,CheckoutRequest,CheckoutSession,PaymentSnapshot,PaymentStatus}.java` (sin `refund()` — decisión confirmada: el producto no inicia reembolsos de dinero).
+- [x] 10.3 Crear `backend/src/main/java/com/arias/payments/mercadopago/{MercadoPagoAdapter,MercadoPagoProperties,SignatureVerifier}.java`: `PreferenceClient.create()`, `PaymentClient.get(id)`; manifiesto HMAC `id:<data.id minúsculas>;request-id:<x-request-id>;ts:<ts>;`, comparación en tiempo constante.
+- [x] 10.4 Configuración `arias.mercadopago.{access-token,webhook-secret,enabled}`, `arias.google.client-id` (ya existía desde la unidad 5, `GoogleAuthProperties`), `arias.public.{frontend-url,backend-url}` (nueva, `com.arias.common.config.PublicUrlProperties`) vía `@ConfigurationProperties` (patrón R2/Resend).
+- [x] 10.5 Test: `SignatureVerifierTest` con vectores HMAC válidos e inválidos (firma válida, `data.id` alterado, secreto incorrecto, `x-request-id` ausente con componente omitido del manifiesto, header malformado — 5 casos, todos verdes).
 
 Verificación: `./mvnw test -Dtest=SignatureVerifierTest`.
 
