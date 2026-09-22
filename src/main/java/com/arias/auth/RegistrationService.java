@@ -8,6 +8,7 @@ import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,10 +19,14 @@ import java.util.Optional;
 
 /**
  * Autorregistro público — spec {@code self-registration} (requisitos de
- * dominio/API). Sin password: la cuenta se activa exclusivamente por
- * verificación de correo (diseño §Decisión 10). {@link #verifyEmail} es el
- * ÚNICO punto que emite sesión — poseer el token del mail es la prueba de que
- * el correo es propio; emitir tokens en {@link #register} sería una falla de
+ * dominio/API). Requiere password: sin ella, un usuario sin Google que
+ * pierde el correo de verificación queda permanentemente bloqueado — no hay
+ * password para "forgot-password" y no puede autenticarse (diseño §Decisión
+ * 10). La cuenta igual queda inactiva para uso normal hasta la verificación
+ * de correo (spec "Verificación obligatoria de correo electrónico"). {@link
+ * #verifyEmail} sigue siendo el único punto que emite sesión en el flujo de
+ * registro — poseer el token del mail es la prueba de que el correo es
+ * propio; emitir tokens en {@link #register} sería una falla de
  * account-takeover (cualquiera podría "loguearse" registrando el email de
  * otra persona).
  *
@@ -44,6 +49,7 @@ public class RegistrationService {
     private final AuthService authService;
     private final EmailVerificationEmails emails;
     private final CreditLedgerService creditLedgerService;
+    private final PasswordEncoder passwordEncoder;
     private final Clock clock;
 
     /**
@@ -77,6 +83,7 @@ public class RegistrationService {
             .lastName(req.lastName())
             .phone(phone)
             .nickname(req.nickname())
+            .passwordHash(passwordEncoder.encode(req.password()))
             .role(Role.EMPLOYEE)
             .active(true)
             .build();

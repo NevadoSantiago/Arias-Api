@@ -9,8 +9,13 @@ import com.arias.users.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
+
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validator;
+import java.util.Set;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -34,8 +39,13 @@ import static org.mockito.Mockito.verifyNoInteractions;
 @Transactional
 class RegistrationServiceTest {
 
+    private static final String VALID_PASSWORD = "unaClaveSegura123";
+
     @Autowired
     private RegistrationService registrationService;
+
+    @Autowired
+    private AuthService authService;
 
     @Autowired
     private UserRepository userRepo;
@@ -47,13 +57,19 @@ class RegistrationServiceTest {
     private JwtService jwtService;
 
     @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private Validator validator;
+
+    @Autowired
     private Clock clock;
 
     @MockitoBean
     private EmailService emailService;
 
     private RegisterRequest validRequest(String email, String phone) {
-        return new RegisterRequest("Ana", "Gómez", email, phone, "Anita");
+        return new RegisterRequest("Ana", "Gómez", email, phone, "Anita", VALID_PASSWORD);
     }
 
     @Test
@@ -67,7 +83,10 @@ class RegistrationServiceTest {
         assertThat(created.getPhone()).isEqualTo("+5491122330001");
         assertThat(created.getNickname()).isEqualTo("Anita");
         assertThat(created.getEmailVerifiedAt()).isNull();
-        assertThat(created.getPasswordHash()).isNull();
+        // La contraseña queda hasheada y utilizable — sin ella, una cuenta sin
+        // Google no tiene forma de loguearse ni de recuperar acceso.
+        assertThat(created.getPasswordHash()).isNotNull().isNotEqualTo(VALID_PASSWORD);
+        assertThat(passwordEncoder.matches(VALID_PASSWORD, created.getPasswordHash())).isTrue();
 
         verify(emailService).send(org.mockito.ArgumentMatchers.eq(email), anyString(), anyString());
     }
@@ -216,9 +235,69 @@ class RegistrationServiceTest {
     void registroRechazaCamposFaltantesAlNivelDeServicioParaTelefonoVacio() {
         String email = "registro-sin-telefono-" + System.nanoTime() + "@test.arias.com";
 
-        assertThatThrownBy(() -> registrationService.register(new RegisterRequest("Ana", null, email, "", "Anita")))
+        assertThatThrownBy(() -> registrationService.register(
+            new RegisterRequest("Ana", null, email, "", "Anita", VALID_PASSWORD)))
             .isInstanceOf(BusinessException.class);
 
         assertThat(userRepo.findByEmail(email)).isEmpty();
+    }
+
+    @Test
+    void usuarioAutorregistradoYVerificadoPuedeAutenticarseConLoginNormal() {
+        String email = "registro-login-" + System.nanoTime() + "@test.arias.com";
+        registrationService.register(validRequest(email, "+5491122330009"));
+
+        User unverified = userRepo.findByEmail(email).orElseThrow();
+        EmailVerificationToken token = tokenRepo.findAll().stream()
+            .filter(t -> t.getUser().getId().equals(unverified.getId()))
+            .findFirst().orElseThrow();
+        String rawToken = jwtService.generateRefreshTokenValue();
+        token.setTokenHash(jwtService.hashRefreshToken(rawToken));
+        tokenRepo.save(token);
+        registrationService.verifyEmail(rawToken);
+
+        // Ahora sí tiene password_hash + email verificado — POST /auth/login
+        // (AuthService.login) debe funcionar igual que para cualquier otra
+        // cuenta con contraseña, y forgot-password (PasswordResetService)
+        // deja de ser un no-op silencioso para esta cuenta.
+        AuthService.AuthResult result = authService.login(email, VALID_PASSWORD);
+
+        assertThat(result.accessToken()).isNotBlank();
+        assertThat(result.refreshTokenValue()).isNotBlank();
+    }
+
+    @Test
+    void registroRechazaContraseñaDemasiadoCortaOEnBlancoPorValidacionBean() {
+        String email = "registro-pass-corta-" + System.nanoTime() + "@test.arias.com";
+
+        RegisterRequest tooShort = new RegisterRequest("Ana", "Gómez", email, "+5491122330010", "Anita", "1234567");
+        Set<ConstraintViolation<RegisterRequest>> tooShortViolations = validator.validate(tooShort);
+        assertThat(tooShortViolations).isNotEmpty();
+
+        RegisterRequest blank = new RegisterRequest("Ana", "Gómez", email, "+5491122330010", "Anita", "");
+        Set<ConstraintViolation<RegisterRequest>> blankViolations = validator.validate(blank);
+        assertThat(blankViolations).isNotEmpty();
+    }
+
+    @Test
+    void cuentaCreadaPorGoogleSinPasswordHashSigueSinPoderUsarLoginNormal() {
+        // Simula el estado que deja GoogleAuthService (password_hash = NULL,
+        // email verificado): este cambio no debe romper ese camino — login
+        // normal sigue rechazando con el mismo error genérico, nunca un NPE.
+        String email = "registro-google-simulado-" + System.nanoTime() + "@test.arias.com";
+        User googleUser = User.builder()
+            .email(email)
+            .firstName("Bruno")
+            .phone("+5491122330011")
+            .nickname("Bru")
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .emailVerifiedAt(clock.instant())
+            .build();
+        userRepo.save(googleUser);
+
+        assertThat(googleUser.getPasswordHash()).isNull();
+        assertThatThrownBy(() -> authService.login(email, "cualquier-cosa"))
+            .isInstanceOf(com.arias.common.exception.InvalidCredentialsException.class);
     }
 }
