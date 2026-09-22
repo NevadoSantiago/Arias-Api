@@ -94,6 +94,18 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findReminderRecipientsForDate(@Param("fecha") LocalDate fecha);
 
     /**
+     * Administradores del restaurante — destinatarios del resumen matutino y
+     * de la alerta de cancelación (unidad 12, diseño §Decisión 11).
+     */
+    @Query("""
+        SELECT u FROM User u
+        WHERE u.role = com.arias.users.Role.SUPER_ADMIN
+          AND u.active = true
+          AND u.deletedAt IS NULL
+    """)
+    List<User> findActiveSuperAdmins();
+
+    /**
      * Para el autorregistro público: rechaza un teléfono ya asociado a otra
      * cuenta activa (spec {@code self-registration}, "Validación de teléfono
      * contra duplicados"). Filtra soft-deleted, igual que {@link #findByEmail}.

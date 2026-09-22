@@ -181,11 +181,11 @@ Verificación: `./mvnw test -Dtest=MercadoPagoWebhookControllerTest,CreditPurcha
 
 ## Unidad 12 — Notificaciones (backend)
 
-- [ ] 12.1 Migración `backend/src/main/resources/db/migration/V21__notification_run_log.sql` (`PRIMARY KEY (tipo, fecha)`, mismo patrón que `reminder_run_log`).
-- [ ] 12.2 Crear `backend/src/main/java/com/arias/orders/notifications/{NotificationRunLog,NotificationRunLogRepository}.java`.
-- [ ] 12.3 Crear `backend/src/main/java/com/arias/orders/notifications/OrderNotificationScheduler.java`: resumen matutino (cron `daily_summary_time`, destinatarios `SUPER_ADMIN`), alerta de cancelación (`@TransactionalEventListener(AFTER_COMMIT)`), recordatorio de retiro (cron por minuto, `pickup_at − pickup_reminder_minutes`, omite `CANCELADO`). `OrderReminderScheduler` NO se toca.
-- [ ] 12.4 Crear `backend/src/main/java/com/arias/orders/notifications/OrderNotificationEmails.java`.
-- [ ] 12.5 Test: `OrderNotificationSchedulerTest` con `Clock.fixed` — resumen agrupado por horario de retiro, alerta enviada al cancelar, recordatorio en ventana 20–30 min, sin recordatorio para `CANCELADO` — cubre spec `order-notifications` completa.
+- [x] 12.1 Migración `backend/src/main/resources/db/migration/V21__notification_run_log.sql` (`PRIMARY KEY (tipo, fecha)`, mismo patrón que `reminder_run_log`).
+- [x] 12.2 Crear `backend/src/main/java/com/arias/orders/notifications/{NotificationRunLog,NotificationRunLogRepository}.java`.
+- [x] 12.3 Crear `backend/src/main/java/com/arias/orders/notifications/OrderNotificationScheduler.java`: resumen matutino (cron `daily_summary_time`, destinatarios `SUPER_ADMIN`), alerta de cancelación (`@TransactionalEventListener(AFTER_COMMIT)`), recordatorio de retiro (cron por minuto, `pickup_at − pickup_reminder_minutes`, omite `CANCELADO`). `OrderReminderScheduler` NO se toca.
+- [x] 12.4 Crear `backend/src/main/java/com/arias/orders/notifications/OrderNotificationEmails.java`.
+- [x] 12.5 Test: `OrderNotificationSchedulerTest` con `Clock.fixed` — resumen agrupado por horario de retiro, alerta enviada al cancelar, recordatorio en ventana 20–30 min, sin recordatorio para `CANCELADO` — cubre spec `order-notifications` completa.
 
 Verificación: `./mvnw test -Dtest=OrderNotificationSchedulerTest`.
 

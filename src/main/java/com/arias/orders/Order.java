@@ -97,6 +97,16 @@ public class Order {
     @Column(name = "cancelled_at")
     private Instant cancelledAt;
 
+    /**
+     * Dedup atómico del recordatorio de retiro (unidad 12, migración V21):
+     * {@code NULL} hasta que {@code OrderNotificationScheduler} lo reclama
+     * vía {@code UPDATE ... WHERE reminder_sent_at IS NULL}, mismo patrón que
+     * {@code dishRepo.decrementStock}. Por pedido, no por día — a diferencia
+     * del resumen matutino, que sí dedupea con {@code notification_run_log}.
+     */
+    @Column(name = "reminder_sent_at")
+    private Instant reminderSentAt;
+
     /** Asocia el ítem a este pedido y lo agrega a la colección — mantiene ambos lados de la relación. */
     public void addItem(OrderItem item) {
         item.setOrder(this);

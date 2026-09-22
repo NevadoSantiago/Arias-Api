@@ -8,11 +8,13 @@ import com.arias.catalog.sides.SideRepository;
 import com.arias.common.exception.BusinessException;
 import com.arias.credits.CreditLedgerService;
 import com.arias.credits.MovementRef;
+import com.arias.orders.notifications.OrderCancelledEvent;
 import com.arias.restaurantconfig.RestaurantConfigRepository;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -74,6 +76,7 @@ public class OrderPlacementService {
     private final CreditLedgerService creditLedgerService;
     private final PickupSlotService pickupSlotService;
     private final RestaurantConfigRepository restaurantConfigRepo;
+    private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
 
     /**
@@ -193,6 +196,25 @@ public class OrderPlacementService {
 
         order.setEstado(OrderEstado.CANCELADO);
         order.setCancelledAt(now);
+
+        // Publicado DENTRO de la transacción — OrderNotificationScheduler lo
+        // escucha con @TransactionalEventListener(phase = AFTER_COMMIT), así
+        // que si esta transacción termina en rollback el mail nunca sale
+        // (unidad 12, diseño §Decisión 11).
+        User user = order.getUser();
+        eventPublisher.publishEvent(new OrderCancelledEvent(
+            order.getId(), userId, user.getEmail(), displayName(user),
+            order.getPickupAt(), order.getCreditTotal()));
+    }
+
+    private static String displayName(User user) {
+        if (user.getNickname() != null && !user.getNickname().isBlank()) {
+            return user.getNickname();
+        }
+        if (user.getFirstName() != null && !user.getFirstName().isBlank()) {
+            return user.getFirstName();
+        }
+        return user.getEmail();
     }
 
     // ─── helpers ──────────────────────────────────────────────────────────
