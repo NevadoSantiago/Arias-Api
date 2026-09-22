@@ -128,6 +128,39 @@ public class CreditLedgerService {
     }
 
     /**
+     * Otorga el almuerzo de bienvenida — spec {@code self-registration},
+     * "Otorgamiento único": exactamente 1 crédito, no transferible, una sola
+     * vez por cuenta (diseño §Decisión 10). Lo disparan {@code
+     * RegistrationService#verifyEmail} y {@code GoogleAuthService} en el
+     * instante exacto en que cada uno deja {@code email_verified_at} seteado
+     * por primera vez — ambos ya filtran con ese chequeo, así que en el uso
+     * normal esta llamada nunca se repite para la misma cuenta.
+     *
+     * <p><b>La enforcement real es el índice único parcial</b> {@code
+     * uq_credit_movement_welcome} (V17) — nunca se reemplaza por un flag de
+     * aplicación. El {@code existsByUserIdAndType} de acá abajo es apenas un
+     * atajo para el reintento SECUENCIAL normal (reenvío de verificación,
+     * relogin con Google después de haber verificado por correo, doble clic
+     * del usuario): evita intentar el INSERT — y con él, disparar el
+     * rollback de la transacción entera del llamador — en el caso feliz. Se
+     * une a la transacción del llamador ({@code Propagation.REQUIRED}, no
+     * {@code REQUIRES_NEW}) a propósito: en el alta por Google el usuario
+     * puede estar siendo creado en esta MISMA transacción todavía sin
+     * commitear, y una transacción aislada no vería esa fila (violación de
+     * FK). El costo de esta decisión es que una carrera verdaderamente
+     * simultánea (no un reintento secuencial) puede chocar contra el índice
+     * y abortar esa request puntual — preferible a otorgar dos veces o a
+     * dejar la conexión de otro reintento en estado abortado.
+     */
+    @Transactional
+    public void grantWelcomeLunch(Long userId) {
+        if (movementRepo.existsByUserIdAndType(userId, MovementType.WELCOME_GRANT)) {
+            return;
+        }
+        apply(userId, MovementType.WELCOME_GRANT, 1, 0, MovementRef.none("Almuerzo de bienvenida"));
+    }
+
+    /**
      * Guard perezoso de vencimiento para un usuario puntual: bloquea su
      * billetera y expira el saldo si corresponde. Lo llama tanto {@code
      * CreditExpiryScheduler} (barrido horario, para usuarios inactivos) como,

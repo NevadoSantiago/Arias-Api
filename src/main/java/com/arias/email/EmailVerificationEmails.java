@@ -1,6 +1,7 @@
 package com.arias.email;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class EmailVerificationEmails {
 
     private final EmailService emailService;
@@ -40,6 +42,13 @@ public class EmailVerificationEmails {
             </body>
             </html>
             """.formatted(safeName, verifyUrl);
+
+        // Sin Resend configurado el mail no sale y el token se guarda hasheado,
+        // así que no habría forma de verificar en local: logueamos el link.
+        // Nunca ocurre en producción, donde la API key siempre está seteada.
+        if (!props.isConfigured()) {
+            log.warn("[DEV] Resend no configurado — link de verificación para {}: {}", toEmail, verifyUrl);
+        }
 
         emailService.send(toEmail, "Confirmá tu correo — Arias", html);
     }

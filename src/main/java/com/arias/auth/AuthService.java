@@ -1,6 +1,7 @@
 package com.arias.auth;
 
 import com.arias.auth.dto.*;
+import com.arias.common.exception.BusinessException;
 import com.arias.common.exception.InvalidCredentialsException;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -129,6 +130,36 @@ public class AuthService {
         User user = userRepo.findById(userId)
             .orElseThrow(InvalidCredentialsException::new);
 
+        return toMeResponse(user);
+    }
+
+    /**
+     * Completa teléfono y apodo — lo que Google no provee (diseño §Decisión
+     * 9, unidad 5). Requiere sesión ya válida (el caller es un endpoint
+     * autenticado); no reemite tokens, solo actualiza el perfil.
+     */
+    @Transactional
+    public MeResponse completeProfile(Long userId, CompleteProfileRequest req) {
+        User user = userRepo.findById(userId)
+            .orElseThrow(InvalidCredentialsException::new);
+
+        String phone = PhoneNumbers.normalizeE164(req.phone())
+            .orElseThrow(() -> BusinessException.badRequest(
+                "INVALID_PHONE", "El teléfono no tiene un formato válido"));
+
+        if (!phone.equals(user.getPhone()) && userRepo.existsActivePhone(phone)) {
+            throw BusinessException.conflict(
+                "PHONE_ALREADY_REGISTERED", "Ese teléfono ya está asociado a una cuenta");
+        }
+
+        user.setPhone(phone);
+        user.setNickname(req.nickname());
+        userRepo.save(user);
+
+        return toMeResponse(user);
+    }
+
+    private MeResponse toMeResponse(User user) {
         return new MeResponse(
             user.getId(),
             user.getEmail(),
@@ -137,7 +168,9 @@ public class AuthService {
             user.getRole(),
             user.getCompany() != null ? user.getCompany().getId() : null,
             user.getCompany() != null ? user.getCompany().getNombre() : null,
-            user.getCategory() != null ? user.getCategory().getId() : null
+            user.getCategory() != null ? user.getCategory().getId() : null,
+            user.getEmailVerifiedAt() != null,
+            user.isProfileComplete()
         );
     }
 

@@ -83,11 +83,11 @@ Verificación: `./mvnw test -Dtest=RegistrationServiceTest`.
 
 ## Unidad 5 — Google login + complete-profile + almuerzo de bienvenida (backend)
 
-- [ ] 5.1 `backend/src/main/java/com/arias/auth/GoogleAuthService.java`: `POST /api/v1/auth/google` valida ID token (`GoogleIdTokenVerifier`, audiencia = client id); fusión por email normalizado (crear / vincular `google_sub` / rechazar si `google_sub` distinto).
-- [ ] 5.2 `POST /api/v1/auth/complete-profile` para teléfono/apodo faltantes; `me()` expone `emailVerified`/`profileComplete` (`MeResponse`).
-- [ ] 5.3 Otorgamiento del almuerzo de bienvenida en `CreditLedgerService` (movimiento `WELCOME_GRANT`) disparado desde verificación de correo (unidad 4) y desde Google login; protegido por el índice único parcial de la unidad 2 — cubre spec `self-registration`, "Otorgamiento único".
-- [ ] 5.4 `backend/pom.xml`: agregar `com.google.api-client:google-api-client`.
-- [ ] 5.5 Test: `GoogleAuthServiceTest` — alta con Google, vinculación, rechazo por `google_sub` distinto, sin doble otorgamiento del almuerzo.
+- [x] 5.1 `backend/src/main/java/com/arias/auth/GoogleAuthService.java`: `POST /api/v1/auth/google` valida ID token (`GoogleIdTokenVerifier`, audiencia = client id); fusión por email normalizado (crear / vincular `google_sub` / rechazar si `google_sub` distinto).
+- [x] 5.2 `POST /api/v1/auth/complete-profile` para teléfono/apodo faltantes; `me()` expone `emailVerified`/`profileComplete` (`MeResponse`).
+- [x] 5.3 Otorgamiento del almuerzo de bienvenida en `CreditLedgerService` (movimiento `WELCOME_GRANT`) disparado desde verificación de correo (unidad 4) y desde Google login; protegido por el índice único parcial de la unidad 2 — cubre spec `self-registration`, "Otorgamiento único".
+- [x] 5.4 `backend/pom.xml`: agregar `com.google.api-client:google-api-client`.
+- [x] 5.5 Test: `GoogleAuthServiceTest` — alta con Google, vinculación, rechazo por `google_sub` distinto, sin doble otorgamiento del almuerzo.
 
 Verificación: `./mvnw test -Dtest=GoogleAuthServiceTest`.
 

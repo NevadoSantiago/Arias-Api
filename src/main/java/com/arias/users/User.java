@@ -117,4 +117,15 @@ public class User {
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    /**
+     * {@code true} cuando tiene los datos que Google no provee (diseño
+     * §Decisión 9): teléfono y apodo. Hasta entonces, pedir/comprar responde
+     * {@code 409 profile-incomplete} (unidades 7/11, todavía no
+     * implementadas) — este flag es la fuente de verdad que consumen.
+     */
+    @Transient
+    public boolean isProfileComplete() {
+        return phone != null && !phone.isBlank() && nickname != null && !nickname.isBlank();
+    }
 }

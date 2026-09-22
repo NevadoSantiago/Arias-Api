@@ -87,6 +87,12 @@ arias:
     # URL base de la app del empleado, usado en los CTAs de los emails
     app-url: ${APP_URL:http://localhost:5173}
 
+  # Google Sign-In — client ID de OAuth 2.0, usado como audiencia esperada
+  # al validar el ID token que manda el frontend (diseño §Decisión 9).
+  # Debe ser EL MISMO valor que usa @react-oauth/google en el frontend.
+  google:
+    client-id: ${GOOGLE_CLIENT_ID:}
+
   # Contacto / leads de la landing pública
   contact:
     # Casilla donde llegan las solicitudes de cotización del formulario.

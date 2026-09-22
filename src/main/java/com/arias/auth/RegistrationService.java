@@ -2,6 +2,7 @@ package com.arias.auth;
 
 import com.arias.auth.dto.RegisterRequest;
 import com.arias.common.exception.BusinessException;
+import com.arias.credits.CreditLedgerService;
 import com.arias.email.EmailVerificationEmails;
 import com.arias.users.Role;
 import com.arias.users.User;
@@ -24,9 +25,11 @@ import java.util.Optional;
  * account-takeover (cualquiera podría "loguearse" registrando el email de
  * otra persona).
  *
- * <p>El almuerzo de bienvenida (spec "Otorgamiento único") NO se otorga acá
- * — lo dispara la unidad 5 (Google login / {@code CreditLedgerService})
- * leyendo el mismo {@code emailVerifiedAt} que esta clase setea.
+ * <p>El almuerzo de bienvenida (spec "Otorgamiento único") se otorga en
+ * {@link #verifyEmail}, la primera vez que deja {@code emailVerifiedAt}
+ * seteado — {@link CreditLedgerService#grantWelcomeLunch} es la misma
+ * llamada que dispara el login con Google (unidad 5) cuando ES Google quien
+ * deja el correo verificado por primera vez.
  */
 @Service
 @RequiredArgsConstructor
@@ -40,6 +43,7 @@ public class RegistrationService {
     private final JwtService jwtService;
     private final AuthService authService;
     private final EmailVerificationEmails emails;
+    private final CreditLedgerService creditLedgerService;
     private final Clock clock;
 
     /**
@@ -84,7 +88,11 @@ public class RegistrationService {
     /**
      * Confirma el correo (spec "Verificación exitosa") y, con eso, emite
      * sesión — mismo mecanismo que login/first-login ({@link
-     * AuthService#issueTokens}). NO otorga el almuerzo de bienvenida (unidad 5).
+     * AuthService#issueTokens}). Otorga el almuerzo de bienvenida SOLO la
+     * primera vez que esta llamada deja {@code emailVerifiedAt} seteado
+     * (spec "Otorgamiento único" / "Sin doble otorgamiento") — un
+     * reenvío/reverificación posterior entra al {@code if} en falso y ni
+     * siquiera intenta el otorgamiento.
      */
     @Transactional
     public AuthService.AuthResult verifyEmail(String tokenValue) {
@@ -105,6 +113,7 @@ public class RegistrationService {
         if (user.getEmailVerifiedAt() == null) {
             user.setEmailVerifiedAt(now);
             userRepo.save(user);
+            creditLedgerService.grantWelcomeLunch(user.getId());
         }
 
         return authService.issueTokens(user);

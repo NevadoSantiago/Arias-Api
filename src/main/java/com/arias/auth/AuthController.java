@@ -33,6 +33,7 @@ public class AuthController {
     private final AuthService authService;
     private final PasswordResetService passwordResetService;
     private final RegistrationService registrationService;
+    private final GoogleAuthService googleAuthService;
     private final JwtProperties jwtProperties;
     private final boolean cookieSecure;
     private final String cookieSameSite;
@@ -41,6 +42,7 @@ public class AuthController {
         AuthService authService,
         PasswordResetService passwordResetService,
         RegistrationService registrationService,
+        GoogleAuthService googleAuthService,
         JwtProperties jwtProperties,
         @Value("${arias.cookie.secure:false}") boolean cookieSecure,
         @Value("${arias.cookie.same-site:Lax}") String cookieSameSite
@@ -48,6 +50,7 @@ public class AuthController {
         this.authService = authService;
         this.passwordResetService = passwordResetService;
         this.registrationService = registrationService;
+        this.googleAuthService = googleAuthService;
         this.jwtProperties = jwtProperties;
         this.cookieSecure = cookieSecure;
         this.cookieSameSite = cookieSameSite;
@@ -126,6 +129,22 @@ public class AuthController {
     public Map<String, String> resendVerification(@Valid @RequestBody ResendVerificationRequest req) {
         registrationService.resendVerification(req.email());
         return Map.of("message", "Si la cuenta existe y no está verificada, te reenviamos el correo.");
+    }
+
+    /** Login/alta con Google (spec {@code self-registration}) — ID token validado en el backend. */
+    @PostMapping("/google")
+    public ResponseEntity<TokenResponse> google(@Valid @RequestBody GoogleLoginRequest req) {
+        AuthResult result = googleAuthService.loginWithGoogle(req.idToken());
+        return withRefreshCookie(result);
+    }
+
+    /** Completa teléfono/apodo tras un alta por Google (diseño §Decisión 9). Requiere sesión. */
+    @PostMapping("/complete-profile")
+    public MeResponse completeProfile(
+        @AuthenticationPrincipal JwtUser user,
+        @Valid @RequestBody CompleteProfileRequest req
+    ) {
+        return authService.completeProfile(user.userId(), req);
     }
 
     @GetMapping("/me")
