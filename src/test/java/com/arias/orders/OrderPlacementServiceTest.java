@@ -52,7 +52,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Import(OrderPlacementServiceTest.FixedClockConfig.class)
 class OrderPlacementServiceTest {
 
-    static final Instant FIXED_NOW = Instant.parse("2026-03-10T12:00:00Z");
+    // 2026-03-10 10:40 ART (UTC-3) — dentro de la ventana de pedidos por
+    // defecto (11:00-15:00 ART, V20) una vez sumados los offsets usados
+    // abajo (+20/+60/+90 min); unidad 8 agrega la validación de ventana de
+    // servicio que estos horarios deben respetar (antes solo se validaba el
+    // lead de 20 minutos).
+    static final Instant FIXED_NOW = Instant.parse("2026-03-10T13:40:00Z");
     static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
 
     @TestConfiguration

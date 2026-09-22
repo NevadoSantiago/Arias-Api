@@ -27,13 +27,30 @@ public class RestaurantConfigController {
         return RestaurantConfigDto.from(repo.getSingleton());
     }
 
-    /** Edición del singleton — solo el SUPER_ADMIN del resto. */
+    /**
+     * Edición del singleton — solo el SUPER_ADMIN del resto. Incluye los
+     * siete campos de configuración B2C de la unidad 8 (migración V20):
+     * tiempo de preparación único, vencimiento de créditos y ventana de
+     * pedidos.
+     */
     @PutMapping
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     @Transactional
     public RestaurantConfigDto update(@Valid @RequestBody UpdateRestaurantConfigRequest req) {
+        if (!req.pickupWindowStart().isBefore(req.pickupWindowEnd())) {
+            throw BusinessException.badRequest("invalid-pickup-window",
+                "La ventana de pedidos debe abrir antes de cerrar");
+        }
+
         RestaurantConfig config = repo.getSingleton();
         config.setHoraCorte(req.horaCorte());
+        config.setPickupLeadMinutes(req.pickupLeadMinutes());
+        config.setCreditExpiryDays(req.creditExpiryDays());
+        config.setPickupWindowStart(req.pickupWindowStart());
+        config.setPickupWindowEnd(req.pickupWindowEnd());
+        config.setPickupSlotMinutes(req.pickupSlotMinutes());
+        config.setDailySummaryTime(req.dailySummaryTime());
+        config.setPickupReminderMinutes(req.pickupReminderMinutes());
         repo.save(config);
         return RestaurantConfigDto.from(config);
     }

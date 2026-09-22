@@ -8,6 +8,7 @@ import com.arias.catalog.sides.SideRepository;
 import com.arias.common.exception.BusinessException;
 import com.arias.credits.CreditLedgerService;
 import com.arias.credits.MovementRef;
+import com.arias.restaurantconfig.RestaurantConfigRepository;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -52,21 +53,17 @@ import java.util.List;
  *       < pickupAt - lead}; libera créditos (RELEASE), restaura stock, y
  *       marca {@code CANCELADO} — nunca borra la fila, porque los
  *       movimientos del libro mayor la referencian para siempre.</li>
+ *   <li>El horario de retiro se valida contra {@code restaurant_config}
+ *       (unidad 8, migración V20) vía {@link PickupSlotService#assertValidPickupTime}:
+ *       semana actual/siguiente, ventana de servicio y {@code
+ *       pickup_lead_minutes} — mismo valor que usa {@link
+ *       OrderConsumptionScheduler} para el punto de consumo automático.</li>
  * </ul>
  */
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class OrderPlacementService {
-
-    /**
-     * Minutos de preparación por defecto, hasta que {@code
-     * restaurant_config.pickup_lead_minutes} exista (unidad 8, migración
-     * V20). Mismo patrón que {@code CreditLedgerService.DEFAULT_EXPIRY_DAYS}:
-     * valor por defecto de diseño (20 minutos, ver V20) fijo hasta que la
-     * unidad 8 lo vuelva configurable.
-     */
-    static final int DEFAULT_PICKUP_LEAD_MINUTES = 20;
 
     private static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
 
@@ -75,6 +72,8 @@ public class OrderPlacementService {
     private final DishRepository dishRepo;
     private final SideRepository sideRepo;
     private final CreditLedgerService creditLedgerService;
+    private final PickupSlotService pickupSlotService;
+    private final RestaurantConfigRepository restaurantConfigRepo;
     private final Clock clock;
 
     /**
@@ -91,13 +90,14 @@ public class OrderPlacementService {
             throw BusinessException.badRequest("empty-order", "El pedido debe tener al menos un ítem");
         }
 
-        Instant now = clock.instant();
-        Instant earliest = now.plus(DEFAULT_PICKUP_LEAD_MINUTES, ChronoUnit.MINUTES);
-        if (req.pickupAt() == null || req.pickupAt().isBefore(earliest)) {
-            throw BusinessException.badRequest("pickup-too-soon",
-                "El horario de retiro debe ser al menos " + DEFAULT_PICKUP_LEAD_MINUTES
-                    + " minutos desde ahora");
+        if (req.pickupAt() == null) {
+            throw BusinessException.badRequest("pickup-at-required", "Debe indicar el horario de retiro");
         }
+        // Ventana de semana actual/siguiente, horario dentro del servicio y
+        // tiempo mínimo de preparación — spec pickup-scheduling completa
+        // (unidad 8), un solo punto de validación reutilizado también por
+        // GET /api/v1/orders/pickup-slots.
+        pickupSlotService.assertValidPickupTime(req.pickupAt());
 
         List<OrderItem> items = new ArrayList<>();
         int total = 0;
@@ -176,10 +176,11 @@ public class OrderPlacementService {
         }
 
         Instant now = clock.instant();
-        Instant deadline = order.getPickupAt().minus(DEFAULT_PICKUP_LEAD_MINUTES, ChronoUnit.MINUTES);
+        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
+        Instant deadline = order.getPickupAt().minus(lead, ChronoUnit.MINUTES);
         if (!now.isBefore(deadline)) {
             throw BusinessException.conflict("cancel-window-closed",
-                "Ya no se puede cancelar: falta menos de " + DEFAULT_PICKUP_LEAD_MINUTES
+                "Ya no se puede cancelar: falta menos de " + lead
                     + " minutos para el retiro");
         }
 

@@ -33,6 +33,38 @@ public class RestaurantConfig {
     @Column(nullable = false, length = 50)
     private String timezone = "America/Argentina/Buenos_Aires";
 
+    /**
+     * Único valor de tiempo de preparación (unidad 8, migración V20): define
+     * a la vez el retiro más temprano ofrecido ({@code now + lead}) y el
+     * punto de consumo automático ({@code pickup_at - lead}).
+     */
+    @Column(name = "pickup_lead_minutes", nullable = false)
+    private Integer pickupLeadMinutes;
+
+    /** Días de vencimiento del saldo AVAILABLE de créditos — reemplaza al default fijo de {@code CreditLedgerService}. */
+    @Column(name = "credit_expiry_days", nullable = false)
+    private Integer creditExpiryDays;
+
+    /** Apertura de la ventana de pedidos. */
+    @Column(name = "pickup_window_start", nullable = false)
+    private LocalTime pickupWindowStart;
+
+    /** Cierre de la ventana de pedidos (exclusivo). */
+    @Column(name = "pickup_window_end", nullable = false)
+    private LocalTime pickupWindowEnd;
+
+    /** Paso entre horarios de retiro ofrecidos dentro de la ventana. */
+    @Column(name = "pickup_slot_minutes", nullable = false)
+    private Integer pickupSlotMinutes;
+
+    /** Horario del resumen matutino de cocina (unidad 12). */
+    @Column(name = "daily_summary_time", nullable = false)
+    private LocalTime dailySummaryTime;
+
+    /** Minutos antes del retiro para el recordatorio al cliente (unidad 12). */
+    @Column(name = "pickup_reminder_minutes", nullable = false)
+    private Integer pickupReminderMinutes;
+
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;

@@ -139,12 +139,14 @@ Verificación: `./mvnw test -Dtest=OrderPlacementServiceTest,OrderServiceCompany
 
 ## Unidad 8 — Programación de retiro (backend)
 
-- [ ] 8.1 Migración `backend/src/main/resources/db/migration/V20__restaurant_config_b2c.sql` (los 7 campos del diseño: `pickup_lead_minutes`, `credit_expiry_days`, `pickup_window_{start,end}`, `pickup_slot_minutes`, `daily_summary_time`, `pickup_reminder_minutes`).
-- [ ] 8.2 `backend/src/main/java/com/arias/orders/PickupSlotService.java`: slots cada `pickup_slot_minutes` entre `pickup_window_start`/`end`, filtra `< now + lead`, semana actual + siguiente, excluye `fechas_deshabilitadas` (reutiliza `FechaDeshabilitadaRepository`).
-- [ ] 8.3 Endpoint `GET /api/v1/orders/pickup-slots?fecha=` en `OrderController`.
-- [ ] 8.4 `backend/src/main/java/com/arias/orders/OrderConsumptionScheduler.java`: cron cada minuto, `pickup_at - lead <= now` en `PENDIENTE` → `CONSUME` + `CONFIRMADO` (mismo patrón que `OrdersScheduler.closeOverdueOrders`).
-- [ ] 8.5 Re-validación perezosa en `OrderService.cancel()`: rechaza si `now >= pickupAt - lead`, sin depender de si el job corrió.
-- [ ] 8.6 Test con `Clock.fixed`: `PickupSlotServiceTest` (ventana, tiempo de preparación, sin límite de capacidad) y `OrderConsumptionSchedulerTest` (consumo automático, atraso procesado en el primer tick) — cubre spec `pickup-scheduling` completa.
+- [x] 8.1 Migración `backend/src/main/resources/db/migration/V20__restaurant_config_b2c.sql` (los 7 campos del diseño: `pickup_lead_minutes`, `credit_expiry_days`, `pickup_window_{start,end}`, `pickup_slot_minutes`, `daily_summary_time`, `pickup_reminder_minutes`).
+- [x] 8.2 `backend/src/main/java/com/arias/orders/PickupSlotService.java`: slots cada `pickup_slot_minutes` entre `pickup_window_start`/`end`, filtra `< now + lead`, semana actual + siguiente, excluye `fechas_deshabilitadas` (reutiliza `FechaDeshabilitadaRepository`).
+- [x] 8.3 Endpoint `GET /api/v1/orders/pickup-slots?fecha=` en `OrderController`.
+- [x] 8.4 `backend/src/main/java/com/arias/orders/OrderConsumptionScheduler.java`: cron cada minuto, `pickup_at - lead <= now` en `PENDIENTE` → `CONSUME` + `CONFIRMADO` (mismo patrón que `OrdersScheduler.closeOverdueOrders`).
+- [x] 8.5 Re-validación perezosa en `OrderPlacementService.cancel()` (la tabla de unidades y el texto original decían `OrderService.cancel()`, pero `OrderService`/`DailyChoice` está congelado desde la unidad 7 y no tiene `pickupAt`; esta lógica ya existía desde la unidad 7 con un lead fijo de 20 minutos — esta unidad la vuelve configurable): rechaza si `now >= pickupAt - lead`, sin depender de si el job corrió.
+- [x] 8.6 Test con `Clock.fixed`: `PickupSlotServiceTest` (ventana, tiempo de preparación, sin límite de capacidad) y `OrderConsumptionSchedulerTest` (consumo automático, atraso procesado en el primer tick) — cubre spec `pickup-scheduling` completa.
+
+**Nota adicional (settled con el usuario, fuera del texto original de 8.1-8.6)**: además de la migración, se expuso la edición de los 7 campos nuevos vía `RestaurantConfig`/`RestaurantConfigDto`/`UpdateRestaurantConfigRequest`/`RestaurantConfigController` (`PUT /api/v1/restaurant-config`, `SUPER_ADMIN`), y se reemplazaron `CreditLedgerService.DEFAULT_EXPIRY_DAYS` y `OrderPlacementService.DEFAULT_PICKUP_LEAD_MINUTES` por lectura directa de `restaurant_config` — esto adelanta parte de lo que la unidad 13 (13.3) tenía planeado solo para la config; 13.3 ahora solo necesita cubrir `AdminOrderController`/`OrderExportService`.
 
 Verificación: `./mvnw test -Dtest=PickupSlotServiceTest,OrderConsumptionSchedulerTest`.
 

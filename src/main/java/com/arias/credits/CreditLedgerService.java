@@ -1,6 +1,7 @@
 package com.arias.credits;
 
 import com.arias.common.exception.BusinessException;
+import com.arias.restaurantconfig.RestaurantConfigRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -39,15 +40,9 @@ import java.util.List;
 @RequiredArgsConstructor
 public class CreditLedgerService {
 
-    /**
-     * Días de vencimiento por defecto. La unidad 8 lo vuelve configurable vía
-     * {@code restaurant_config.credit_expiry_days} (migración V20, todavía no
-     * existe); hasta entonces el valor por defecto de la spec (90 días) es fijo.
-     */
-    static final int DEFAULT_EXPIRY_DAYS = 90;
-
     private final CreditWalletRepository walletRepo;
     private final CreditMovementRepository movementRepo;
+    private final RestaurantConfigRepository restaurantConfigRepo;
     private final Clock clock;
 
     /**
@@ -89,7 +84,8 @@ public class CreditLedgerService {
         // en esta rama, así que nunca renuevan — igual que exige la spec.
         if (type == MovementType.PACK_PURCHASE
             || (wallet.getExpiresAt() == null && deltaAvailable > 0)) {
-            wallet.setExpiresAt(clock.instant().plus(DEFAULT_EXPIRY_DAYS, ChronoUnit.DAYS));
+            int expiryDays = restaurantConfigRepo.getSingleton().getCreditExpiryDays();
+            wallet.setExpiresAt(clock.instant().plus(expiryDays, ChronoUnit.DAYS));
         }
 
         walletRepo.save(wallet);

@@ -3,12 +3,14 @@ package com.arias.orders;
 import com.arias.common.security.JwtUser;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -20,7 +22,22 @@ import java.util.Optional;
 public class OrderController {
 
     private final OrderService orderService;
+    private final PickupSlotService pickupSlotService;
     private final Clock clock;
+
+    /**
+     * Horarios de retiro válidos para una fecha — unidad 8, spec {@code
+     * pickup-scheduling}. Usado por el flujo nuevo de pedidos ({@code
+     * OrderPlacementController}, {@code /api/v2/orders}); vive acá porque
+     * {@code OrderPlacementController} no tiene un {@code GET} propio y el
+     * diseño reserva esta ruta bajo {@code /api/v1/orders}.
+     */
+    @GetMapping("/pickup-slots")
+    public List<Instant> getPickupSlots(
+        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fecha
+    ) {
+        return pickupSlotService.slotsFor(fecha);
+    }
 
     @GetMapping("/today")
     public ResponseEntity<DailyChoiceDto> getToday(@AuthenticationPrincipal JwtUser user) {
