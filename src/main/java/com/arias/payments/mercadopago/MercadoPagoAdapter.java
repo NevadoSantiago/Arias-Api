@@ -15,6 +15,8 @@ import com.mercadopago.client.preference.PreferenceItemRequest;
 import com.mercadopago.client.preference.PreferenceRequest;
 import com.mercadopago.exceptions.MPApiException;
 import com.mercadopago.exceptions.MPException;
+import com.mercadopago.net.MPResultsResourcesPage;
+import com.mercadopago.net.MPSearchRequest;
 import com.mercadopago.resources.payment.Payment;
 import com.mercadopago.resources.preference.Preference;
 import jakarta.annotation.PostConstruct;
@@ -25,7 +27,10 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * Adaptador de {@link PaymentGateway} sobre el SDK oficial de Mercado Pago —
@@ -136,17 +141,54 @@ public class MercadoPagoAdapter implements PaymentGateway {
         return signatureVerifier.verify(xSignature, xRequestId, dataId);
     }
 
+    /**
+     * {@code PaymentReconciliationScheduler} (unidad 11): re-consulta por
+     * {@code external_reference} cuando el webhook nunca llegó, así que
+     * todavía no tenemos el {@code payment_id}. Puede haber más de un intento
+     * de pago para la misma referencia (reintentos del usuario en Checkout
+     * Pro) — nos quedamos con el más reciente por {@code dateCreated}.
+     */
+    @Override
+    public Optional<PaymentSnapshot> findByExternalReference(String externalReference) {
+        requireConfigured();
+        MPSearchRequest request = MPSearchRequest.builder()
+            .filters(Map.of("external_reference", externalReference))
+            .build();
+        try {
+            MPResultsResourcesPage<Payment> page = new PaymentClient().search(request);
+            if (page == null || page.getResults() == null || page.getResults().isEmpty()) {
+                return Optional.empty();
+            }
+            return page.getResults().stream()
+                .max(Comparator.comparing(Payment::getDateCreated,
+                    Comparator.nullsFirst(Comparator.naturalOrder())))
+                .map(this::toSnapshot);
+        } catch (MPApiException e) {
+            log.error("Mercado Pago rechazó la búsqueda por external_reference {}: status={} body={}",
+                externalReference, e.getStatusCode(), apiResponseBody(e));
+            throw paymentLookupFailed();
+        } catch (MPException e) {
+            log.error("Error de red/SDK al buscar pagos por external_reference {} en Mercado Pago",
+                externalReference, e);
+            throw paymentLookupFailed();
+        }
+    }
+
     private PaymentSnapshot toSnapshot(Payment payment) {
         long amountCents = payment.getTransactionAmount() == null
             ? 0L
             : amountToCents(payment.getTransactionAmount());
+        long amountRefundedCents = payment.getTransactionAmountRefunded() == null
+            ? 0L
+            : amountToCents(payment.getTransactionAmountRefunded());
         return new PaymentSnapshot(
             String.valueOf(payment.getId()),
             PaymentStatus.fromMercadoPago(payment.getStatus()),
             payment.getStatusDetail(),
             amountCents,
             payment.getCurrencyId(),
-            payment.getExternalReference()
+            payment.getExternalReference(),
+            amountRefundedCents
         );
     }
 

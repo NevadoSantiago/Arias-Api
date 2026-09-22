@@ -19,7 +19,7 @@ import java.util.UUID;
  * {@code CreditLedgerService} (unidad 3) verifica.
  *
  * <p>{@code orderId}/{@code purchaseId} son FKs lógicas — sin constraint de
- * base, porque {@code orders} (V18) y {@code credit_purchase} (V19) todavía
+ * base, porque {@code orders} (V18) y {@code credit_purchase} (V22) todavía
  * no existen cuando este movimiento puede necesitar referenciarlos (p. ej.
  * {@code WELCOME_GRANT} no referencia ninguno de los dos).
  */

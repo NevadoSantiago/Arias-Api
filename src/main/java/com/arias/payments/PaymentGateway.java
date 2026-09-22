@@ -33,4 +33,13 @@ public interface PaymentGateway {
      * entrante. Comparación en tiempo constante.
      */
     boolean verifySignature(String xSignature, String xRequestId, String dataId);
+
+    /**
+     * Busca el pago más reciente asociado a un {@code external_reference}
+     * (unidad 11, {@code PaymentReconciliationScheduler}) — cubre el webhook
+     * perdido: una compra {@code PENDING} sin notificación se re-consulta acá
+     * en vez de necesitar el {@code payment_id}, que todavía no se conoce.
+     * Vacío si Mercado Pago no tiene ningún pago para esa referencia.
+     */
+    java.util.Optional<PaymentSnapshot> findByExternalReference(String externalReference);
 }

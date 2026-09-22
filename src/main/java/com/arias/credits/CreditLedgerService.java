@@ -124,6 +124,34 @@ public class CreditLedgerService {
     }
 
     /**
+     * Reversión por reembolso/contracargo de Mercado Pago (unidad 11, diseño
+     * §Flujo de datos "Compra con Mercado Pago"): a diferencia de {@link
+     * #commit}, esta operación NUNCA falla por saldo insuficiente — es una
+     * reconciliación contable, no un gasto que el usuario elige. Se acota al
+     * AVAILABLE realmente disponible ("hasta 0 si ya se gastó"); el resto de
+     * {@code amount} que no alcanza a revertirse queda documentado por el
+     * llamador ({@code MercadoPagoWebhookController}), que lleva la cuenta de
+     * cuánto de esta compra ya se intentó revertir en {@code
+     * credit_purchase.credits_reversed} — el CHECK de no-negativo de la
+     * billetera queda como última línea de defensa, nunca se llega a violar
+     * porque el delta ya viene acotado a {@code wallet.available}.
+     *
+     * @return el movimiento creado, o {@code null} si no había nada
+     *         disponible para revertir (todo ya estaba consumido).
+     */
+    @Transactional
+    public CreditMovement reverse(Long userId, int amount, MovementRef ref) {
+        requirePositive(amount);
+        CreditWallet wallet = walletRepo.findByIdForUpdate(userId)
+            .orElseGet(() -> walletRepo.save(CreditWallet.emptyFor(userId)));
+        int actual = Math.min(amount, wallet.getAvailable());
+        if (actual <= 0) {
+            return null;
+        }
+        return apply(userId, MovementType.PAYMENT_REVERSAL, -actual, 0, ref);
+    }
+
+    /**
      * Otorga el almuerzo de bienvenida — spec {@code self-registration},
      * "Otorgamiento único": exactamente 1 crédito, no transferible, una sola
      * vez por cuenta (diseño §Decisión 10). Lo disparan {@code
