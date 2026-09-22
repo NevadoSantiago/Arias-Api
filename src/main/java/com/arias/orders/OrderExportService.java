@@ -3,6 +3,7 @@ package com.arias.orders;
 import com.arias.common.exception.BusinessException;
 import com.arias.companies.Company;
 import com.arias.companies.CompanyRepository;
+import com.arias.users.User;
 import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFColor;
@@ -14,6 +15,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.List;
@@ -26,7 +29,10 @@ public class OrderExportService {
     private static final Set<OrderEstado> EXPORTABLE_ESTADOS =
         EnumSet.of(OrderEstado.CONFIRMADO, OrderEstado.COMANDADO, OrderEstado.ENTREGADO);
 
+    private static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
+
     private final DailyChoiceRepository orderRepo;
+    private final OrderRepository orderRepository;
     private final CompanyRepository companyRepo;
 
     /**
@@ -112,6 +118,85 @@ public class OrderExportService {
         }
     }
 
+    /**
+     * Exporta a Excel los pedidos del día (tabla {@code orders}) agrupados
+     * por horario de retiro — unidad 13, spec {@code admin-order-fulfillment}.
+     * Excluye {@code CANCELADO}, mismo criterio que {@link
+     * OrderRepository#findByFechaAndEstadoNotOrderByPickupAtAsc}. A
+     * diferencia de {@link #exportCompanyToExcel} no filtra por estado
+     * "post-corte" — acá el corte es distinto por pedido ({@code pickup_at −
+     * lead}, no un horario único de empresa) y ya lo aplicó {@link
+     * com.arias.orders.OrderConsumptionScheduler} antes de que el pedido
+     * llegue a este reporte.
+     */
+    @Transactional(readOnly = true)
+    public byte[] exportByPickupToExcel(LocalDate fecha) {
+        List<Order> orders = orderRepository.findByFechaAndEstadoNotOrderByPickupAtAsc(fecha, OrderEstado.CANCELADO);
+
+        if (orders.isEmpty()) {
+            throw BusinessException.badRequest("no-orders",
+                "No hay pedidos para exportar en esa fecha");
+        }
+
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            CellStyle headerStyle = createHeaderStyle(workbook);
+            CellStyle totalStyle = createTotalStyle(workbook);
+
+            Sheet sheet = workbook.createSheet("Retiro " + fecha);
+
+            String[] headers = {"Horario de Retiro", "Cliente", "Plato", "Acompañamiento", "Notas"};
+            int[] columnWidths = {16, 28, 30, 25, 40};
+            Row headerRow = sheet.createRow(0);
+            for (int i = 0; i < headers.length; i++) {
+                Cell cell = headerRow.createCell(i);
+                cell.setCellValue(headers[i]);
+                cell.setCellStyle(headerStyle);
+            }
+
+            int rowNum = 1;
+            int itemCount = 0;
+            LocalTime lastPickupTime = null;
+
+            for (Order order : orders) {
+                LocalTime pickupTime = LocalTime.ofInstant(order.getPickupAt(), ZONE);
+                if (lastPickupTime != null && !lastPickupTime.equals(pickupTime)) {
+                    rowNum++;
+                }
+                lastPickupTime = pickupTime;
+
+                String customer = customerLabel(order.getUser());
+                for (OrderItem item : order.getItems()) {
+                    Row row = sheet.createRow(rowNum++);
+                    row.createCell(0).setCellValue(pickupTime.toString());
+                    row.createCell(1).setCellValue(customer);
+                    row.createCell(2).setCellValue(item.getDishNombre());
+                    row.createCell(3).setCellValue(item.getSideNombre() != null ? item.getSideNombre() : "");
+                    row.createCell(4).setCellValue(order.getNotas() != null ? order.getNotas() : "");
+                    itemCount++;
+                }
+            }
+
+            rowNum++;
+            Row totalRow = sheet.createRow(rowNum);
+            Cell totalLabel = totalRow.createCell(0);
+            totalLabel.setCellValue("TOTAL:");
+            totalLabel.setCellStyle(totalStyle);
+            Cell totalValue = totalRow.createCell(1);
+            totalValue.setCellValue(itemCount);
+            totalValue.setCellStyle(totalStyle);
+
+            for (int i = 0; i < columnWidths.length; i++) {
+                sheet.setColumnWidth(i, columnWidths[i] * 256);
+            }
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException("Error generando Excel", e);
+        }
+    }
+
     private String buildFullName(DailyChoice order) {
         String first = order.getUser().getFirstName();
         String last = order.getUser().getLastName();
@@ -119,6 +204,20 @@ public class OrderExportService {
         if (first != null) name += first;
         if (last != null) name += " " + last;
         return name.trim();
+    }
+
+    /** Ver el comentario equivalente en {@code AdminOrderDto.PickupOrderDto}: cae a nombre y apellido sin apodo. */
+    private String customerLabel(User user) {
+        String nickname = user.getNickname();
+        if (nickname != null && !nickname.isBlank()) {
+            return nickname;
+        }
+        String first = user.getFirstName();
+        String last = user.getLastName();
+        String name = "";
+        if (first != null) name += first;
+        if (last != null) name += (name.isEmpty() ? "" : " ") + last;
+        return name.isBlank() ? user.getEmail() : name.trim();
     }
 
     private CellStyle createHeaderStyle(XSSFWorkbook workbook) {

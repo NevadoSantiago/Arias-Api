@@ -14,12 +14,19 @@ import org.springframework.web.bind.annotation.*;
 import java.text.Normalizer;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Endpoints administrativos del SUPER_ADMIN sobre el dominio de orders.
  * Usados por el panel del resto para ver el consolidado del día.
+ *
+ * <p>Unidad 13 (spec {@code admin-order-fulfillment}) agrega la vista y
+ * exportación agrupadas por horario de retiro, que leen {@code orders} vía
+ * {@link OrderRepository} — la vista por empresa de arriba sigue intacta y
+ * sigue leyendo {@code daily_choice} vía {@link DailyChoiceRepository}. Son
+ * dos fuentes de datos distintas que nunca se mezclan en un mismo endpoint.
  */
 @RestController
 @RequestMapping("/api/v1/admin/orders")
@@ -27,7 +34,10 @@ import java.util.Map;
 @PreAuthorize("hasRole('SUPER_ADMIN')")
 public class AdminOrderController {
 
+    private static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
+
     private final DailyChoiceRepository orderRepo;
+    private final OrderRepository orderRepository;
     private final CompanyRepository companyRepo;
     private final OrderService orderService;
     private final OrderExportService orderExportService;
@@ -85,6 +95,39 @@ public class AdminOrderController {
     public Map<String, Integer> markDeliveredByCompany(@PathVariable Long companyId) {
         int count = orderService.markDeliveredByCompany(companyId);
         return Map.of("updated", count);
+    }
+
+    /**
+     * Consolidado de pedidos del día (tabla {@code orders}) agrupado por
+     * horario de retiro, legible por cocina — unidad 13, spec {@code
+     * admin-order-fulfillment}. Excluye {@code CANCELADO}, mismo criterio que
+     * el resumen matutino de {@code OrderNotificationScheduler}: el resto de
+     * la app lo trata como si no existiera.
+     */
+    @GetMapping("/by-pickup")
+    @Transactional(readOnly = true)
+    public List<AdminOrderDto.PickupGroupDto> getOrdersByPickup(@RequestParam(required = false) LocalDate fecha) {
+        LocalDate target = fecha != null ? fecha : LocalDate.now(clock);
+        List<Order> orders = orderRepository.findByFechaAndEstadoNotOrderByPickupAtAsc(target, OrderEstado.CANCELADO);
+        return AdminOrderDto.PickupGroupDto.groupByPickup(orders, ZONE);
+    }
+
+    /**
+     * Exporta a .xlsx los pedidos del día agrupados por horario de retiro —
+     * unidad 13, spec {@code admin-order-fulfillment}. A diferencia de {@link
+     * #exportCompanyOrders}, no tiene side effect de cambio de estado: la
+     * confirmación de "cargado en cocina" para pedidos B2C queda fuera de
+     * alcance de esta unidad.
+     */
+    @GetMapping("/export/by-pickup")
+    @Transactional(readOnly = true)
+    public ResponseEntity<byte[]> exportOrdersByPickup(@RequestParam LocalDate fecha) {
+        byte[] excel = orderExportService.exportByPickupToExcel(fecha);
+        String filename = "pedidos-retiro-" + fecha + ".xlsx";
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+            .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            .body(excel);
     }
 
     /** Quita tildes y caracteres raros del nombre de la empresa para el filename. */

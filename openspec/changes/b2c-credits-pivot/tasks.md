@@ -191,9 +191,9 @@ Verificación: `./mvnw test -Dtest=OrderNotificationSchedulerTest`.
 
 ## Unidad 13 — Admin fulfillment + configuración (backend, cierre de la mitad backend)
 
-- [ ] 13.1 Modificar `backend/src/main/java/com/arias/orders/AdminOrderController.java`: `GET /api/v1/admin/orders/by-pickup?fecha=`, `GET /api/v1/admin/orders/export/by-pickup?fecha=`, agregados junto a los endpoints por empresa existentes (sin modificarlos) — cubre spec `admin-order-fulfillment`.
-- [ ] 13.2 Modificar `backend/src/main/java/com/arias/orders/OrderExportService.java` y `AdminOrderDto.java` para exportar agrupado por horario de retiro.
-- [ ] 13.3 Modificar `backend/src/main/java/com/arias/restaurantconfig/{RestaurantConfig,RestaurantConfigDto,UpdateRestaurantConfigRequest,RestaurantConfigController}.java`: exponer edición de los 7 campos nuevos.
-- [ ] 13.4 Test: `AdminOrderControllerTest` — listado/exportación agrupados por horario de retiro Y por empresa sin cambio de comportamiento (regresión); `RestaurantConfigServiceTest` — edición de paquetes/vencimiento/ventana por el admin.
+- [x] 13.1 Modificar `backend/src/main/java/com/arias/orders/AdminOrderController.java`: `GET /api/v1/admin/orders/by-pickup?fecha=`, `GET /api/v1/admin/orders/export/by-pickup?fecha=`, agregados junto a los endpoints por empresa existentes (sin modificarlos) — cubre spec `admin-order-fulfillment`.
+- [x] 13.2 Modificar `backend/src/main/java/com/arias/orders/OrderExportService.java` y `AdminOrderDto.java` para exportar agrupado por horario de retiro.
+- [x] 13.3 Modificar `backend/src/main/java/com/arias/restaurantconfig/{RestaurantConfig,RestaurantConfigDto,UpdateRestaurantConfigRequest,RestaurantConfigController}.java`: exponer edición de los 7 campos nuevos. **Ya resuelto por la unidad 8** (ver su nota adicional): los 7 campos son editables vía `PUT /api/v1/restaurant-config`, con validación `pickupWindowStart < pickupWindowEnd` en el controller. Verificado en esta unidad — sin cambios adicionales de código, solo la cobertura de test de 13.4.
+- [x] 13.4 Test: `AdminOrderControllerTest` — listado/exportación agrupados por horario de retiro Y por empresa sin cambio de comportamiento (regresión); `RestaurantConfigControllerTest` — edición de ventana/vencimiento/lead por el admin (no existe `RestaurantConfigService`: la edición vive directo en `RestaurantConfigController`, de ahí el nombre real del archivo de test).
 
 Verificación: `./mvnw test -Dtest=AdminOrderControllerTest,RestaurantConfigServiceTest` — al quedar en verde junto con el resto de la suite (`./mvnw test`), la mitad backend queda lista para que la mitad frontend inicie su implementación.

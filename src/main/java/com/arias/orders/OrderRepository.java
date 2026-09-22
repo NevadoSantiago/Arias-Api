@@ -76,4 +76,23 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
           AND o.estado <> com.arias.orders.OrderEstado.CANCELADO
     """)
     int claimReminderSlot(@Param("orderId") Long orderId, @Param("now") Instant now);
+
+    /**
+     * Consolidado admin por horario de retiro (unidad 13, spec {@code
+     * admin-order-fulfillment}) — mismo criterio de exclusión que {@link
+     * #findByFechaAndEstadoNot}: {@code CANCELADO} no se muestra, la cocina
+     * lo trata como si no existiera. {@code JOIN FETCH user/items} porque
+     * {@link AdminOrderController} arma el DTO agrupado sin abrir una
+     * transacción por ítem.
+     */
+    @Query("""
+        SELECT DISTINCT o FROM Order o
+        JOIN FETCH o.user
+        LEFT JOIN FETCH o.items
+        WHERE o.fecha = :fecha
+          AND o.estado <> :estadoExcluido
+        ORDER BY o.pickupAt ASC
+    """)
+    List<Order> findByFechaAndEstadoNotOrderByPickupAtAsc(
+        @Param("fecha") LocalDate fecha, @Param("estadoExcluido") OrderEstado estadoExcluido);
 }
