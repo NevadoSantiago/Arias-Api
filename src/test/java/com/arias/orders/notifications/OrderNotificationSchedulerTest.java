@@ -38,6 +38,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -64,6 +65,10 @@ class OrderNotificationSchedulerTest {
     // 08:02 ART — dentro de la ventana [08:00, 08:05) del daily_summary_time
     // default (V20).
     static final Instant FIXED_NOW = Instant.parse("2026-03-10T11:02:00Z");
+    // System.nanoTime() no alcanza para distinguir varios persistCustomer()
+    // seguidos dentro del mismo test (colisiona en uq_users_phone) — un
+    // contador monotónico sí garantiza unicidad.
+    private static final AtomicLong PHONE_SEQ = new AtomicLong();
 
     @TestConfiguration
     static class FixedClockConfig {
@@ -125,6 +130,7 @@ class OrderNotificationSchedulerTest {
             .email("cliente-" + System.nanoTime() + "@test.arias.com")
             .role(Role.EMPLOYEE)
             .nickname("Cliente")
+            .phone("+549" + (1155660100L + PHONE_SEQ.incrementAndGet())) // gate de profile-incomplete: idem
             .active(true)
             .emailVerifiedAt(Instant.now()) // gate de email-not-verified: no es lo que testea esta suite
             .build());

@@ -30,6 +30,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -59,6 +60,10 @@ class OrderPlacementServiceTest {
     // lead de 20 minutos).
     static final Instant FIXED_NOW = Instant.parse("2026-03-10T13:40:00Z");
     static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
+    // System.nanoTime() no alcanza para distinguir dos persistB2cUser()
+    // seguidos dentro del mismo test (colisiona en uq_users_phone) — un
+    // contador monotónico sí garantiza unicidad.
+    private static final AtomicLong PHONE_SEQ = new AtomicLong();
 
     @TestConfiguration
     static class FixedClockConfig {
@@ -131,13 +136,39 @@ class OrderPlacementServiceTest {
         return dishRepo.save(dish);
     }
 
-    /** B2C con el correo ya verificado — el caso feliz que usa el resto de la suite. */
+    /**
+     * B2C con el correo ya verificado y perfil completo (teléfono + apodo) —
+     * el caso feliz que usa el resto de la suite. Refleja el autorregistro
+     * real: {@code RegisterRequest} exige ambos campos, así que un B2C
+     * verificado siempre los tiene salvo que haya entrado con Google y
+     * todavía no pasó por {@code complete-profile} (unidad 9, gap de perfil
+     * incompleto — ver {@link #persistB2cUserConPerfilIncompleto}).
+     */
     private User persistB2cUser() {
         User user = User.builder()
             .email("b2c-" + System.nanoTime() + "@test.arias.com")
             .role(Role.EMPLOYEE)
             .active(true)
             .emailVerifiedAt(Instant.now())
+            .phone("+549" + (1122330100L + PHONE_SEQ.incrementAndGet()))
+            .nickname("Apodo-" + System.nanoTime())
+            .build();
+        return userRepo.save(user);
+    }
+
+    /**
+     * B2C con correo verificado (típico de login con Google, diseño
+     * §Decisión 9) pero sin teléfono y/o apodo — todavía no pasó por
+     * {@code complete-profile}. Gap de la unidad 9.
+     */
+    private User persistB2cUserConPerfilIncompleto(String phone, String nickname) {
+        User user = User.builder()
+            .email("b2c-sin-perfil-" + System.nanoTime() + "@test.arias.com")
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .emailVerifiedAt(Instant.now())
+            .phone(phone)
+            .nickname(nickname)
             .build();
         return userRepo.save(user);
     }
@@ -453,7 +484,7 @@ class OrderPlacementServiceTest {
     }
 
     @Test
-    @DisplayName("place(): un empleado de empresa con email_verified_at = NULL SÍ puede pedir — exento del gate (regresión V16)")
+    @DisplayName("place(): un empleado de empresa con email_verified_at = NULL Y sin teléfono/apodo SÍ puede pedir — exento de ambos gates (regresión V16)")
     void placeNoBloqueaEmpleadoDeEmpresaConEmailVerifiedAtNulo() {
         Category category = persistCategory(2);
         MenuSection section = persistMenuSection();
@@ -461,11 +492,85 @@ class OrderPlacementServiceTest {
         Dish dish = persistDish(category, section, 5);
         User employee = persistEmployee(company, category);
         assertThat(employee.getEmailVerifiedAt()).isNull(); // exactamente el caso que V16 no pudo rellenar
+        assertThat(employee.getPhone()).isNull(); // el alta por lista blanca nunca captura teléfono ni apodo
+        assertThat(employee.getNickname()).isNull();
         seedWallet(employee.getId(), 10);
 
         OrderDto order = orderPlacementService.place(employee.getId(),
             singleItemRequest(dish.getId(), defaultPickupAt()));
 
         assertThat(order.id()).isNotNull();
+    }
+
+    // ─── Gate de perfil incompleto (gap de la unidad 9, diseño §Decisión 9) ─
+
+    @Test
+    @DisplayName("place(): un B2C con correo verificado pero SIN teléfono no puede pedir — 409 profile-incomplete, sin tocar stock ni saldo")
+    void placeRechazaB2cSinTelefono() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUserConPerfilIncompleto(null, "Apodo-" + System.nanoTime());
+        seedWallet(user.getId(), 10);
+
+        assertThatThrownBy(() -> orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt())))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "profile-incomplete");
+
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(5);
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(10);
+        assertThat(wallet.getCommitted()).isZero();
+    }
+
+    @Test
+    @DisplayName("place(): un B2C con correo verificado pero SIN apodo no puede pedir — 409 profile-incomplete")
+    void placeRechazaB2cSinApodo() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUserConPerfilIncompleto("+549" + (1122330200L + PHONE_SEQ.incrementAndGet()), null);
+        seedWallet(user.getId(), 10);
+
+        assertThatThrownBy(() -> orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt())))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "profile-incomplete");
+    }
+
+    @Test
+    @DisplayName("place(): un B2C con correo verificado y perfil completo puede pedir")
+    void placeAceptaB2cConPerfilCompleto() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        assertThat(user.getPhone()).isNotBlank();
+        assertThat(user.getNickname()).isNotBlank();
+        seedWallet(user.getId(), 10);
+
+        OrderDto order = orderPlacementService.place(user.getId(), singleItemRequest(dish.getId(), defaultPickupAt()));
+
+        assertThat(order.id()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("place(): con AMBOS gates disparables, el B2C ve email-not-verified primero (identidad antes que datos de perfil)")
+    void placeConAmbosGatesDisparablesMuestraEmailNotVerifiedPrimero() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        // Sin verificar Y sin teléfono/apodo — ambos gates aplicarían.
+        User user = persistUnverifiedB2cUser();
+        assertThat(user.getPhone()).isNull();
+        assertThat(user.getNickname()).isNull();
+        seedWallet(user.getId(), 10);
+
+        assertThatThrownBy(() -> orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt())))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "email-not-verified");
     }
 }

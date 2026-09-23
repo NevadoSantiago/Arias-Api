@@ -26,6 +26,7 @@ import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -78,6 +79,10 @@ class MercadoPagoWebhookControllerTest {
 
     private static final String VALID_SIG = "ts=1,v1=deadbeef";
     private static final String REQ_ID = "req-1";
+    // System.nanoTime() no alcanza para distinguir dos persistUser() seguidos
+    // dentro del mismo test (colisiona en uq_users_phone) — un contador
+    // monotónico sí garantiza unicidad.
+    private static final AtomicLong PHONE_SEQ = new AtomicLong();
 
     private User persistUser(String prefix) {
         User user = User.builder()
@@ -85,6 +90,8 @@ class MercadoPagoWebhookControllerTest {
             .role(Role.EMPLOYEE)
             .active(true)
             .emailVerifiedAt(Instant.now()) // gate de email-not-verified: no es lo que testea esta suite
+            .phone("+549" + (1144550100L + PHONE_SEQ.incrementAndGet())) // gate de profile-incomplete: idem
+            .nickname("Apodo-" + System.nanoTime())
             .build();
         return userRepo.save(user);
     }

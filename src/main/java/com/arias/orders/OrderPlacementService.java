@@ -98,6 +98,17 @@ public class OrderPlacementService {
                 "Debés verificar tu correo electrónico antes de pedir");
         }
 
+        // Gap de la unidad 5/9 (diseño §Decisión 9): quien entró con Google
+        // nunca dio teléfono ni apodo — sin eso la cocina no tiene a quién
+        // nombrar ni a quién llamar. Va DESPUÉS del gate de email porque no
+        // tiene sentido pedirle datos de perfil a una identidad todavía no
+        // verificada. Empleados de empresa quedan exentos (ver
+        // User.mustCompleteProfileToSpend).
+        if (user.mustCompleteProfileToSpend()) {
+            throw BusinessException.conflict("profile-incomplete",
+                "Completá tu teléfono y apodo antes de pedir");
+        }
+
         if (req.items() == null || req.items().isEmpty()) {
             throw BusinessException.badRequest("empty-order", "El pedido debe tener al menos un ítem");
         }

@@ -76,6 +76,15 @@ public class CreditPurchaseService {
                 "Debés verificar tu correo electrónico antes de comprar créditos");
         }
 
+        // Mismo gate que OrderPlacementService.place() — ver diseño
+        // §Decisión 9 y User.mustCompleteProfileToSpend para la exención de
+        // empleados de empresa. Va después del gate de email por la misma
+        // razón: verificar identidad primero, pedir datos de perfil después.
+        if (user.mustCompleteProfileToSpend()) {
+            throw BusinessException.conflict("profile-incomplete",
+                "Completá tu teléfono y apodo antes de comprar créditos");
+        }
+
         CreditPack pack = null;
         Order order = null;
         int creditAmount;

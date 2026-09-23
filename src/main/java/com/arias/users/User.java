@@ -145,4 +145,19 @@ public class User {
     public boolean mustVerifyEmailToSpend() {
         return company == null && emailVerifiedAt == null;
     }
+
+    /**
+     * {@code true} cuando el usuario debe completar teléfono y apodo antes de
+     * poder pedir o comprar créditos ({@code 409 profile-incomplete}, diseño
+     * §Decisión 9). Existe para cubrir el login con Google, que nunca provee
+     * esos dos datos. Los usuarios con empresa quedan SIEMPRE exentos, igual
+     * que en {@link #mustVerifyEmailToSpend()}: el alta por lista blanca no
+     * captura teléfono ni apodo y nunca lo hará — bloquearlos sería un
+     * requisito imposible de cumplir, no una protección real. Solo un B2C
+     * ({@code company == NULL}) puede quedar bloqueado por este gate.
+     */
+    @Transient
+    public boolean mustCompleteProfileToSpend() {
+        return company == null && !isProfileComplete();
+    }
 }

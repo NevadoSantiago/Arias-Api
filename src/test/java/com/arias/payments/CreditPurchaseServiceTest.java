@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -63,13 +64,41 @@ class CreditPurchaseServiceTest {
     @MockitoBean
     private PaymentGateway paymentGateway;
 
-    /** Verificado por defecto — el caso feliz que usa el resto de la suite. */
+    // System.nanoTime() no alcanza para distinguir dos persistUser() seguidos
+    // dentro del mismo test (colisiona en uq_users_phone) — un contador
+    // monotónico sí garantiza unicidad.
+    private static final AtomicLong PHONE_SEQ = new AtomicLong();
+
+    /**
+     * Verificado y con perfil completo (teléfono + apodo) por defecto — el
+     * caso feliz que usa el resto de la suite (refleja el autorregistro
+     * real, donde {@code RegisterRequest} exige ambos campos).
+     */
     private User persistUser(String prefix) {
         User user = User.builder()
             .email(prefix + "-" + System.nanoTime() + "@test.arias.com")
             .role(Role.EMPLOYEE)
             .active(true)
             .emailVerifiedAt(Instant.now())
+            .phone("+549" + (1133440100L + PHONE_SEQ.incrementAndGet()))
+            .nickname("Apodo-" + System.nanoTime())
+            .build();
+        return userRepo.save(user);
+    }
+
+    /**
+     * Correo verificado (típico de login con Google, diseño §Decisión 9)
+     * pero sin teléfono y/o apodo — todavía no pasó por {@code
+     * complete-profile}. Gap de la unidad 9.
+     */
+    private User persistUserConPerfilIncompleto(String prefix, String phone, String nickname) {
+        User user = User.builder()
+            .email(prefix + "-" + System.nanoTime() + "@test.arias.com")
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .emailVerifiedAt(Instant.now())
+            .phone(phone)
+            .nickname(nickname)
             .build();
         return userRepo.save(user);
     }
@@ -247,6 +276,8 @@ class CreditPurchaseServiceTest {
     void compraNoSeBloqueaParaEmpleadoDeEmpresaConEmailVerifiedAtNulo() {
         User employee = persistCompanyEmployeeWithNullEmailVerifiedAt();
         assertThat(employee.getEmailVerifiedAt()).isNull(); // exactamente el caso que V16 no pudo rellenar
+        assertThat(employee.getPhone()).isNull(); // el alta por lista blanca nunca captura teléfono ni apodo
+        assertThat(employee.getNickname()).isNull();
         CreditPack pack = packRepo.save(CreditPack.builder()
             .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
@@ -257,6 +288,71 @@ class CreditPurchaseServiceTest {
             new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null));
 
         assertThat(dto.purchaseId()).isNotNull();
+    }
+
+    // ─── Gate de perfil incompleto (gap de la unidad 9, diseño §Decisión 9) ─
+
+    @Test
+    void compraSeRechazaSiElB2cNoTieneTelefono() {
+        User user = persistUserConPerfilIncompleto("sin-telefono", null, "Apodo-" + System.nanoTime());
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
+
+        assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null)))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "profile-incomplete");
+
+        assertThat(purchaseRepo.findAll()).isEmpty();
+        verify(paymentGateway, org.mockito.Mockito.never()).createCheckout(any());
+    }
+
+    @Test
+    void compraSeRechazaSiElB2cNoTieneApodo() {
+        User user = persistUserConPerfilIncompleto("sin-apodo",
+            "+549" + (1133440200L + PHONE_SEQ.incrementAndGet()), null);
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
+
+        assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null)))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "profile-incomplete");
+    }
+
+    @Test
+    void compraSeAceptaSiElB2cTienePerfilCompleto() {
+        User user = persistUser("perfil-completo");
+        assertThat(user.getPhone()).isNotBlank();
+        assertThat(user.getNickname()).isNotBlank();
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-perfil-completo", "https://mp.test/init"));
+
+        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null));
+
+        assertThat(dto.purchaseId()).isNotNull();
+    }
+
+    @Test
+    void compraConAmbosGatesDisparablesMuestraEmailNotVerifiedPrimero() {
+        // Sin verificar Y sin teléfono/apodo — ambos gates aplicarían.
+        User user = persistUnverifiedUser("ambos-gates");
+        assertThat(user.getPhone()).isNull();
+        assertThat(user.getNickname()).isNull();
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
+
+        assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null)))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "email-not-verified");
     }
 
     private static CheckoutRequest argThat(java.util.function.Predicate<CheckoutRequest> predicate) {
