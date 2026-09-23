@@ -8,6 +8,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 /**
  * Endpoints del pedido nuevo por créditos (unidad 7). Bajo {@code /api/v2}
  * para no colisionar con {@link OrderController} (camino {@code
@@ -24,6 +26,17 @@ import org.springframework.web.bind.annotation.*;
 public class OrderPlacementController {
 
     private final OrderPlacementService orderPlacementService;
+
+    /**
+     * "Mis pedidos" (gap fix) — pedidos del cliente autenticado, siempre
+     * scopeados por {@code user.userId()}: nunca un parámetro de query, para
+     * que sea imposible pedir los pedidos de otro usuario desde el cliente.
+     * Ver {@link OrderPlacementService#list} para el orden y la cota.
+     */
+    @GetMapping
+    public List<OrderDto> list(@AuthenticationPrincipal JwtUser user) {
+        return orderPlacementService.list(user.userId());
+    }
 
     @PostMapping
     public OrderDto place(

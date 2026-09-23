@@ -573,4 +573,100 @@ class OrderPlacementServiceTest {
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "email-not-verified");
     }
+
+    // ─── list(): "mis pedidos" (gap fix — no numbered tasks.md unit) ───────
+    //
+    // Identifiers/DisplayNames in English per this gap fix's explicit
+    // instruction, unlike the Spanish identifiers above from the original
+    // unit-7 batch.
+
+    @Test
+    @DisplayName("list(): a customer sees their own orders with items and credit totals")
+    void listReturnsOwnOrdersWithItemsAndCreditTotal() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt()));
+
+        List<OrderDto> orders = orderPlacementService.list(user.getId());
+
+        assertThat(orders).hasSize(1);
+        OrderDto found = orders.get(0);
+        assertThat(found.id()).isEqualTo(placed.id());
+        assertThat(found.creditTotal()).isEqualTo(2);
+        assertThat(found.items()).hasSize(1);
+        assertThat(found.items().get(0).dishNombre()).isEqualTo(dish.getNombre());
+        assertThat(found.items().get(0).creditCost()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("list(): a customer does NOT see another customer's orders")
+    void listDoesNotReturnAnotherCustomersOrders() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User owner = persistB2cUser();
+        User stranger = persistB2cUser();
+        seedWallet(owner.getId(), 10);
+        seedWallet(stranger.getId(), 10);
+
+        orderPlacementService.place(owner.getId(), singleItemRequest(dish.getId(), defaultPickupAt()));
+
+        List<OrderDto> strangerOrders = orderPlacementService.list(stranger.getId());
+
+        assertThat(strangerOrders).isEmpty();
+    }
+
+    @Test
+    @DisplayName("list(): cancellable is true before the deadline and false after it")
+    void listMarksCancellableBeforeDeadlineAndNotAfter() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dishFarAway = persistDish(category, section, 5);
+        Dish dishAtDeadline = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        // Lead is 20 minutes (V20 default). Well before the deadline → cancellable.
+        OrderDto farAway = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishFarAway.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        // Earliest pickup allowed by PickupSlotService (now + lead) → the
+        // cancellation deadline (pickupAt - lead) equals "now" exactly, so
+        // `now < deadline` is false → NOT cancellable (same boundary as
+        // cancelRechazaFueraDeVentana above, now exposed via list()).
+        OrderDto atDeadline = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishAtDeadline.getId(), FIXED_NOW.plus(20, ChronoUnit.MINUTES)));
+
+        List<OrderDto> orders = orderPlacementService.list(user.getId());
+
+        OrderDto foundFarAway = orders.stream().filter(o -> o.id().equals(farAway.id())).findFirst().orElseThrow();
+        OrderDto foundAtDeadline = orders.stream().filter(o -> o.id().equals(atDeadline.id())).findFirst().orElseThrow();
+
+        assertThat(foundFarAway.cancellable()).isTrue();
+        assertThat(foundAtDeadline.cancellable()).isFalse();
+    }
+
+    @Test
+    @DisplayName("list(): a cancelled order still appears, marked CANCELADO and not cancellable")
+    void listShowsCancelledOrderWithCancelledState() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 3);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        orderPlacementService.cancel(user.getId(), placed.id());
+
+        List<OrderDto> orders = orderPlacementService.list(user.getId());
+
+        OrderDto found = orders.stream().filter(o -> o.id().equals(placed.id())).findFirst().orElseThrow();
+        assertThat(found.estado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(found.cancellable()).isFalse();
+    }
 }

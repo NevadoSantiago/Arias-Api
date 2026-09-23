@@ -1,5 +1,6 @@
 package com.arias.orders;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -95,4 +96,26 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     """)
     List<Order> findByFechaAndEstadoNotOrderByPickupAtAsc(
         @Param("fecha") LocalDate fecha, @Param("estadoExcluido") OrderEstado estadoExcluido);
+
+    /**
+     * "Mis pedidos" del cliente (gap fix, {@code GET /api/v2/orders}) — scope
+     * estricto por {@code userId} (spec: un cliente nunca ve pedidos ajenos).
+     * {@code CANCELADO} se incluye a propósito: es soft-cancel, el cliente
+     * necesita ver qué pasó con sus créditos, no que el pedido desaparezca.
+     *
+     * <p>Acotado con {@code Pageable} (no un rango de fechas): sin
+     * UNIQUE(user_id, fecha) un usuario puede tener varios pedidos el mismo
+     * día, así que un rango de fechas no garantiza un límite de filas — un
+     * límite de cantidad sí. Orden por {@code pickupAt DESC} (desempate por
+     * {@code id DESC}): los pedidos próximos quedan primero y, entre pasados,
+     * el más reciente primero — "más relevante primero" sin exponer historial
+     * sin cota.
+     */
+    @Query("""
+        SELECT DISTINCT o FROM Order o
+        LEFT JOIN FETCH o.items
+        WHERE o.user.id = :userId
+        ORDER BY o.pickupAt DESC, o.id DESC
+    """)
+    List<Order> findRecentByUserId(@Param("userId") Long userId, Pageable pageable);
 }

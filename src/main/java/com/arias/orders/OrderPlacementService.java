@@ -15,6 +15,7 @@ import com.arias.users.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -68,6 +69,13 @@ import java.util.List;
 public class OrderPlacementService {
 
     private static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
+
+    /**
+     * Cota de "mis pedidos" (gap fix, {@link #list}) — ver el javadoc de
+     * {@link OrderRepository#findRecentByUserId} para por qué es un límite de
+     * cantidad y no un rango de fechas.
+     */
+    private static final int RECENT_ORDERS_LIMIT = 30;
 
     private final OrderRepository orderRepo;
     private final UserRepository userRepo;
@@ -180,7 +188,30 @@ public class OrderPlacementService {
         creditLedgerService.commit(userId, total,
             MovementRef.forOrder(saved.getId(), "Pedido #" + saved.getId()));
 
-        return OrderDto.from(saved);
+        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
+        return OrderDto.from(saved, isCancellable(saved, clock.instant(), lead));
+    }
+
+    /**
+     * "Mis pedidos" (gap fix): pedidos del cliente autenticado, acotados y
+     * ordenados por {@link OrderRepository#findRecentByUserId} — próximos
+     * primero, luego los más recientes del pasado. Incluye pedidos
+     * {@code CANCELADO} (soft-cancel, el cliente ve qué pasó con sus
+     * créditos) a diferencia de {@link OrderRepository#findByFechaAndEstadoNot},
+     * que los excluye para la cocina.
+     *
+     * <p>{@code cancellable} se calcula acá, no en el frontend: es
+     * exactamente la misma regla que {@link #cancel}, y esa regla ya divergió
+     * una vez entre frontend y backend en este proyecto.
+     */
+    @Transactional(readOnly = true)
+    public List<OrderDto> list(Long userId) {
+        Instant now = clock.instant();
+        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
+
+        return orderRepo.findRecentByUserId(userId, PageRequest.of(0, RECENT_ORDERS_LIMIT)).stream()
+            .map(order -> OrderDto.from(order, isCancellable(order, now, lead)))
+            .toList();
     }
 
     /**
@@ -238,6 +269,21 @@ public class OrderPlacementService {
     }
 
     // ─── helpers ──────────────────────────────────────────────────────────
+
+    /**
+     * Misma regla que {@link #cancel} sin lanzar: {@code PENDIENTE && now <
+     * pickupAt - lead}. Único punto de verdad para "¿se puede cancelar ESTE
+     * pedido AHORA?" — usado por {@link #place} y {@link #list} para que el
+     * campo {@code cancellable} de {@link OrderDto} nunca se calcule dos
+     * veces con lógica distinta.
+     */
+    private static boolean isCancellable(Order order, Instant now, int leadMinutes) {
+        if (order.getEstado() != OrderEstado.PENDIENTE) {
+            return false;
+        }
+        Instant deadline = order.getPickupAt().minus(leadMinutes, ChronoUnit.MINUTES);
+        return now.isBefore(deadline);
+    }
 
     private Side validateAndResolveSide(Dish dish, Long sideId) {
         if (sideId == null) {
