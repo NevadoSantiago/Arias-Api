@@ -84,6 +84,7 @@ class MercadoPagoWebhookControllerTest {
             .email(prefix + "-" + System.nanoTime() + "@test.arias.com")
             .role(Role.EMPLOYEE)
             .active(true)
+            .emailVerifiedAt(Instant.now()) // gate de email-not-verified: no es lo que testea esta suite
             .build();
         return userRepo.save(user);
     }

@@ -68,6 +68,14 @@ public class CreditPurchaseService {
         User user = userRepo.findById(userId)
             .orElseThrow(() -> BusinessException.notFound("user-not-found", "Usuario no encontrado"));
 
+        // Mismo gate que OrderPlacementService.place() — ver diseño
+        // §Seguridad, "Cuentas sin verificar", y User.mustVerifyEmailToSpend
+        // para la exención de empleados de empresa.
+        if (user.mustVerifyEmailToSpend()) {
+            throw BusinessException.conflict("email-not-verified",
+                "Debés verificar tu correo electrónico antes de comprar créditos");
+        }
+
         CreditPack pack = null;
         Order order = null;
         int creditAmount;

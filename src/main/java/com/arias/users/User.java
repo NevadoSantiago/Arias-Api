@@ -128,4 +128,21 @@ public class User {
     public boolean isProfileComplete() {
         return phone != null && !phone.isBlank() && nickname != null && !nickname.isBlank();
     }
+
+    /**
+     * {@code true} cuando el usuario debe verificar su correo antes de poder
+     * pedir o comprar créditos ({@code 409 email-not-verified}, diseño
+     * §Seguridad, "Cuentas sin verificar"). Los usuarios con empresa quedan
+     * SIEMPRE exentos, aunque {@code emailVerifiedAt} sea {@code NULL}: V16
+     * solo rellenó esa columna para las filas que existían al correr la
+     * migración, así que un empleado dado de alta por lista blanca DESPUÉS
+     * de V16 puede tener {@code emailVerifiedAt = NULL} sin culpa propia — el
+     * alta por un {@code COMPANY_ADMIN} ya es la verificación de ese canal
+     * (diseño §Decisión 10). Solo un B2C autorregistrado ({@code company ==
+     * NULL}) puede quedar bloqueado por este gate.
+     */
+    @Transient
+    public boolean mustVerifyEmailToSpend() {
+        return company == null && emailVerifiedAt == null;
+    }
 }

@@ -1,6 +1,10 @@
 package com.arias.payments;
 
+import com.arias.catalog.categories.Category;
+import com.arias.catalog.categories.CategoryRepository;
 import com.arias.common.exception.BusinessException;
+import com.arias.companies.Company;
+import com.arias.companies.CompanyRepository;
 import com.arias.credits.packs.CreditPack;
 import com.arias.credits.packs.CreditPackRepository;
 import com.arias.orders.Order;
@@ -50,13 +54,54 @@ class CreditPurchaseServiceTest {
     @Autowired
     private UserRepository userRepo;
 
+    @Autowired
+    private CompanyRepository companyRepo;
+
+    @Autowired
+    private CategoryRepository categoryRepo;
+
     @MockitoBean
     private PaymentGateway paymentGateway;
 
+    /** Verificado por defecto — el caso feliz que usa el resto de la suite. */
     private User persistUser(String prefix) {
         User user = User.builder()
             .email(prefix + "-" + System.nanoTime() + "@test.arias.com")
             .role(Role.EMPLOYEE)
+            .active(true)
+            .emailVerifiedAt(Instant.now())
+            .build();
+        return userRepo.save(user);
+    }
+
+    /** B2C autorregistrado que todavía no verificó el correo — gap de la unidad 4/5. */
+    private User persistUnverifiedUser(String prefix) {
+        User user = User.builder()
+            .email(prefix + "-" + System.nanoTime() + "@test.arias.com")
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .build();
+        return userRepo.save(user);
+    }
+
+    /** Empleado de empresa con {@code email_verified_at = NULL} — regresión V16. */
+    private User persistCompanyEmployeeWithNullEmailVerifiedAt() {
+        Category category = categoryRepo.save(Category.builder()
+            .nombre("Categoria-" + System.nanoTime()).ordenDisplay(0).enabled(true).creditCost(1).build());
+        Company company = companyRepo.save(Company.builder()
+            .nombre("Empresa-" + System.nanoTime())
+            .cuit(String.valueOf(20_000_000_000L + (System.nanoTime() % 9_000_000_000L)))
+            .calle("Calle Falsa")
+            .altura("123")
+            .horaEntrega(java.time.LocalTime.of(13, 0))
+            .categoriaDefault(category)
+            .enabled(true)
+            .build());
+        User user = User.builder()
+            .email("empleado-" + System.nanoTime() + "@test.arias.com")
+            .role(Role.EMPLOYEE)
+            .company(company)
+            .category(category)
             .active(true)
             .build();
         return userRepo.save(user);
@@ -163,6 +208,55 @@ class CreditPurchaseServiceTest {
             new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId())))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "order-not-found");
+    }
+
+    // ─── Gate de verificación de correo (gap de la unidad 4/5, no de login) ─
+
+    @Test
+    void compraSeRechazaSiElB2cNoVerificoElCorreo() {
+        User user = persistUnverifiedUser("sin-verificar");
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
+
+        assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null)))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "email-not-verified");
+
+        assertThat(purchaseRepo.findAll()).isEmpty();
+        verify(paymentGateway, org.mockito.Mockito.never()).createCheckout(any());
+    }
+
+    @Test
+    void compraSeAceptaSiElB2cVerificoElCorreo() {
+        User user = persistUser("verificado");
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-verificado", "https://mp.test/init"));
+
+        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null));
+
+        assertThat(dto.purchaseId()).isNotNull();
+    }
+
+    @Test
+    void compraNoSeBloqueaParaEmpleadoDeEmpresaConEmailVerifiedAtNulo() {
+        User employee = persistCompanyEmployeeWithNullEmailVerifiedAt();
+        assertThat(employee.getEmailVerifiedAt()).isNull(); // exactamente el caso que V16 no pudo rellenar
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-empleado", "https://mp.test/init"));
+
+        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(employee.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null));
+
+        assertThat(dto.purchaseId()).isNotNull();
     }
 
     private static CheckoutRequest argThat(java.util.function.Predicate<CheckoutRequest> predicate) {

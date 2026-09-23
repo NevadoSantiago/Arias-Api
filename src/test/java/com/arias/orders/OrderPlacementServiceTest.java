@@ -131,9 +131,21 @@ class OrderPlacementServiceTest {
         return dishRepo.save(dish);
     }
 
+    /** B2C con el correo ya verificado — el caso feliz que usa el resto de la suite. */
     private User persistB2cUser() {
         User user = User.builder()
             .email("b2c-" + System.nanoTime() + "@test.arias.com")
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .emailVerifiedAt(Instant.now())
+            .build();
+        return userRepo.save(user);
+    }
+
+    /** B2C autorregistrado que todavía no verificó el correo — gap de la unidad 4/5. */
+    private User persistUnverifiedB2cUser() {
+        User user = User.builder()
+            .email("b2c-sin-verificar-" + System.nanoTime() + "@test.arias.com")
             .role(Role.EMPLOYEE)
             .active(true)
             .build();
@@ -399,5 +411,61 @@ class OrderPlacementServiceTest {
         CreditWallet wallet = walletRepo.findByIdForUpdate(employee.getId()).orElseThrow();
         assertThat(wallet.getAvailable()).isEqualTo(7);
         assertThat(wallet.getCommitted()).isEqualTo(3);
+    }
+
+    // ─── Gate de verificación de correo (gap de la unidad 4/5, no de login) ─
+
+    @Test
+    @DisplayName("place(): un B2C sin verificar el correo no puede pedir — 409 email-not-verified, sin tocar stock ni saldo")
+    void placeRechazaB2cSinVerificarElCorreo() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistUnverifiedB2cUser();
+        seedWallet(user.getId(), 10);
+
+        assertThatThrownBy(() -> orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt())))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "email-not-verified");
+
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(5);
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(10);
+        assertThat(wallet.getCommitted()).isZero();
+        assertThat(orderRepo.findByUserIdAndFecha(user.getId(),
+            java.time.LocalDate.ofInstant(defaultPickupAt(), ZONE))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("place(): un B2C con el correo verificado puede pedir")
+    void placeAceptaB2cConCorreoVerificado() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto order = orderPlacementService.place(user.getId(), singleItemRequest(dish.getId(), defaultPickupAt()));
+
+        assertThat(order.id()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("place(): un empleado de empresa con email_verified_at = NULL SÍ puede pedir — exento del gate (regresión V16)")
+    void placeNoBloqueaEmpleadoDeEmpresaConEmailVerifiedAtNulo() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Company company = persistCompany(category);
+        Dish dish = persistDish(category, section, 5);
+        User employee = persistEmployee(company, category);
+        assertThat(employee.getEmailVerifiedAt()).isNull(); // exactamente el caso que V16 no pudo rellenar
+        seedWallet(employee.getId(), 10);
+
+        OrderDto order = orderPlacementService.place(employee.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt()));
+
+        assertThat(order.id()).isNotNull();
     }
 }

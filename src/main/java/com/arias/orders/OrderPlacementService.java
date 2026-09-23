@@ -89,6 +89,15 @@ public class OrderPlacementService {
         User user = userRepo.findById(userId)
             .orElseThrow(() -> BusinessException.notFound("user-not-found", "Usuario no encontrado"));
 
+        // Gap de la unidad 4/5: la verificación de correo se controla acá,
+        // donde el usuario efectivamente gasta créditos — no en el login
+        // (diseño §Seguridad, "Cuentas sin verificar"). Empleados de empresa
+        // quedan exentos aunque emailVerifiedAt sea NULL (ver User.mustVerifyEmailToSpend).
+        if (user.mustVerifyEmailToSpend()) {
+            throw BusinessException.conflict("email-not-verified",
+                "Debés verificar tu correo electrónico antes de pedir");
+        }
+
         if (req.items() == null || req.items().isEmpty()) {
             throw BusinessException.badRequest("empty-order", "El pedido debe tener al menos un ítem");
         }

@@ -126,6 +126,7 @@ class OrderNotificationSchedulerTest {
             .role(Role.EMPLOYEE)
             .nickname("Cliente")
             .active(true)
+            .emailVerifiedAt(Instant.now()) // gate de email-not-verified: no es lo que testea esta suite
             .build());
     }
 
