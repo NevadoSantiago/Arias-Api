@@ -9,6 +9,7 @@ import com.arias.credits.packs.CreditPack;
 import com.arias.credits.packs.CreditPackRepository;
 import com.arias.orders.Order;
 import com.arias.orders.OrderEstado;
+import com.arias.orders.OrderPlacementService;
 import com.arias.orders.OrderRepository;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -51,6 +52,7 @@ public class CreditPurchaseService {
     private final OrderRepository orderRepo;
     private final UserRepository userRepo;
     private final CreditLedgerService creditLedgerService;
+    private final OrderPlacementService orderPlacementService;
     private final PaymentGateway paymentGateway;
     private final PublicUrlProperties publicUrlProps;
     private final ApplicationEventPublisher eventPublisher;
@@ -213,12 +215,19 @@ public class CreditPurchaseService {
         applyStatusMapping(purchase, snapshot);
     }
 
-    /** Marca una compra {@code PENDING} sin pago reportado en 24 h como {@code EXPIRED} (11.6). */
+    /**
+     * Marca una compra {@code PENDING} sin pago reportado en 24 h como
+     * {@code EXPIRED} (11.6). Misma acción que un rechazo/cancelación
+     * explícito de Mercado Pago para el pedido asociado — ver {@link
+     * #closeAssociatedOrderIfDirect} — porque desde el punto de vista del
+     * pedido el resultado es idéntico: el pago nunca llegó.
+     */
     @Transactional
     public void expirePendingPurchase(UUID purchaseId) {
         purchaseRepo.findByIdForUpdate(purchaseId).ifPresent(p -> {
             if (p.getStatus() == CreditPurchaseStatus.PENDING) {
                 p.setStatus(CreditPurchaseStatus.EXPIRED);
+                closeAssociatedOrderIfDirect(p);
                 log.info("Compra {} expirada — 24 h sin pago reportado por Mercado Pago", purchaseId);
             }
         });
@@ -274,21 +283,45 @@ public class CreditPurchaseService {
     }
 
     /**
-     * Nota de deviación: el diseño dice "si era compra directa, se cancela
-     * el pedido asociado" al rechazar/cancelar el pago. Esta unidad NO
-     * implementa esa cancelación automática — requeriría acoplar este
-     * service a {@code OrderPlacementService.cancel}, que exige {@code
-     * estado == PENDIENTE} y libera crédito COMMITTED que acá nunca se llegó
-     * a comprometer (el pedido de una compra directa rechazada queda
-     * simplemente sin pagar, PENDIENTE, tal como estaba). Documentado
-     * también en {@code tasks.md} unidad 11.5 como punto abierto para
-     * producto: qué debe pasar con ese pedido.
+     * Diseño §Flujo de datos, tabla "Estado del pago → Acción": {@code
+     * rejected}/{@code cancelled} cierran la compra sin acreditar — y, si
+     * era compra directa, cierran también el pedido asociado (ver {@link
+     * #closeAssociatedOrderIfDirect}).
      */
     private void closeWithoutCrediting(CreditPurchase purchase, CreditPurchaseStatus status) {
         if (purchase.getStatus() != CreditPurchaseStatus.PENDING) {
             return; // ya se había resuelto (p. ej. ya acreditada) — no se cierra retroactivamente
         }
         purchase.setStatus(status);
+        closeAssociatedOrderIfDirect(purchase);
+    }
+
+    /**
+     * Gap fix (diseño §Flujo de datos, tabla "Estado del pago → Acción": "si
+     * era compra directa, se cancela el pedido asociado"): cuando una compra
+     * DIRECTA termina en un estado no pagado, el pedido que esa compra
+     * intentaba pagar se cierra por el mismo camino que la cancelación del
+     * cliente — {@link OrderPlacementService#closeForPaymentFailure} —
+     * liberando créditos COMMITTED y restaurando stock, SIN la ventana de
+     * cancelación del cliente (no aplica: el pago ya falló, el pedido de
+     * todos modos no se va a cocinar).
+     *
+     * <p>Solo aplica a {@code DIRECT}: una {@code PACK_PURCHASE} nunca tiene
+     * {@code order} asociada ({@code chk_credit_purchase_target} de V19), así
+     * que rechazar/cancelar/expirar un paquete nunca toca ningún pedido.
+     *
+     * <p>Idempotente por partida doble: el llamador ({@link
+     * #closeWithoutCrediting}/{@link #expirePendingPurchase}) ya filtra por
+     * {@code status == PENDING} antes de llegar acá, y {@link
+     * OrderPlacementService#closeForPaymentFailure} vuelve a filtrar por
+     * {@code estado == PENDIENTE} del lado del pedido — un webhook duplicado
+     * o una segunda pasada de reconciliación no liberan stock/créditos dos
+     * veces aunque lleguen por caminos distintos.
+     */
+    private void closeAssociatedOrderIfDirect(CreditPurchase purchase) {
+        if (purchase.getType() == PurchaseType.DIRECT && purchase.getOrder() != null) {
+            orderPlacementService.closeForPaymentFailure(purchase.getOrder());
+        }
     }
 
     /**

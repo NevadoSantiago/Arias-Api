@@ -238,6 +238,54 @@ public class OrderPlacementService {
                     + " minutos para el retiro");
         }
 
+        applyCancellation(order, now);
+    }
+
+    /**
+     * Cierra el pedido de una compra DIRECTA cuyo pago terminó en un estado
+     * no pagado — rechazado, cancelado, o expirado por {@code
+     * PaymentReconciliationScheduler} (diseño §Flujo de datos, tabla "Estado
+     * del pago → Acción": "si era compra directa, se cancela el pedido
+     * asociado"). Invocado por {@code CreditPurchaseService}, nunca
+     * directamente desde un controller.
+     *
+     * <p>Reutiliza el MISMO cierre que {@link #cancel} — liberar créditos
+     * COMMITTED, restaurar stock, marcar {@code CANCELADO} — vía {@link
+     * #applyCancellation}, pero A PROPÓSITO sin la ventana de cancelación del
+     * cliente ({@code now < pickupAt - lead}): esa ventana existe para que un
+     * cliente no cancele "a último momento" un pedido que SÍ iba a cocinarse,
+     * no para este caso — acá el pedido de todos modos NUNCA se va a pagar
+     * (el pago ya falló), y el rechazo de Mercado Pago o la reconciliación
+     * horaria pueden llegar después de que esa ventana ya cerró. Por eso no
+     * puede reusarse {@link #cancel} tal cual: exige {@code userId} (ownership
+     * del cliente, no aplica a un cierre disparado por el sistema) y ese
+     * deadline (que acá no debe aplicar).
+     *
+     * <p><b>Idempotente</b>: si el pedido ya no está {@code PENDIENTE} (ya se
+     * cerró por un webhook/reconciliación anterior, ya se pagó con créditos
+     * propios, ya se canceló, o ya se consumió), es un no-op — así un webhook
+     * duplicado o una segunda pasada de reconciliación nunca libera
+     * stock/créditos dos veces.
+     */
+    @Transactional
+    public void closeForPaymentFailure(Order order) {
+        if (order.getEstado() != OrderEstado.PENDIENTE) {
+            return;
+        }
+        applyCancellation(order, clock.instant());
+    }
+
+    /**
+     * Núcleo compartido de {@link #cancel} y {@link #closeForPaymentFailure}:
+     * restaura stock, libera créditos COMMITTED, marca {@code CANCELADO} y
+     * publica el evento de cancelación. El llamador es responsable de
+     * cualquier validación previa (ventana de cancelación, ownership,
+     * idempotencia) — acá se asume que YA se decidió que el pedido debe
+     * cerrarse.
+     */
+    private void applyCancellation(Order order, Instant now) {
+        Long userId = order.getUser().getId();
+
         for (OrderItem item : order.getItems()) {
             dishRepo.incrementStock(item.getDish().getId());
         }

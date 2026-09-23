@@ -2,17 +2,26 @@ package com.arias.payments;
 
 import com.arias.catalog.categories.Category;
 import com.arias.catalog.categories.CategoryRepository;
+import com.arias.catalog.dishes.Dish;
+import com.arias.catalog.dishes.DishRepository;
+import com.arias.catalog.menusections.MenuSection;
+import com.arias.catalog.menusections.MenuSectionRepository;
 import com.arias.common.exception.BusinessException;
 import com.arias.companies.Company;
 import com.arias.companies.CompanyRepository;
+import com.arias.credits.CreditWallet;
+import com.arias.credits.CreditWalletRepository;
 import com.arias.credits.packs.CreditPack;
 import com.arias.credits.packs.CreditPackRepository;
 import com.arias.orders.Order;
 import com.arias.orders.OrderEstado;
+import com.arias.orders.OrderItem;
 import com.arias.orders.OrderRepository;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
+import jakarta.persistence.EntityManager;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -60,6 +69,18 @@ class CreditPurchaseServiceTest {
 
     @Autowired
     private CategoryRepository categoryRepo;
+
+    @Autowired
+    private MenuSectionRepository menuSectionRepo;
+
+    @Autowired
+    private DishRepository dishRepo;
+
+    @Autowired
+    private CreditWalletRepository walletRepo;
+
+    @Autowired
+    private EntityManager entityManager;
 
     @MockitoBean
     private PaymentGateway paymentGateway;
@@ -357,5 +378,252 @@ class CreditPurchaseServiceTest {
 
     private static CheckoutRequest argThat(java.util.function.Predicate<CheckoutRequest> predicate) {
         return org.mockito.Mockito.argThat(predicate::test);
+    }
+
+    // ─── Gap fix: a rejected/cancelled/expired DIRECT purchase closes its ───
+    // ─── order (design.md §Flujo de datos, "rejected/cancelled" row) ────────
+    //
+    // Identifiers/DisplayNames in English per this gap fix's explicit
+    // instruction, unlike the Spanish identifiers above from the original
+    // unit-11 batch.
+    //
+    // The order/dish/wallet state below is built directly instead of going
+    // through OrderPlacementService.place() (which requires a valid pickup
+    // time inside the restaurant_config service window against the real
+    // system clock) — it reproduces exactly the state place() leaves behind
+    // for a successful order (stock already decremented, wallet already
+    // committed), which is all this closing logic depends on. Pickup-window
+    // validation itself is already covered by OrderPlacementServiceTest.
+
+    private Dish persistDishWithStock(int stock) {
+        Category category = categoryRepo.save(Category.builder()
+            .nombre("Category-" + System.nanoTime()).ordenDisplay(0).enabled(true).creditCost(1).build());
+        MenuSection section = menuSectionRepo.save(MenuSection.builder()
+            .nombre("Section-" + System.nanoTime()).ordenDisplay(0).enabled(true).build());
+        return dishRepo.save(Dish.builder()
+            .nombre("Dish-" + System.nanoTime())
+            .category(category)
+            .menuSection(section)
+            .enabled(true)
+            .especial(false)
+            .stockDiarioDefault(stock)
+            .stockActual(stock)
+            .build());
+    }
+
+    /**
+     * Builds an {@link Order} in exactly the state {@code
+     * OrderPlacementService.place()} would leave it: stock already
+     * decremented for its single item, and the user's wallet already
+     * COMMITTED for {@code creditTotal} (AVAILABLE 0).
+     */
+    private Order persistOrderWithCommittedCredits(User user, Dish dish, int creditTotal) {
+        dishRepo.decrementStock(dish.getId());
+
+        Order order = Order.builder()
+            .user(user)
+            .fecha(LocalDate.now())
+            .pickupAt(Instant.now().plus(2, ChronoUnit.HOURS))
+            .estado(OrderEstado.PENDIENTE)
+            .creditTotal(creditTotal)
+            .build();
+        order.addItem(OrderItem.builder()
+            .dish(dish)
+            .dishNombre(dish.getNombre())
+            .dishCategoria(dish.getCategory().getNombre())
+            .creditCost(creditTotal)
+            .build());
+        order = orderRepo.save(order);
+
+        walletRepo.saveAndFlush(CreditWallet.builder()
+            .userId(user.getId())
+            .available(0)
+            .committed(creditTotal)
+            .build());
+
+        return order;
+    }
+
+    private CreditPack persistDayPackForGapFix(int creditAmount, long priceCents) {
+        return packRepo.save(CreditPack.builder()
+            .code("DAY")
+            .nombre("Día")
+            .creditAmount(creditAmount)
+            .priceCents(priceCents)
+            .discountPercent(0)
+            .ordenDisplay(0)
+            .enabled(true)
+            .build());
+    }
+
+    @Test
+    @DisplayName("applySnapshot(): a rejected DIRECT purchase leaves its order CANCELADO, with stock restored and credits released")
+    void rejectedDirectPurchaseClosesItsOrder() {
+        User user = persistUser("reject-direct");
+        persistDayPackForGapFix(2, 2_000L); // 1000 centavos por crédito
+        Dish dish = persistDishWithStock(5);
+        Order order = persistOrderWithCommittedCredits(user, dish, 2);
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(4);
+
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-reject", "https://mp.test/init"));
+        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId()));
+        CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
+
+        purchaseService.applySnapshot(new PaymentSnapshot("mp-reject-1", PaymentStatus.REJECTED,
+            "cc_rejected_other_reason", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L));
+
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(purchaseRepo.findById(purchase.getId()).orElseThrow().getStatus())
+            .isEqualTo(CreditPurchaseStatus.REJECTED);
+
+        Order closed = orderRepo.findById(order.getId()).orElseThrow();
+        assertThat(closed.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(closed.getCancelledAt()).isNotNull();
+
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(5);
+
+        CreditWallet wallet = walletRepo.findById(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(2);
+        assertThat(wallet.getCommitted()).isZero();
+    }
+
+    @Test
+    @DisplayName("applySnapshot(): processing the same rejection twice changes nothing the second time")
+    void repeatedRejectionIsIdempotent() {
+        User user = persistUser("reject-direct-dup");
+        persistDayPackForGapFix(2, 2_000L);
+        Dish dish = persistDishWithStock(5);
+        Order order = persistOrderWithCommittedCredits(user, dish, 2);
+
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-reject-dup", "https://mp.test/init"));
+        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId()));
+        CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
+
+        PaymentSnapshot rejected = new PaymentSnapshot("mp-reject-dup", PaymentStatus.REJECTED,
+            "cc_rejected_other_reason", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L);
+
+        purchaseService.applySnapshot(rejected);
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(5);
+        CreditWallet walletAfterFirst = walletRepo.findById(user.getId()).orElseThrow();
+        assertThat(walletAfterFirst.getAvailable()).isEqualTo(2);
+        assertThat(walletAfterFirst.getCommitted()).isZero();
+
+        // Same webhook notification delivered a second time (Mercado Pago
+        // retries, or the reconciliation job re-processes it).
+        purchaseService.applySnapshot(rejected);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(5);
+        CreditWallet walletAfterSecond = walletRepo.findById(user.getId()).orElseThrow();
+        assertThat(walletAfterSecond.getAvailable()).isEqualTo(2);
+        assertThat(walletAfterSecond.getCommitted()).isZero();
+        assertThat(orderRepo.findById(order.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.CANCELADO);
+    }
+
+    @Test
+    @DisplayName("expirePendingPurchase(): an expired DIRECT purchase closes its order the same way a rejection does")
+    void expiredDirectPurchaseClosesItsOrder() {
+        User user = persistUser("expire-direct");
+        persistDayPackForGapFix(3, 3_000L);
+        Dish dish = persistDishWithStock(4);
+        Order order = persistOrderWithCommittedCredits(user, dish, 3);
+
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-expire", "https://mp.test/init"));
+        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId()));
+        CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
+
+        // Reached via PaymentReconciliationScheduler after 24h without a
+        // reported payment — never through the webhook.
+        purchaseService.expirePendingPurchase(purchase.getId());
+
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(purchaseRepo.findById(purchase.getId()).orElseThrow().getStatus())
+            .isEqualTo(CreditPurchaseStatus.EXPIRED);
+        assertThat(orderRepo.findById(order.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(4);
+
+        CreditWallet wallet = walletRepo.findById(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(3);
+        assertThat(wallet.getCommitted()).isZero();
+    }
+
+    @Test
+    @DisplayName("applySnapshot(): a rejected PACK purchase touches no order")
+    void rejectedPackPurchaseTouchesNoOrder() {
+        User user = persistUser("reject-pack");
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(10)
+            .priceCents(10_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
+
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-reject-pack", "https://mp.test/init"));
+        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null));
+        CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
+        assertThat(purchase.getOrder()).isNull();
+
+        purchaseService.applySnapshot(new PaymentSnapshot("mp-reject-pack", PaymentStatus.REJECTED,
+            "cc_rejected_other_reason", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L));
+
+        assertThat(purchaseRepo.findById(purchase.getId()).orElseThrow().getStatus())
+            .isEqualTo(CreditPurchaseStatus.REJECTED);
+        assertThat(orderRepo.findAll()).isEmpty();
+        CreditWallet wallet = walletRepo.findById(user.getId()).orElseGet(() -> CreditWallet.emptyFor(user.getId()));
+        assertThat(wallet.getAvailable()).isZero();
+        assertThat(wallet.getCommitted()).isZero();
+    }
+
+    @Test
+    @DisplayName("applySnapshot(): a DIRECT purchase that is approved leaves its order alone")
+    void approvedDirectPurchaseLeavesItsOrderAlone() {
+        User user = persistUser("approve-direct");
+        persistDayPackForGapFix(2, 2_000L);
+        Dish dish = persistDishWithStock(5);
+        Order order = persistOrderWithCommittedCredits(user, dish, 2);
+
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-approve", "https://mp.test/init"));
+        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId()));
+        CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
+
+        purchaseService.applySnapshot(new PaymentSnapshot("mp-approve-1", PaymentStatus.APPROVED,
+            "accredited", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L));
+
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(purchaseRepo.findById(purchase.getId()).orElseThrow().getStatus())
+            .isEqualTo(CreditPurchaseStatus.APPROVED);
+
+        Order untouched = orderRepo.findById(order.getId()).orElseThrow();
+        assertThat(untouched.getEstado()).isEqualTo(OrderEstado.PENDIENTE);
+        assertThat(untouched.getCancelledAt()).isNull();
+
+        // Stock stays as it was left by the (simulated) original placement —
+        // the approved DIRECT_PURCHASE never touches stock, only the ledger.
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(4);
+
+        CreditWallet wallet = walletRepo.findById(user.getId()).orElseThrow();
+        // Committed already had 2 from placement; DIRECT_PURCHASE adds 2 more
+        // committed on top (deltaAvailable=0, deltaCommitted=+creditAmount).
+        assertThat(wallet.getCommitted()).isEqualTo(4);
+        assertThat(wallet.getAvailable()).isZero();
     }
 }
