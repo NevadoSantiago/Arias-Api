@@ -53,8 +53,8 @@ credenciales de otro proyecto: las credenciales probadas en esta sesión pertene
 a una cuenta con **pagos reales** de otro sistema, y cualquier operación de dinero
 sobre esa cuenta afecta clientes de verdad.
 
-- [ ] Crear la aplicación con el producto **Checkout Pro**.
-- [ ] Copiar de **Credenciales de prueba**: `Access Token` y `Public Key`.
+- [x] Crear la aplicación con el producto **Checkout Pro**.
+- [x] Copiar de **Credenciales de prueba**: `Access Token` y `Public Key`.
 - [ ] En **Webhooks**, configurar la URL de notificación y copiar la **clave secreta**
       que genera Mercado Pago (con esa se valida la firma).
 
@@ -87,21 +87,29 @@ Es lo esperado en desarrollo.
 
 ### 2.4 El circuito
 
-- [ ] Crear un pack desde `/admin/credit-packs` (por ejemplo 10 almuerzos).
-- [ ] Como cliente verificado, comprarlo desde `/credits/packs`.
-- [ ] Pagar en Mercado Pago con tarjeta de prueba: `5031 7557 3453 0604`,
+- [x] Crear un pack desde `/admin/credit-packs` (por ejemplo 10 almuerzos).
+- [x] Como cliente verificado, comprarlo desde `/credits/packs`.
+- [x] Pagar en Mercado Pago con tarjeta de prueba: `5031 7557 3453 0604`,
       código `123`, vencimiento `11/30`, titular **`APRO`** (el nombre del titular
       decide el resultado: `APRO` aprueba, `OTHE` rechaza).
 - [ ] **Mirar el log del backend**: tiene que entrar el webhook, validar la firma y
       acreditar. Si la firma falla, el backend rechaza y **no acredita**: eso está
       bien, significa que la clave secreta no coincide.
-- [ ] Verificar el saldo en `/credits`: los almuerzos acreditados y el vencimiento
+- [x] Verificar el saldo en `/credits`: los almuerzos acreditados y el vencimiento
       renovado a 90 días.
 - [ ] **Repetir el aviso**: reenviar la misma notificación desde el panel de
       Mercado Pago. El saldo **no** tiene que cambiar. Esta es la prueba más
       importante de todas: Mercado Pago reintenta hasta 8 veces.
 - [ ] Probar un pago rechazado con titular `OTHE`: no se acredita nada y la compra
       queda cerrada.
+
+> **Resultado 2026-09-24 (sin webhook):** compra aprobada con el vendedor de prueba y
+> pagada iniciando sesión en MP con el **comprador de prueba** (sin eso MP responde
+> "Una de las partes con la que intentás hacer el pago es de prueba"). Sin túnel, la
+> acreditó la conciliación horaria; la primera corrida encontró que la búsqueda por
+> `external_reference` fallaba siempre (corregido en `d825dee`). Saldo y vencimiento a
+> 90 días verificados. Quedan la firma del webhook, el aviso repetido y el pago
+> rechazado; los dos primeros requieren una URL pública.
 
 ### 2.5 Lo que quedó sin verificar (unidad 9)
 
