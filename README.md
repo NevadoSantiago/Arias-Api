@@ -134,6 +134,21 @@ Variables de entorno relevantes (todas con default de desarrollo, ver
 Con los defaults de dev, la app arranca sin configurar nada y crea automáticamente el
 usuario `admin@arias.com` / `admin123` como SUPER_ADMIN.
 
+### Tests
+
+```bash
+./mvnw test
+```
+
+Los tests usan una base propia, `arias_test`, en el mismo Postgres (configurada en
+`src/test/resources/config/application.yml`). Así los datos que se cargan probando la
+app a mano en la base `arias` no los rompen. Docker la crea sola al inicializar un
+volumen nuevo; si el volumen ya existía, hay que crearla una vez:
+
+```bash
+docker exec arias-postgres psql -U arias -d arias -c "CREATE DATABASE arias_test OWNER arias;"
+```
+
 ### Frontend
 
 Ver [Arias-Front](https://github.com/NevadoSantiago/Arias-Front) — resumen rápido:

@@ -13,6 +13,8 @@ services:
       - "5433:5432"
     volumes:
       - arias_postgres_data:/var/lib/postgresql/data
+      # Crea la base arias_test (la usan los tests) al inicializar el volumen
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U arias -d arias"]
       interval: 5s
