@@ -25,6 +25,16 @@ class MercadoPagoAdapterSearchRequestTest {
     }
 
     @Test
+    void searchByExternalReferenceAsksForTheNewestAttemptsFirst() {
+        MPSearchRequest request = MercadoPagoAdapter.searchByExternalReference("purchase-123");
+
+        // With a capped page, only newest-first guarantees the latest attempt is in it.
+        assertThat(request.getParameters())
+            .containsEntry("sort", "date_created")
+            .containsEntry("criteria", "desc");
+    }
+
+    @Test
     void searchByExternalReferenceFormatsIntoASdkUrl() throws Exception {
         MPSearchRequest request = MercadoPagoAdapter.searchByExternalReference("purchase-123");
 
