@@ -194,12 +194,15 @@ public class MercadoPagoAdapter implements PaymentGateway {
     /**
      * {@code limit} y {@code offset} son obligatorios en la práctica: el SDK
      * los agrega siempre a la URL y lanza {@code NullPointerException} si
-     * quedan en null. Una sola referencia nunca acumula más intentos de pago
-     * que {@link #SEARCH_LIMIT}, y el orden descendente por fecha garantiza
-     * que el intento más reciente quede dentro de la página aunque los hubiera.
+     * quedan en null. Se lee una sola página de {@link #SEARCH_LIMIT}
+     * resultados, ordenada del intento más reciente al más viejo: así el
+     * último intento siempre queda dentro de la página, aunque una referencia
+     * acumule más intentos que el límite.
      */
     static MPSearchRequest searchByExternalReference(String externalReference) {
         return MPSearchRequest.builder()
+            // El SDK manda cada entrada de este mapa como query param, así que
+            // el orden (sort/criteria) también va acá aunque no sea un filtro.
             .filters(Map.of(
                 "external_reference", externalReference,
                 "sort", "date_created",
