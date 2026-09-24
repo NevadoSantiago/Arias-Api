@@ -54,6 +54,7 @@ public class MercadoPagoAdapter implements PaymentGateway {
     /** Mercado Pago opera en pesos con 2 decimales; nuestro dominio usa centavos enteros. */
     private static final int CENTS_PER_UNIT = 100;
     private static final String CURRENCY_ID = "ARS";
+    private static final int SEARCH_LIMIT = 30;
 
     private final MercadoPagoProperties props;
     private final PublicUrlProperties publicUrlProps;
@@ -151,9 +152,7 @@ public class MercadoPagoAdapter implements PaymentGateway {
     @Override
     public Optional<PaymentSnapshot> findByExternalReference(String externalReference) {
         requireConfigured();
-        MPSearchRequest request = MPSearchRequest.builder()
-            .filters(Map.of("external_reference", externalReference))
-            .build();
+        MPSearchRequest request = searchByExternalReference(externalReference);
         try {
             MPResultsResourcesPage<Payment> page = new PaymentClient().search(request);
             if (page == null || page.getResults() == null || page.getResults().isEmpty()) {
@@ -190,6 +189,20 @@ public class MercadoPagoAdapter implements PaymentGateway {
             payment.getExternalReference(),
             amountRefundedCents
         );
+    }
+
+    /**
+     * {@code limit} y {@code offset} son obligatorios en la práctica: el SDK
+     * los agrega siempre a la URL y lanza {@code NullPointerException} si
+     * quedan en null. Una sola referencia nunca acumula más intentos de pago
+     * que {@link #SEARCH_LIMIT}.
+     */
+    static MPSearchRequest searchByExternalReference(String externalReference) {
+        return MPSearchRequest.builder()
+            .filters(Map.of("external_reference", externalReference))
+            .limit(SEARCH_LIMIT)
+            .offset(0)
+            .build();
     }
 
     private BigDecimal centsToAmount(long cents) {
