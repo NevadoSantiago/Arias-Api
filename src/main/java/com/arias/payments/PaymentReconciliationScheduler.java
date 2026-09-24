@@ -55,20 +55,29 @@ public class PaymentReconciliationScheduler {
 
         int reconciled = 0;
         int expired = 0;
+        int failed = 0;
         for (CreditPurchase purchase : pending) {
-            if (purchase.getCreatedAt().isBefore(expireCutoff)) {
-                purchaseService.expirePendingPurchase(purchase.getId());
-                expired++;
-                continue;
-            }
-            if (reconcileOne(purchase.getId())) {
-                reconciled++;
+            // Cada compra se aísla: una falla inesperada (p. ej. del SDK) no
+            // puede frenar al resto, porque se repetiría en cada corrida.
+            try {
+                if (purchase.getCreatedAt().isBefore(expireCutoff)) {
+                    purchaseService.expirePendingPurchase(purchase.getId());
+                    expired++;
+                    continue;
+                }
+                if (reconcileOne(purchase.getId())) {
+                    reconciled++;
+                }
+            } catch (RuntimeException e) {
+                failed++;
+                log.error("[CRON-PAYMENT-RECONCILE] Falló la compra {}; se reintenta en la próxima corrida",
+                    purchase.getId(), e);
             }
         }
 
-        if (reconciled > 0 || expired > 0) {
-            log.info("[CRON-PAYMENT-RECONCILE] {} compra(s) reconciliada(s), {} expirada(s)",
-                reconciled, expired);
+        if (reconciled > 0 || expired > 0 || failed > 0) {
+            log.info("[CRON-PAYMENT-RECONCILE] {} compra(s) reconciliada(s), {} expirada(s), {} fallida(s)",
+                reconciled, expired, failed);
         }
     }
 
