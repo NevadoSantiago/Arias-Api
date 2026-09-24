@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.security.GeneralSecurityException;
 import java.time.Instant;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -45,6 +46,8 @@ import static org.mockito.Mockito.when;
 @SpringBootTest
 @Transactional
 class GoogleAuthServiceTest {
+
+    private static final AtomicLong PHONE_SEQ = new AtomicLong();
 
     @Autowired
     private GoogleAuthService googleAuthService;
@@ -120,7 +123,7 @@ class GoogleAuthServiceTest {
         User unverified = userRepo.save(User.builder()
             .email(email)
             .firstName("Bruno")
-            .phone("+549" + (1122330100L + System.nanoTime() % 1000))
+            .phone("+549" + (1122330100L + PHONE_SEQ.incrementAndGet()))
             .nickname("Bru")
             .role(Role.EMPLOYEE)
             .active(true)
