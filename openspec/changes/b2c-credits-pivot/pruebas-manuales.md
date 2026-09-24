@@ -18,21 +18,21 @@ automáticos lo cubren, pero ninguno abre el navegador.
 Entrar como `SUPER_ADMIN` (por defecto `admin@arias.com` / `admin123` si no se
 cambió el bootstrap).
 
-- [ ] **Empresas**: abrir `/admin/companies`, editar una empresa y guardar. Los
+- [x] **Empresas**: abrir `/admin/companies`, editar una empresa y guardar. Los
       precios por categoría y la hora de entrega siguen editables.
-- [ ] **Facturación**: abrir `/admin/billing`, elegir una empresa y un rango. Los
+- [x] **Facturación**: abrir `/admin/billing`, elegir una empresa y un rango. Los
       totales siguen saliendo y el detalle por día se ve.
-- [ ] **Alta de empleado**: entrar como `COMPANY_ADMIN`, cargar el correo de un
+- [x] **Alta de empleado**: entrar como `COMPANY_ADMIN`, cargar el correo de un
       empleado nuevo en `/company-admin/employees`.
-- [ ] **Primer ingreso**: entrar con ese correo, completar nombre y contraseña.
+- [x] **Primer ingreso**: entrar con ese correo, completar nombre y contraseña.
       El alta por invitación no pasa por verificación de correo.
-- [ ] **Pedido de empleado**: pedir un plato del día. **La pantalla tiene que verse
+- [x] **Pedido de empleado**: pedir un plato del día. **La pantalla tiene que verse
       exactamente como antes**: un solo plato, sin carrito, sin almuerzos, sin
       selector de horario de retiro.
-- [ ] **Empleado sin correo verificado**: ese empleado recién creado tiene el correo
+- [x] **Empleado sin correo verificado**: ese empleado recién creado tiene el correo
       sin verificar y **igual tiene que poder pedir**. Si ve un `409`, el bloqueo
       B2C se filtró al canal de empresas y hay que corregirlo.
-- [ ] **Panel del admin**: el pedido aparece en la vista agrupada por empresa, se
+- [x] **Panel del admin**: el pedido aparece en la vista agrupada por empresa, se
       exporta y se puede marcar como comandado y entregado.
 
 Cualquier diferencia respecto de cómo funcionaba antes es un defecto, por chica
