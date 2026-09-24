@@ -100,7 +100,7 @@ Es lo esperado en desarrollo.
 - [ ] **Repetir el aviso**: reenviar la misma notificación desde el panel de
       Mercado Pago. El saldo **no** tiene que cambiar. Esta es la prueba más
       importante de todas: Mercado Pago reintenta hasta 8 veces.
-- [ ] Probar un pago rechazado con titular `OTHE`: no se acredita nada y la compra
+- [x] Probar un pago rechazado con titular `OTHE`: no se acredita nada y la compra
       queda cerrada.
 
 > **Resultado 2026-09-24 (sin webhook):** compra aprobada con el vendedor de prueba y
@@ -108,8 +108,9 @@ Es lo esperado en desarrollo.
 > "Una de las partes con la que intentás hacer el pago es de prueba"). Sin túnel, la
 > acreditó la conciliación horaria; la primera corrida encontró que la búsqueda por
 > `external_reference` fallaba siempre (corregido en `d825dee`). Saldo y vencimiento a
-> 90 días verificados. Quedan la firma del webhook, el aviso repetido y el pago
-> rechazado; los dos primeros requieren una URL pública.
+> 90 días verificados. El pago rechazado (`OTHE`) dejó la compra en `REJECTED` sin
+> acreditar nada. Quedan la firma del webhook y el aviso repetido, que requieren una
+> URL pública.
 
 ### 2.5 Lo que quedó sin verificar (unidad 9)
 
