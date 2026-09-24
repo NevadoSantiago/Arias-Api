@@ -114,11 +114,13 @@ Es lo esperado en desarrollo.
 
 ### 2.5 Lo que quedó sin verificar (unidad 9)
 
-El comportamiento exacto de un **reembolso parcial** nunca se pudo probar. La
-reversión se implementó proporcional al monto devuelto, que es correcta tanto si
-Mercado Pago deja el pago en `approved` como si lo pasa a `refunded`. Cuando haya
-credenciales que permitan operar, reembolsar la mitad de un pago y confirmar que
-se descuenta la mitad de los almuerzos.
+El **reembolso parcial** no se puede probar en el sandbox: la API responde `401
+Unauthorized use of live credentials` y el panel del vendedor de prueba no ofrece la
+acción (intentado el 2026-09-22 y el 2026-09-24). La reversión es proporcional a
+`transaction_amount_refunded / transaction_amount` y no depende del estado del pago,
+así que es correcta tanto si Mercado Pago lo deja en `approved` como si lo pasa a
+`refunded`; el campo existe en las respuestas reales. La confirmación final quedó en
+la sección 3.
 
 ---
 
@@ -129,5 +131,10 @@ se descuenta la mitad de los almuerzos.
 - [ ] Agregar el dominio de producción a los orígenes autorizados del cliente de
       Google.
 - [ ] Credenciales de producción de Mercado Pago y URL pública real del webhook.
+- [ ] **Webhook real:** comprar, confirmar en el log que la firma valida y acredita al
+      instante, y reenviar la misma notificación desde el panel: el saldo no cambia.
+- [ ] **Reembolso parcial real:** comprar el pack más chico con dinero real, devolver
+      la mitad desde la cuenta del restaurante y confirmar que se descuenta la mitad
+      de los almuerzos (unidad 9).
 - [ ] Revisar con el cliente: horario de retiro (hoy 11:00 a 15:00 por defecto),
       precio del almuerzo suelto, tamaños y precios de los packs.

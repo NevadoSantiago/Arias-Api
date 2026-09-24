@@ -152,10 +152,12 @@ Verificación: `./mvnw test -Dtest=PickupSlotServiceTest,OrderConsumptionSchedul
 
 ## Unidad 9 — Verificación sandbox de Mercado Pago: reembolso parcial (manual, sin código)
 
-- [ ] 9.1 Antes de implementar la reversión de pagos (unidad 11), probar en el sandbox de Mercado Pago (tarjetas APRO/OTHE/CONT/FUND) un reembolso **parcial** (`POST /v1/payments/{id}/refunds` con `amount`) y registrar el `payment.status` resultante: si queda `approved` con `transaction_amount_refunded` poblado (comportamiento esperado según la investigación #607, no confirmado), la reversión en `CreditLedgerService` debe ser proporcional a `transaction_amount_refunded`, no total.
-- [ ] 9.2 Documentar el resultado en el diseño o como nota de la unidad 11 antes de escribir `PAYMENT_REVERSAL`.
+- [x] 9.1 Antes de implementar la reversión de pagos (unidad 11), probar en el sandbox de Mercado Pago (tarjetas APRO/OTHE/CONT/FUND) un reembolso **parcial** (`POST /v1/payments/{id}/refunds` con `amount`) y registrar el `payment.status` resultante: si queda `approved` con `transaction_amount_refunded` poblado (comportamiento esperado según la investigación #607, no confirmado), la reversión en `CreditLedgerService` debe ser proporcional a `transaction_amount_refunded`, no total.
+- [x] 9.2 Documentar el resultado en el diseño o como nota de la unidad 11 antes de escribir `PAYMENT_REVERSAL`.
 
 Verificación: checklist manual — no hay comando automatizado; evidencia = captura del payload de `GET /v1/payments/{id}` post-reembolso.
+
+> **Cierre 2026-09-24:** el sandbox no permite reembolsar con las credenciales de prueba: `POST /v1/payments/{id}/refunds` responde `401 Unauthorized use of live credentials` (código 7) y el panel del vendedor de prueba no ofrece la acción. La duda se disolvió por diseño: `CreditPurchaseService.maybeReverse` calcula la reversión como `transaction_amount_refunded / transaction_amount` sin depender de `payment.status` (salvo contracargo), así que es correcta si MP deja el pago en `approved` o lo pasa a `refunded`. Se confirmó contra la API real que `GET /v1/payments/{id}` devuelve `transaction_amount_refunded` (0 en el pago 180649982054) y el adaptador lo mapea. La verificación con un reembolso parcial real queda en la lista "Antes de publicar" de `pruebas-manuales.md`.
 
 ## Unidad 10 — `PaymentGateway` port + `MercadoPagoAdapter` (backend)
 

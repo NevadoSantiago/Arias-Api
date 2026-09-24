@@ -608,10 +608,10 @@ conjuntos no se solapan, por lo que no hay doble conteo.
 
 ## Puntos abiertos
 
-- [ ] Verificar en el sandbox el comportamiento exacto de `payment.status` ante un reembolso
+- [x] Verificar en el sandbox el comportamiento exacto de `payment.status` ante un reembolso
       **parcial** (la investigación lo dejó sin confirmar). Si queda `approved` con
       `transaction_amount_refunded`, la reversión debe ser proporcional, no total.
-- [ ] Confirmar la versión de `com.mercadopago:sdk-java` disponible en Maven Central al implementar
+- [x] Confirmar la versión de `com.mercadopago:sdk-java` disponible en Maven Central al implementar
       (la investigación vio deriva de versión entre espejos; el objetivo es 3.7.0).
 - [ ] Definir con el cliente los valores iniciales de `credit_pack` (créditos y precio por
       día/semana/mes). El esquema no los fija; se cargan por el panel de administración.
