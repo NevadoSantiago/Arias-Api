@@ -105,6 +105,19 @@ public class PickupSlotService {
                     + " y " + config.getPickupWindowEnd());
         }
 
+        // El horario debe caer justo en uno de los slots que ofrece slotsFor():
+        // alineado al paso configurado contando desde el inicio de la ventana,
+        // sin segundos ni nanosegundos sueltos.
+        int stepMinutes = config.getPickupSlotMinutes();
+        int minuteOfDay = timeOfDay.getHour() * 60 + timeOfDay.getMinute();
+        int windowStartMinute = config.getPickupWindowStart().getHour() * 60 + config.getPickupWindowStart().getMinute();
+        boolean alineado = (minuteOfDay - windowStartMinute) % stepMinutes == 0
+            && timeOfDay.getSecond() == 0 && timeOfDay.getNano() == 0;
+        if (!alineado) {
+            throw BusinessException.badRequest("pickup-time-not-aligned",
+                "El horario de retiro debe estar alineado a intervalos de " + stepMinutes + " minutos");
+        }
+
         Instant earliest = clock.instant().plus(config.getPickupLeadMinutes(), ChronoUnit.MINUTES);
         if (pickupAt.isBefore(earliest)) {
             throw BusinessException.badRequest("pickup-too-soon",

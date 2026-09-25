@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Unidad 8 — {@link PickupSlotService}: spec {@code pickup-scheduling}
  * completa. {@code now} fijo en 2026-03-10 10:50 ART (martes), con los
  * valores por defecto de {@code restaurant_config} sembrados por V20 (lead 20
- * min, ventana 11:00-15:00, paso 15 min).
+ * min, ventana 11:00-15:00) y el paso de V23 (10 min).
  */
 @SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
 @Transactional
@@ -85,12 +85,13 @@ class PickupSlotServiceTest {
         List<Instant> slots = pickupSlotService.slotsFor(today());
 
         assertThat(slots).isNotEmpty();
-        // earliest = 10:50 + 20min = 11:10 ART -> el slot de las 11:00 queda excluido.
-        assertThat(slots.get(0).atZone(ZONE).toLocalTime()).isEqualTo(LocalTime.of(11, 15));
-        assertThat(slots.get(slots.size() - 1).atZone(ZONE).toLocalTime()).isEqualTo(LocalTime.of(14, 45));
+        // earliest = 10:50 + 20min = 11:10 ART -> paso 10 (V23): el slot de
+        // las 11:00 queda excluido, el de las 11:10 (== earliest) entra.
+        assertThat(slots.get(0).atZone(ZONE).toLocalTime()).isEqualTo(LocalTime.of(11, 10));
+        assertThat(slots.get(slots.size() - 1).atZone(ZONE).toLocalTime()).isEqualTo(LocalTime.of(14, 50));
         assertThat(slots).allSatisfy(s -> {
             LocalTime t = s.atZone(ZONE).toLocalTime();
-            assertThat(t).isAfterOrEqualTo(LocalTime.of(11, 15));
+            assertThat(t).isAfterOrEqualTo(LocalTime.of(11, 10));
             assertThat(t).isBefore(LocalTime.of(15, 0));
         });
     }
@@ -202,11 +203,40 @@ class PickupSlotServiceTest {
     @Test
     @DisplayName("assertValidPickupTime(): rechaza un horario dentro de la ventana pero demasiado próximo (antes de now + lead)")
     void assertValidPickupTimeRechazaDemasiadoProximo() {
-        // 11:05 ART hoy: dentro de la ventana (11:00-15:00) pero antes del
-        // earliest (10:50 + 20min = 11:10).
-        Instant demasiadoProximo = today().atTime(11, 5).atZone(ZONE).toInstant();
+        // 11:00 ART hoy (alineado al paso de 10 min): dentro de la ventana
+        // (11:00-15:00) pero antes del earliest (10:50 + 20min = 11:10).
+        Instant demasiadoProximo = today().atTime(11, 0).atZone(ZONE).toInstant();
         assertThatThrownBy(() -> pickupSlotService.assertValidPickupTime(demasiadoProximo))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "pickup-too-soon");
+    }
+
+    // ─── assertValidPickupTime(): alineación al paso configurado (V23) ─────
+
+    @Test
+    @DisplayName("assertValidPickupTime(): acepta un horario alineado al paso contado desde el inicio de la ventana")
+    void assertValidPickupTimeAceptaHorarioAlineadoAlPaso() {
+        // Ventana desde las 11:00, paso 10 -> 12:10 está alineado (70 min, múltiplo de 10).
+        Instant alineado = today().plusDays(1).atTime(12, 10).atZone(ZONE).toInstant();
+        assertThatCode(() -> pickupSlotService.assertValidPickupTime(alineado)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("assertValidPickupTime(): rechaza un horario no alineado al paso configurado")
+    void assertValidPickupTimeRechazaHorarioNoAlineadoAlPaso() {
+        // 12:07 -> 67 min desde las 11:00, no es múltiplo de 10.
+        Instant noAlineado = today().plusDays(1).atTime(12, 7).atZone(ZONE).toInstant();
+        assertThatThrownBy(() -> pickupSlotService.assertValidPickupTime(noAlineado))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "pickup-time-not-aligned");
+    }
+
+    @Test
+    @DisplayName("assertValidPickupTime(): rechaza un horario con segundos distintos de cero aunque el minuto esté alineado")
+    void assertValidPickupTimeRechazaSegundosDistintosDeCero() {
+        Instant conSegundos = today().plusDays(1).atTime(12, 10, 30).atZone(ZONE).toInstant();
+        assertThatThrownBy(() -> pickupSlotService.assertValidPickupTime(conSegundos))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "pickup-time-not-aligned");
     }
 }

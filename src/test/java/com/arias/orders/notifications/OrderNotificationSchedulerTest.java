@@ -213,7 +213,7 @@ class OrderNotificationSchedulerTest {
         User user = persistCustomer();
         walletRepo.saveAndFlush(CreditWallet.builder().userId(user.getId()).available(10).committed(0).build());
 
-        Instant pickupAt = FIXED_NOW.plus(3, ChronoUnit.HOURS); // 11:02 ART, dentro de la ventana 11:00-15:00
+        Instant pickupAt = FIXED_NOW.plus(178, ChronoUnit.MINUTES); // 11:00 ART, dentro de la ventana 11:00-15:00 y alineado al paso de 10 min (V23)
         OrderDto placed = orderPlacementService.place(user.getId(), new PlaceOrderV2Request(
             List.of(new PlaceOrderV2Request.OrderItemRequest(dish.getId(), null, null)), pickupAt, null));
 
