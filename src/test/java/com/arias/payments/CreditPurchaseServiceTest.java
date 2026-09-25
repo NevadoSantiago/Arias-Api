@@ -762,4 +762,57 @@ class CreditPurchaseServiceTest {
         assertThat(wallet.getCommitted()).isEqualTo(4);
         assertThat(wallet.getAvailable()).isZero();
     }
+
+    // ─── getPurchase(): packNombre (feature b2c-ordering-redesign, task B3) ─
+    //
+    // The frontend shows "Paquete Semana" etc. instead of a generic label —
+    // GET /api/v1/credits/purchases/{id} must include the purchased pack's
+    // nombre for PACK purchases, and null for DIRECT.
+
+    @Test
+    @DisplayName("getPurchase(): a PACK purchase includes the pack's nombre as packNombre")
+    void getPurchaseOfPackIncludesPackNombre() {
+        User user = persistUser("get-pack-nombre");
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("WEEK-" + System.nanoTime())
+            .nombre("Paquete Semana")
+            .creditAmount(20)
+            .priceCents(45_000L)
+            .discountPercent(10)
+            .ordenDisplay(0)
+            .enabled(true)
+            .build());
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-get-pack", "https://mp.test/init"));
+
+        CreditPurchaseCheckoutDto checkout = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null));
+
+        CreditPurchaseDto dto = purchaseService.getPurchase(user.getId(), checkout.purchaseId());
+
+        assertThat(dto.packNombre()).isEqualTo("Paquete Semana");
+    }
+
+    @Test
+    @DisplayName("getPurchase(): a DIRECT purchase has packNombre null")
+    void getPurchaseOfDirectHasNullPackNombre() {
+        User user = persistUser("get-direct-nombre");
+        persistDayPackForGapFix(2, 3_000L);
+        Order order = orderRepo.save(Order.builder()
+            .user(user)
+            .fecha(LocalDate.now())
+            .pickupAt(Instant.now().plus(2, ChronoUnit.HOURS))
+            .estado(OrderEstado.PENDIENTE)
+            .creditTotal(2)
+            .build());
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-get-direct", "https://mp.test/init"));
+
+        CreditPurchaseCheckoutDto checkout = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId(), null));
+
+        CreditPurchaseDto dto = purchaseService.getPurchase(user.getId(), checkout.purchaseId());
+
+        assertThat(dto.packNombre()).isNull();
+    }
 }
