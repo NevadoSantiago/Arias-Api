@@ -135,7 +135,7 @@ class MercadoPagoWebhookControllerTest {
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-" + System.nanoTime(), "https://mp.test/init"));
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null));
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null));
         return purchaseRepo.findById(dto.purchaseId()).orElseThrow();
     }
 
@@ -143,7 +143,7 @@ class MercadoPagoWebhookControllerTest {
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-" + System.nanoTime(), "https://mp.test/init"));
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId()));
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId(), null));
         return purchaseRepo.findById(dto.purchaseId()).orElseThrow();
     }
 

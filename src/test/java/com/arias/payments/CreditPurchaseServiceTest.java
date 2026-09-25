@@ -85,6 +85,9 @@ class CreditPurchaseServiceTest {
     @MockitoBean
     private PaymentGateway paymentGateway;
 
+    @Autowired
+    private jakarta.validation.Validator validator;
+
     // System.nanoTime() no alcanza para distinguir dos persistUser() seguidos
     // dentro del mismo test (colisiona en uq_users_phone) — un contador
     // monotónico sí garantiza unicidad.
@@ -174,7 +177,7 @@ class CreditPurchaseServiceTest {
             .thenReturn(new CheckoutSession("pref-1", "https://mp.test/init"));
 
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null));
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null));
 
         CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
         assertThat(purchase.getCreditAmount()).isEqualTo(20);
@@ -185,7 +188,140 @@ class CreditPurchaseServiceTest {
 
         // El importe pasado a Mercado Pago es el de la base, nunca uno inventado por el cliente.
         verify(paymentGateway).createCheckout(argThat(req -> req.unitPriceCents() == 45_000L
+            && req.quantity() == 1
             && req.externalReference().equals(purchase.getId().toString())));
+    }
+
+    // ─── quantity en la compra de PACK — sueltos sobre el pack DAY ──────────
+    // (decisión de usuario 2026-09-25, feature b2c-ordering-redesign, tarea B2)
+
+    @Test
+    @DisplayName("compra de PACK con quantity multiplica créditos e importe, y la línea de Mercado Pago lleva esa cantidad")
+    void compraDePaqueteConCantidadMultiplicaCreditosImporteYLineaDeMercadoPago() {
+        User user = persistUser("pack-quantity");
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("DAY-" + System.nanoTime())
+            .nombre("Día")
+            .creditAmount(2)
+            .priceCents(3_000L)
+            .discountPercent(0)
+            .ordenDisplay(0)
+            .enabled(true)
+            .build());
+
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-quantity", "https://mp.test/init"));
+
+        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, 3));
+
+        CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
+        assertThat(purchase.getCreditAmount()).isEqualTo(6); // 2 * 3
+        assertThat(purchase.getAmountCents()).isEqualTo(9_000L); // 3000 * 3
+
+        // El total de Mercado Pago (quantity * unitPriceCents) debe coincidir
+        // con amountCents — nunca un importe distinto al calculado en el servidor.
+        verify(paymentGateway).createCheckout(argThat(req -> req.quantity() == 3
+            && req.unitPriceCents() == 3_000L));
+    }
+
+    @Test
+    @DisplayName("compra de PACK sin quantity equivale a 1 (comportamiento previo a B2)")
+    void compraDePaqueteSinCantidadEquivaleAUno() {
+        User user = persistUser("pack-quantity-null");
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("DAY-" + System.nanoTime())
+            .nombre("Día")
+            .creditAmount(2)
+            .priceCents(3_000L)
+            .discountPercent(0)
+            .ordenDisplay(0)
+            .enabled(true)
+            .build());
+
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-quantity-null", "https://mp.test/init"));
+
+        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null));
+
+        CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
+        assertThat(purchase.getCreditAmount()).isEqualTo(2);
+        assertThat(purchase.getAmountCents()).isEqualTo(3_000L);
+        verify(paymentGateway).createCheckout(argThat(req -> req.quantity() == 1
+            && req.unitPriceCents() == 3_000L));
+    }
+
+    @Test
+    @DisplayName("compra DIRECT con quantity distinta de null/1 se rechaza — la cantidad solo aplica a PACK")
+    void compraDirectaConCantidadDistintaDeUnoSeRechaza() {
+        User user = persistUser("direct-quantity");
+        packRepo.save(CreditPack.builder()
+            .code("DAY").nombre("Día").creditAmount(2).priceCents(3_000L)
+            .discountPercent(0).ordenDisplay(0).enabled(true).build());
+        Order order = orderRepo.save(Order.builder()
+            .user(user)
+            .fecha(LocalDate.now())
+            .pickupAt(Instant.now().plus(2, ChronoUnit.HOURS))
+            .estado(OrderEstado.PENDIENTE)
+            .creditTotal(2)
+            .build());
+
+        assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId(), 3)))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "direct-quantity-not-supported");
+
+        assertThat(purchaseRepo.findAll()).isEmpty();
+        verify(paymentGateway, org.mockito.Mockito.never()).createCheckout(any());
+    }
+
+    @Test
+    @DisplayName("quantity fuera de rango (0 u 11) falla la validación del bean del request")
+    void quantityFueraDeRangoFallaLaValidacionDelBean() {
+        CreatePurchaseRequest cero = new CreatePurchaseRequest(PurchaseType.PACK, 1L, null, 0);
+        assertThat(validator.validate(cero)).isNotEmpty();
+
+        CreatePurchaseRequest once = new CreatePurchaseRequest(PurchaseType.PACK, 1L, null, 11);
+        assertThat(validator.validate(once)).isNotEmpty();
+
+        CreatePurchaseRequest valido = new CreatePurchaseRequest(PurchaseType.PACK, 1L, null, 10);
+        assertThat(validator.validate(valido)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("applySnapshot(): una compra PACK aprobada con quantity acredita el total multiplicado y renueva el vencimiento")
+    void compraDePaqueteAprobadaConCantidadAcreditaElTotalMultiplicadoYRenuevaVencimiento() {
+        User user = persistUser("pack-quantity-approved");
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("DAY-" + System.nanoTime())
+            .nombre("Día")
+            .creditAmount(2)
+            .priceCents(3_000L)
+            .discountPercent(0)
+            .ordenDisplay(0)
+            .enabled(true)
+            .build());
+
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-quantity-approved", "https://mp.test/init"));
+        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, 3));
+        CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
+
+        purchaseService.applySnapshot(new PaymentSnapshot("mp-quantity-approved", PaymentStatus.APPROVED,
+            "accredited", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L));
+
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(purchaseRepo.findById(purchase.getId()).orElseThrow().getStatus())
+            .isEqualTo(CreditPurchaseStatus.APPROVED);
+
+        CreditWallet wallet = walletRepo.findById(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(6); // 2 * 3, van a disponibles (no committed)
+        assertThat(wallet.getCommitted()).isZero();
+        assertThat(wallet.getExpiresAt()).isNotNull().isAfter(Instant.now());
     }
 
     @Test
@@ -213,7 +349,7 @@ class CreditPurchaseServiceTest {
             .thenReturn(new CheckoutSession("pref-2", "https://mp.test/init"));
 
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId()));
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId(), null));
 
         CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
         assertThat(purchase.getCreditAmount()).isEqualTo(4);
@@ -232,7 +368,7 @@ class CreditPurchaseServiceTest {
             .build());
 
         assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId())))
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId(), null)))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "direct-purchase-unavailable");
 
@@ -255,7 +391,7 @@ class CreditPurchaseServiceTest {
             .build());
 
         assertThatThrownBy(() -> purchaseService.createPurchase(other.getId(),
-            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId())))
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId(), null)))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "order-not-found");
     }
@@ -270,7 +406,7 @@ class CreditPurchaseServiceTest {
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
 
         assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null)))
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null)))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "email-not-verified");
 
@@ -288,7 +424,7 @@ class CreditPurchaseServiceTest {
             .thenReturn(new CheckoutSession("pref-verificado", "https://mp.test/init"));
 
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null));
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null));
 
         assertThat(dto.purchaseId()).isNotNull();
     }
@@ -306,7 +442,7 @@ class CreditPurchaseServiceTest {
             .thenReturn(new CheckoutSession("pref-empleado", "https://mp.test/init"));
 
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(employee.getId(),
-            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null));
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null));
 
         assertThat(dto.purchaseId()).isNotNull();
     }
@@ -321,7 +457,7 @@ class CreditPurchaseServiceTest {
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
 
         assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null)))
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null)))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "profile-incomplete");
 
@@ -338,7 +474,7 @@ class CreditPurchaseServiceTest {
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
 
         assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null)))
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null)))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "profile-incomplete");
     }
@@ -355,7 +491,7 @@ class CreditPurchaseServiceTest {
             .thenReturn(new CheckoutSession("pref-perfil-completo", "https://mp.test/init"));
 
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null));
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null));
 
         assertThat(dto.purchaseId()).isNotNull();
     }
@@ -371,7 +507,7 @@ class CreditPurchaseServiceTest {
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
 
         assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null)))
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null)))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "email-not-verified");
     }
@@ -471,7 +607,7 @@ class CreditPurchaseServiceTest {
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-reject", "https://mp.test/init"));
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId()));
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId(), null));
         CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
 
         purchaseService.applySnapshot(new PaymentSnapshot("mp-reject-1", PaymentStatus.REJECTED,
@@ -505,7 +641,7 @@ class CreditPurchaseServiceTest {
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-reject-dup", "https://mp.test/init"));
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId()));
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId(), null));
         CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
 
         PaymentSnapshot rejected = new PaymentSnapshot("mp-reject-dup", PaymentStatus.REJECTED,
@@ -543,7 +679,7 @@ class CreditPurchaseServiceTest {
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-expire", "https://mp.test/init"));
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId()));
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId(), null));
         CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
 
         // Reached via PaymentReconciliationScheduler after 24h without a
@@ -574,7 +710,7 @@ class CreditPurchaseServiceTest {
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-reject-pack", "https://mp.test/init"));
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null));
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null));
         CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
         assertThat(purchase.getOrder()).isNull();
 
@@ -600,7 +736,7 @@ class CreditPurchaseServiceTest {
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-approve", "https://mp.test/init"));
         CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId()));
+            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId(), null));
         CreditPurchase purchase = purchaseRepo.findById(dto.purchaseId()).orElseThrow();
 
         purchaseService.applySnapshot(new PaymentSnapshot("mp-approve-1", PaymentStatus.APPROVED,

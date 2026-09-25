@@ -91,6 +91,8 @@ public class CreditPurchaseService {
         Order order = null;
         int creditAmount;
         long amountCents;
+        int quantity = 1;
+        long mpUnitPriceCents;
 
         if (req.type() == PurchaseType.PACK) {
             if (req.packId() == null) {
@@ -100,12 +102,23 @@ public class CreditPurchaseService {
                 .filter(p -> p.getDeletedAt() == null && Boolean.TRUE.equals(p.getEnabled()))
                 .orElseThrow(() -> BusinessException.notFound("credit-pack-not-found",
                     "Paquete de créditos no encontrado"));
-            creditAmount = pack.getCreditAmount();
-            amountCents = pack.getPriceCents();
+            // Sueltos sobre el pack DAY (decisión de usuario 2026-09-25): quantity
+            // opcional (1..10, validado en CreatePurchaseRequest); null equivale a 1.
+            quantity = req.quantity() != null ? req.quantity() : 1;
+            creditAmount = pack.getCreditAmount() * quantity;
+            amountCents = pack.getPriceCents() * quantity;
+            // La línea de Mercado Pago lleva quantity * precio unitario del
+            // paquete, para que el total que ve Mercado Pago coincida siempre
+            // con amountCents calculado acá — nunca un importe único inventado.
+            mpUnitPriceCents = pack.getPriceCents();
         } else {
             if (req.orderId() == null) {
                 throw BusinessException.badRequest("order-id-required",
                     "Debe indicar el pedido a pagar directamente");
+            }
+            if (req.quantity() != null && req.quantity() != 1) {
+                throw BusinessException.badRequest("direct-quantity-not-supported",
+                    "La cantidad solo aplica a la compra de paquetes");
             }
             order = orderRepo.findByIdAndUserId(req.orderId(), userId)
                 .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
@@ -115,6 +128,7 @@ public class CreditPurchaseService {
             }
             creditAmount = order.getCreditTotal();
             amountCents = directAmountCentsFor(creditAmount);
+            mpUnitPriceCents = amountCents;
         }
 
         CreditPurchase purchase = CreditPurchase.builder()
@@ -134,8 +148,8 @@ public class CreditPurchaseService {
         CheckoutRequest checkoutReq = new CheckoutRequest(
             purchase.getId().toString(),
             checkoutTitle(req.type(), creditAmount),
-            1,
-            amountCents,
+            quantity,
+            mpUnitPriceCents,
             user.getEmail(),
             returnUrl,
             returnUrl,
