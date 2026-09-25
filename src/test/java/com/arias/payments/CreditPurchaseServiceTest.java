@@ -9,8 +9,10 @@ import com.arias.catalog.menusections.MenuSectionRepository;
 import com.arias.common.exception.BusinessException;
 import com.arias.companies.Company;
 import com.arias.companies.CompanyRepository;
+import com.arias.credits.CreditMovementRepository;
 import com.arias.credits.CreditWallet;
 import com.arias.credits.CreditWalletRepository;
+import com.arias.credits.MovementType;
 import com.arias.credits.packs.CreditPack;
 import com.arias.credits.packs.CreditPackRepository;
 import com.arias.orders.Order;
@@ -78,6 +80,9 @@ class CreditPurchaseServiceTest {
 
     @Autowired
     private CreditWalletRepository walletRepo;
+
+    @Autowired
+    private CreditMovementRepository movementRepo;
 
     @Autowired
     private EntityManager entityManager;
@@ -814,5 +819,100 @@ class CreditPurchaseServiceTest {
         CreditPurchaseDto dto = purchaseService.getPurchase(user.getId(), checkout.purchaseId());
 
         assertThat(dto.packNombre()).isNull();
+    }
+
+    // ─── applyStatusMapping(): APPROVED after an IN_MEDIATION dispute ───────
+    // (feature b2c-ordering-redesign, task B4 — real bug found in review)
+    //
+    // Mercado Pago can send in_mediation for a claim/chargeback dispute and
+    // later resolve it back to approved. Two transitions matter here:
+    //  (a) PENDING -> IN_MEDIATION -> APPROVED: never credited yet, so MP
+    //      resolving the dispute for the buyer must still credit it.
+    //  (b) APPROVED (already credited) -> IN_MEDIATION -> APPROVED: must not
+    //      credit a second time, just return the status to APPROVED.
+
+    @Test
+    @DisplayName("applySnapshot(): a purchase that goes PENDING -> IN_MEDIATION -> APPROVED is credited exactly once")
+    void purchaseApprovedAfterMediationFromPendingIsCredited() {
+        User user = persistUser("mediation-from-pending");
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-mediation-pending", "https://mp.test/init"));
+        CreditPurchaseCheckoutDto checkout = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null));
+        CreditPurchase purchase = purchaseRepo.findById(checkout.purchaseId()).orElseThrow();
+
+        purchaseService.applySnapshot(new PaymentSnapshot("mp-mediation-pending", PaymentStatus.IN_MEDIATION,
+            "in_mediation", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L));
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(purchaseRepo.findById(purchase.getId()).orElseThrow().getStatus())
+            .isEqualTo(CreditPurchaseStatus.IN_MEDIATION);
+
+        purchaseService.applySnapshot(new PaymentSnapshot("mp-mediation-pending", PaymentStatus.APPROVED,
+            "accredited", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L));
+        entityManager.flush();
+        entityManager.clear();
+
+        CreditPurchase resolved = purchaseRepo.findById(purchase.getId()).orElseThrow();
+        assertThat(resolved.getStatus()).isEqualTo(CreditPurchaseStatus.APPROVED);
+        assertThat(resolved.getCreditedAt()).isNotNull();
+
+        CreditWallet wallet = walletRepo.findById(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(20);
+
+        long packPurchaseMovements = movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId()).stream()
+            .filter(m -> m.getType() == MovementType.PACK_PURCHASE)
+            .count();
+        assertThat(packPurchaseMovements).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("applySnapshot(): a purchase that goes APPROVED -> IN_MEDIATION -> APPROVED returns to APPROVED without crediting again")
+    void purchaseApprovedAfterMediationFromApprovedIsNotCreditedAgain() {
+        User user = persistUser("mediation-from-approved");
+        CreditPack pack = packRepo.save(CreditPack.builder()
+            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession("pref-mediation-approved", "https://mp.test/init"));
+        CreditPurchaseCheckoutDto checkout = purchaseService.createPurchase(user.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, pack.getId(), null, null));
+        CreditPurchase purchase = purchaseRepo.findById(checkout.purchaseId()).orElseThrow();
+
+        purchaseService.applySnapshot(new PaymentSnapshot("mp-mediation-approved", PaymentStatus.APPROVED,
+            "accredited", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L));
+        entityManager.flush();
+        entityManager.clear();
+        CreditPurchase credited = purchaseRepo.findById(purchase.getId()).orElseThrow();
+        assertThat(credited.getStatus()).isEqualTo(CreditPurchaseStatus.APPROVED);
+        Instant firstCreditedAt = credited.getCreditedAt();
+        assertThat(firstCreditedAt).isNotNull();
+
+        purchaseService.applySnapshot(new PaymentSnapshot("mp-mediation-approved", PaymentStatus.IN_MEDIATION,
+            "in_mediation", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L));
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(purchaseRepo.findById(purchase.getId()).orElseThrow().getStatus())
+            .isEqualTo(CreditPurchaseStatus.IN_MEDIATION);
+
+        purchaseService.applySnapshot(new PaymentSnapshot("mp-mediation-approved", PaymentStatus.APPROVED,
+            "accredited", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L));
+        entityManager.flush();
+        entityManager.clear();
+
+        CreditPurchase resolved = purchaseRepo.findById(purchase.getId()).orElseThrow();
+        assertThat(resolved.getStatus()).isEqualTo(CreditPurchaseStatus.APPROVED);
+        assertThat(resolved.getCreditedAt()).isEqualTo(firstCreditedAt);
+
+        CreditWallet wallet = walletRepo.findById(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(20); // not doubled to 40
+
+        long packPurchaseMovements = movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId()).stream()
+            .filter(m -> m.getType() == MovementType.PACK_PURCHASE)
+            .count();
+        assertThat(packPurchaseMovements).isEqualTo(1); // no extra movement from the second APPROVED
     }
 }

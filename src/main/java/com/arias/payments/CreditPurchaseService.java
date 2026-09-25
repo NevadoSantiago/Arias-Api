@@ -252,8 +252,18 @@ public class CreditPurchaseService {
     private void applyStatusMapping(CreditPurchase purchase, PaymentSnapshot snapshot) {
         switch (snapshot.status()) {
             case APPROVED -> {
-                if (purchase.getStatus() == CreditPurchaseStatus.PENDING) {
+                if (purchase.getStatus() == CreditPurchaseStatus.PENDING
+                    || (purchase.getStatus() == CreditPurchaseStatus.IN_MEDIATION
+                        && purchase.getCreditedAt() == null)) {
+                    // Nunca se había acreditado (ni antes de la disputa ni
+                    // durante) — Mercado Pago resuelve la mediación a favor
+                    // del comprador: se acredita ahora (gap fix, unidad 11,
+                    // feature b2c-ordering-redesign tarea B4).
                     creditPurchase(purchase);
+                } else if (purchase.getStatus() == CreditPurchaseStatus.IN_MEDIATION) {
+                    // Ya se había acreditado antes de entrar en mediación —
+                    // vuelve a APPROVED sin acreditar una segunda vez.
+                    purchase.setStatus(CreditPurchaseStatus.APPROVED);
                 }
                 // Un reembolso PARCIAL puede dejar el pago en `approved` con
                 // transaction_amount_refunded poblado (decisión del
