@@ -15,6 +15,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalTime;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,6 +38,9 @@ class RestaurantConfigControllerTest {
 
     @Autowired
     private RestaurantConfigRepository repo;
+
+    @Autowired
+    private PickupScheduleRepository pickupScheduleRepo;
 
     @BeforeEach
     void authenticateAsSuperAdmin() {
@@ -104,5 +108,104 @@ class RestaurantConfigControllerTest {
             .hasFieldOrPropertyWithValue("errorCode", "invalid-pickup-window");
 
         assertThat(repo.getSingleton().getPickupWindowStart()).isEqualTo(originalStart);
+    }
+
+    // ─── Franja de retiro por día de la semana (migración V24, B5/F14) ────
+
+    @Test
+    @DisplayName("get(): incluye pickupSchedule con los 7 días sembrados por V24, ordenados lunes a domingo")
+    void getIncluyePickupScheduleSembradoOrdenadoDeLunesADomingo() {
+        RestaurantConfigDto dto = controller.get();
+
+        assertThat(dto.pickupSchedule()).hasSize(7);
+        assertThat(dto.pickupSchedule().stream().map(PickupScheduleDayDto::dayOfWeek).toList())
+            .containsExactly(1, 2, 3, 4, 5, 6, 7);
+        assertThat(dto.pickupSchedule()).allSatisfy(d -> assertThat(d.open()).isTrue());
+    }
+
+    private List<PickupScheduleDayRequest> validScheduleWith(int dayOfWeek, boolean open, LocalTime start, LocalTime end) {
+        List<PickupScheduleDayRequest> days = new ArrayList<>();
+        for (int dow = 1; dow <= 7; dow++) {
+            if (dow == dayOfWeek) {
+                days.add(new PickupScheduleDayRequest(dow, open, start, end));
+            } else {
+                days.add(new PickupScheduleDayRequest(dow, true, LocalTime.of(11, 0), LocalTime.of(15, 0)));
+            }
+        }
+        return days;
+    }
+
+    @Test
+    @DisplayName("updatePickupSchedule(): guarda los 7 días y el cambio se ve en get() (round-trip)")
+    void updatePickupScheduleGuardaYSeVeEnGet() {
+        List<PickupScheduleDayRequest> req = validScheduleWith(6, true, LocalTime.of(11, 0), LocalTime.of(16, 0));
+
+        List<PickupScheduleDayDto> saved = controller.updatePickupSchedule(req);
+
+        assertThat(saved).hasSize(7);
+        PickupScheduleDayDto saturday = saved.stream().filter(d -> d.dayOfWeek() == 6).findFirst().orElseThrow();
+        assertThat(saturday.open()).isTrue();
+        assertThat(saturday.windowStart()).isEqualTo(LocalTime.of(11, 0));
+        assertThat(saturday.windowEnd()).isEqualTo(LocalTime.of(16, 0));
+
+        RestaurantConfigDto read = controller.get();
+        PickupScheduleDayDto saturdayRead = read.pickupSchedule().stream()
+            .filter(d -> d.dayOfWeek() == 6).findFirst().orElseThrow();
+        assertThat(saturdayRead.windowEnd()).isEqualTo(LocalTime.of(16, 0));
+    }
+
+    @Test
+    @DisplayName("updatePickupSchedule(): un día cerrado se guarda sin horarios")
+    void updatePickupScheduleDiaCerradoSinHorarios() {
+        List<PickupScheduleDayRequest> req = validScheduleWith(7, false, null, null);
+
+        List<PickupScheduleDayDto> saved = controller.updatePickupSchedule(req);
+
+        PickupScheduleDayDto sunday = saved.stream().filter(d -> d.dayOfWeek() == 7).findFirst().orElseThrow();
+        assertThat(sunday.open()).isFalse();
+        assertThat(sunday.windowStart()).isNull();
+        assertThat(sunday.windowEnd()).isNull();
+    }
+
+    @Test
+    @DisplayName("updatePickupSchedule(): rechaza cuando faltan días (6 en vez de 7), sin persistir nada")
+    void updatePickupScheduleRechazaListaIncompleta() {
+        List<PickupScheduleDayRequest> req = validScheduleWith(6, true, LocalTime.of(11, 0), LocalTime.of(16, 0));
+        req.removeLast();
+
+        assertThatThrownBy(() -> controller.updatePickupSchedule(req))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "invalid-pickup-schedule");
+    }
+
+    @Test
+    @DisplayName("updatePickupSchedule(): rechaza un día duplicado")
+    void updatePickupScheduleRechazaDiaDuplicado() {
+        List<PickupScheduleDayRequest> req = validScheduleWith(6, true, LocalTime.of(11, 0), LocalTime.of(16, 0));
+        req.set(6, req.get(0)); // domingo (índice 6) duplica el lunes (índice 0)
+
+        assertThatThrownBy(() -> controller.updatePickupSchedule(req))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "invalid-pickup-schedule");
+    }
+
+    @Test
+    @DisplayName("updatePickupSchedule(): rechaza un día abierto cuyo cierre no es posterior a la apertura")
+    void updatePickupScheduleRechazaCierreNoPosteriorAApertura() {
+        List<PickupScheduleDayRequest> req = validScheduleWith(6, true, LocalTime.of(16, 0), LocalTime.of(16, 0));
+
+        assertThatThrownBy(() -> controller.updatePickupSchedule(req))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "invalid-pickup-schedule");
+    }
+
+    @Test
+    @DisplayName("updatePickupSchedule(): rechaza un día abierto sin horarios")
+    void updatePickupScheduleRechazaAbiertoSinHorarios() {
+        List<PickupScheduleDayRequest> req = validScheduleWith(6, true, null, null);
+
+        assertThatThrownBy(() -> controller.updatePickupSchedule(req))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "invalid-pickup-schedule");
     }
 }
