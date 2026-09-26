@@ -3,6 +3,8 @@ package com.arias.orders;
 import com.arias.common.exception.BusinessException;
 import com.arias.restaurantconfig.FechaDeshabilitada;
 import com.arias.restaurantconfig.FechaDeshabilitadaRepository;
+import com.arias.restaurantconfig.PickupSchedule;
+import com.arias.restaurantconfig.PickupScheduleRepository;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -57,6 +59,9 @@ class PickupSlotServiceTest {
 
     @Autowired
     private FechaDeshabilitadaRepository fechaDeshabilitadaRepo;
+
+    @Autowired
+    private PickupScheduleRepository pickupScheduleRepo;
 
     @Autowired
     private OrderRepository orderRepo;
@@ -236,6 +241,88 @@ class PickupSlotServiceTest {
     void assertValidPickupTimeRechazaSegundosDistintosDeCero() {
         Instant conSegundos = today().plusDays(1).atTime(12, 10, 30).atZone(ZONE).toInstant();
         assertThatThrownBy(() -> pickupSlotService.assertValidPickupTime(conSegundos))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "pickup-time-not-aligned");
+    }
+
+    // ─── Franja por día de la semana (B5/F14, migración V24) ───────────────
+
+    /** Sábado dentro de la semana actual (lunes 2026-03-09..domingo 2026-03-15). */
+    private static LocalDate saturdayThisWeek() {
+        return today().plusDays(4); // martes + 4 = sábado
+    }
+
+    /** Domingo dentro de la semana actual. */
+    private static LocalDate sundayThisWeek() {
+        return today().plusDays(5); // martes + 5 = domingo
+    }
+
+    private void setSchedule(int dayOfWeek, boolean open, LocalTime start, LocalTime end) {
+        PickupSchedule schedule = pickupScheduleRepo.getByDayOfWeek(dayOfWeek);
+        schedule.setOpen(open);
+        schedule.setWindowStart(start);
+        schedule.setWindowEnd(end);
+        pickupScheduleRepo.save(schedule);
+    }
+
+    @Test
+    @DisplayName("slotsFor(): usa la ventana propia del día de la semana (sábado 11:00-16:00, resto de la semana 11:00-23:00)")
+    void slotsForUsaLaVentanaDelDiaDeLaSemana() {
+        for (int dow = 1; dow <= 5; dow++) {
+            setSchedule(dow, true, LocalTime.of(11, 0), LocalTime.of(23, 0));
+        }
+        setSchedule(6, true, LocalTime.of(11, 0), LocalTime.of(16, 0)); // sábado
+
+        LocalDate sabado = saturdayThisWeek();
+        List<Instant> slotsSabado = pickupSlotService.slotsFor(sabado);
+        List<Instant> slotsMartes = pickupSlotService.slotsFor(today());
+
+        assertThat(slotsSabado).isNotEmpty();
+        assertThat(slotsSabado.get(0).atZone(ZONE).toLocalTime()).isEqualTo(LocalTime.of(11, 0));
+        assertThat(slotsSabado.getLast().atZone(ZONE).toLocalTime()).isEqualTo(LocalTime.of(15, 50));
+        assertThat(slotsSabado).allSatisfy(s -> assertThat(s.atZone(ZONE).toLocalTime()).isBefore(LocalTime.of(16, 0)));
+
+        // El martes (día de semana) sigue teniendo su propia ventana, hasta 22:50.
+        assertThat(slotsMartes.getLast().atZone(ZONE).toLocalTime()).isEqualTo(LocalTime.of(22, 50));
+    }
+
+    @Test
+    @DisplayName("slotsFor(): un día cerrado no ofrece ningún horario")
+    void slotsForDiaCerradoDevuelveVacio() {
+        setSchedule(7, false, null, null); // domingo cerrado
+
+        List<Instant> slots = pickupSlotService.slotsFor(sundayThisWeek());
+
+        assertThat(slots).isEmpty();
+    }
+
+    @Test
+    @DisplayName("assertValidPickupTime(): rechaza un día cerrado con un mensaje de negocio claro")
+    void assertValidPickupTimeRechazaDiaCerrado() {
+        setSchedule(7, false, null, null); // domingo cerrado
+        Instant pickupAt = sundayThisWeek().atTime(12, 0).atZone(ZONE).toInstant();
+
+        assertThatThrownBy(() -> pickupSlotService.assertValidPickupTime(pickupAt))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "pickup-day-closed")
+            .hasMessage("El local no abre ese día.");
+    }
+
+    @Test
+    @DisplayName("assertValidPickupTime(): la alineación al paso se cuenta desde el inicio de la ventana propia del día, no de otro día")
+    void assertValidPickupTimeAlineaAlInicioDeLaVentanaDelDiaCorrespondiente() {
+        // Sábado abre a las 11:05 (distinto del resto de la semana, que abre a las 11:00).
+        setSchedule(6, true, LocalTime.of(11, 5), LocalTime.of(16, 0));
+        LocalDate sabado = saturdayThisWeek();
+
+        // 12:05 -> 60 min desde 11:05 (múltiplo de 10): alineado si se cuenta desde
+        // el inicio del sábado. Si se contara mal desde 11:00 (65 min) se rechazaría.
+        Instant alineadoAlSabado = sabado.atTime(12, 5).atZone(ZONE).toInstant();
+        assertThatCode(() -> pickupSlotService.assertValidPickupTime(alineadoAlSabado)).doesNotThrowAnyException();
+
+        // 12:00 -> 55 min desde 11:05: NO es múltiplo de 10, debe rechazarse.
+        Instant noAlineadoAlSabado = sabado.atTime(12, 0).atZone(ZONE).toInstant();
+        assertThatThrownBy(() -> pickupSlotService.assertValidPickupTime(noAlineadoAlSabado))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "pickup-time-not-aligned");
     }
