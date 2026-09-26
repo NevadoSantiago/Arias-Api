@@ -169,7 +169,7 @@ class CreditPurchaseServiceTest {
     void compraDePaqueteCalculaElImporteDesdePriceCentsDelPaquete() {
         User user = persistUser("pack-amount");
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime())
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8))
             .nombre("Semana")
             .creditAmount(20)
             .priceCents(45_000L)
@@ -205,7 +205,7 @@ class CreditPurchaseServiceTest {
     void compraDePaqueteConCantidadMultiplicaCreditosImporteYLineaDeMercadoPago() {
         User user = persistUser("pack-quantity");
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("DAY-" + System.nanoTime())
+            .code("DAY-" + java.util.UUID.randomUUID().toString().substring(0, 8))
             .nombre("Día")
             .creditAmount(2)
             .priceCents(3_000L)
@@ -235,7 +235,7 @@ class CreditPurchaseServiceTest {
     void compraDePaqueteSinCantidadEquivaleAUno() {
         User user = persistUser("pack-quantity-null");
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("DAY-" + System.nanoTime())
+            .code("DAY-" + java.util.UUID.randomUUID().toString().substring(0, 8))
             .nombre("Día")
             .creditAmount(2)
             .priceCents(3_000L)
@@ -299,7 +299,7 @@ class CreditPurchaseServiceTest {
     void compraDePaqueteAprobadaConCantidadAcreditaElTotalMultiplicadoYRenuevaVencimiento() {
         User user = persistUser("pack-quantity-approved");
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("DAY-" + System.nanoTime())
+            .code("DAY-" + java.util.UUID.randomUUID().toString().substring(0, 8))
             .nombre("Día")
             .creditAmount(2)
             .priceCents(3_000L)
@@ -407,7 +407,7 @@ class CreditPurchaseServiceTest {
     void compraSeRechazaSiElB2cNoVerificoElCorreo() {
         User user = persistUnverifiedUser("sin-verificar");
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8)).nombre("Semana").creditAmount(20)
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
 
         assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
@@ -423,7 +423,7 @@ class CreditPurchaseServiceTest {
     void compraSeAceptaSiElB2cVerificoElCorreo() {
         User user = persistUser("verificado");
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8)).nombre("Semana").creditAmount(20)
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-verificado", "https://mp.test/init"));
@@ -441,7 +441,7 @@ class CreditPurchaseServiceTest {
         assertThat(employee.getPhone()).isNull(); // el alta por lista blanca nunca captura teléfono ni apodo
         assertThat(employee.getNickname()).isNull();
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8)).nombre("Semana").creditAmount(20)
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-empleado", "https://mp.test/init"));
@@ -458,7 +458,7 @@ class CreditPurchaseServiceTest {
     void compraSeRechazaSiElB2cNoTieneTelefono() {
         User user = persistUserConPerfilIncompleto("sin-telefono", null, "Apodo-" + System.nanoTime());
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8)).nombre("Semana").creditAmount(20)
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
 
         assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
@@ -475,7 +475,7 @@ class CreditPurchaseServiceTest {
         User user = persistUserConPerfilIncompleto("sin-apodo",
             "+549" + (1133440200L + PHONE_SEQ.incrementAndGet()), null);
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8)).nombre("Semana").creditAmount(20)
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
 
         assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
@@ -490,7 +490,7 @@ class CreditPurchaseServiceTest {
         assertThat(user.getPhone()).isNotBlank();
         assertThat(user.getNickname()).isNotBlank();
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8)).nombre("Semana").creditAmount(20)
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-perfil-completo", "https://mp.test/init"));
@@ -508,7 +508,7 @@ class CreditPurchaseServiceTest {
         assertThat(user.getPhone()).isNull();
         assertThat(user.getNickname()).isNull();
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8)).nombre("Semana").creditAmount(20)
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
 
         assertThatThrownBy(() -> purchaseService.createPurchase(user.getId(),
@@ -709,7 +709,7 @@ class CreditPurchaseServiceTest {
     void rejectedPackPurchaseTouchesNoOrder() {
         User user = persistUser("reject-pack");
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(10)
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8)).nombre("Semana").creditAmount(10)
             .priceCents(10_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
 
         when(paymentGateway.createCheckout(any()))
@@ -779,7 +779,7 @@ class CreditPurchaseServiceTest {
     void getPurchaseOfPackIncludesPackNombre() {
         User user = persistUser("get-pack-nombre");
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime())
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8))
             .nombre("Paquete Semana")
             .creditAmount(20)
             .priceCents(45_000L)
@@ -836,7 +836,7 @@ class CreditPurchaseServiceTest {
     void purchaseApprovedAfterMediationFromPendingIsCredited() {
         User user = persistUser("mediation-from-pending");
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8)).nombre("Semana").creditAmount(20)
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-mediation-pending", "https://mp.test/init"));
@@ -874,7 +874,7 @@ class CreditPurchaseServiceTest {
     void purchaseApprovedAfterMediationFromApprovedIsNotCreditedAgain() {
         User user = persistUser("mediation-from-approved");
         CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("WEEK-" + System.nanoTime()).nombre("Semana").creditAmount(20)
+            .code("WEEK-" + java.util.UUID.randomUUID().toString().substring(0, 8)).nombre("Semana").creditAmount(20)
             .priceCents(45_000L).discountPercent(0).ordenDisplay(0).enabled(true).build());
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-mediation-approved", "https://mp.test/init"));

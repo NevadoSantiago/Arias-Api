@@ -98,7 +98,7 @@ class MercadoPagoWebhookControllerTest {
 
     private CreditPack persistPack(String code, int creditAmount, long priceCents) {
         return packRepo.save(CreditPack.builder()
-            .code(code + "-" + System.nanoTime())
+            .code(code + "-" + java.util.UUID.randomUUID().toString().substring(0, 8))
             .nombre("Paquete de prueba")
             .creditAmount(creditAmount)
             .priceCents(priceCents)
