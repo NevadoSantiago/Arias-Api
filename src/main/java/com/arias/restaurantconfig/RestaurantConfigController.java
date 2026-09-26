@@ -95,6 +95,10 @@ public class RestaurantConfigController {
 
         Set<Integer> seen = new HashSet<>();
         for (PickupScheduleDayRequest day : req) {
+            if (day == null) {
+                throw BusinessException.badRequest("invalid-pickup-schedule",
+                    "Cada día de la semana debe venir completo");
+            }
             if (day.dayOfWeek() == null || day.dayOfWeek() < 1 || day.dayOfWeek() > 7) {
                 throw BusinessException.badRequest("invalid-pickup-schedule",
                     "dayOfWeek debe estar entre 1 (lunes) y 7 (domingo)");

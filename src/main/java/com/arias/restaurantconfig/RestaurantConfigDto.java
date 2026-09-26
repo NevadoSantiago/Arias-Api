@@ -8,10 +8,10 @@ public record RestaurantConfigDto(
     String timezone,
     Integer pickupLeadMinutes,
     Integer creditExpiryDays,
-    /** Deprecated: superseded by {@link #pickupSchedule()} (migración V24, B5/F14) — se mantiene solo por compatibilidad. */
-    LocalTime pickupWindowStart,
-    /** Deprecated: superseded by {@link #pickupSchedule()} (migración V24, B5/F14) — se mantiene solo por compatibilidad. */
-    LocalTime pickupWindowEnd,
+    /** Reemplazado por {@link #pickupSchedule()} (migración V24, B5/F14) — se mantiene solo por compatibilidad y ya no define la franja real. */
+    @Deprecated LocalTime pickupWindowStart,
+    /** Reemplazado por {@link #pickupSchedule()} (migración V24, B5/F14) — se mantiene solo por compatibilidad y ya no define la franja real. */
+    @Deprecated LocalTime pickupWindowEnd,
     Integer pickupSlotMinutes,
     LocalTime dailySummaryTime,
     Integer pickupReminderMinutes,

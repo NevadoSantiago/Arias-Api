@@ -179,6 +179,17 @@ class RestaurantConfigControllerTest {
     }
 
     @Test
+    @DisplayName("updatePickupSchedule(): rechaza con 400 un elemento null en la lista, no con 500")
+    void updatePickupScheduleRechazaElementoNull() {
+        List<PickupScheduleDayRequest> req = validScheduleWith(6, true, LocalTime.of(11, 0), LocalTime.of(16, 0));
+        req.set(3, null);
+
+        assertThatThrownBy(() -> controller.updatePickupSchedule(req))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "invalid-pickup-schedule");
+    }
+
+    @Test
     @DisplayName("updatePickupSchedule(): rechaza un día duplicado")
     void updatePickupScheduleRechazaDiaDuplicado() {
         List<PickupScheduleDayRequest> req = validScheduleWith(6, true, LocalTime.of(11, 0), LocalTime.of(16, 0));
