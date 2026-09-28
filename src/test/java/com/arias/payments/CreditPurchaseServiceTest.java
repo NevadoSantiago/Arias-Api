@@ -877,78 +877,51 @@ class CreditPurchaseServiceTest {
     // con créditos igual comprometidos (nunca liberados), o pedido PENDIENTE
     // con el stock ya restaurado por la cancelación.
     //
-    // Fix: creditApprovedPurchase() ahora bloquea el pedido con
-    // OrderRepository#findByIdForUpdate ANTES de decidir, y
-    // OrderPlacementService#closeForPaymentFailure (la misma operación que
-    // OrderConsumptionScheduler ejecuta por pedido) relee bajo el MISMO lock.
+    // Fix: la aprobación y closeForPaymentFailure bloquean el pedido
+    // (findByIdForUpdate) antes de decidir.
     // Mismo patrón de dos hilos reales que
     // OrderPlacementServiceTest#removeItemConcurrenteSerializaBajoElLock...:
     // NOT_SUPPORTED suspende la transacción de test para que cada llamada
     // abra su propia transacción física, visible entre conexiones.
     //
-    // Nota de honestidad: la carrera en sí (qué hilo llega primero al lock)
-    // depende del scheduler del SO/JDBC y no está forzada con ningún latch
-    // dentro del código bajo prueba, así que el RED no está 100% garantizado
-    // en cada corrida — se observó al ejecutar contra el código sin lock. El
-    // GREEN es determinístico: bajo el lock, el resultado siempre cae en una
-    // de las dos ramas válidas del invariante de abajo, nunca en la
-    // combinación inválida.
+    // Sin el lock, la carrera se reprodujo en 6 de 6 corridas (ambos casos);
+    // con el lock el resultado siempre cae en una de las dos ramas válidas.
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     @DisplayName("creditApprovedPurchase(): aprobación concurrente con cancel() del cliente nunca deja CANCELADO con créditos comprometidos ni PENDIENTE con stock restaurado")
     void approvalConcurrenteConCancelDelClienteRespetaElInvariante() throws Exception {
-        User user = persistUserForRaceTest("race-approve-cancel");
-        Dish dish = persistDishWithStock(5);
-        Order order = new TransactionTemplate(txManager).execute(s -> persistOrderAwaitingPayment(user, dish, 2));
-        CreditPurchase purchase = persistDirectPurchase(user, order, 2, 2_000L);
-        PaymentSnapshot approved = new PaymentSnapshot("mp-race-cancel", PaymentStatus.APPROVED,
-            "accredited", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L);
-
-        try {
-            runConcurrently(
-                () -> purchaseService.applySnapshot(approved),
-                () -> orderPlacementService.cancel(user.getId(), order.getId()));
-
-            assertOrderApprovalRaceInvariant(order.getId(), user.getId(), dish.getId(), 2, 5, 4);
-        } finally {
-            cleanupRaceTestData(user, order, dish);
-        }
+        assertApprovalRaceAgainst("race-approve-cancel", 5, 2,
+            (user, order) -> orderPlacementService.cancel(user.getId(), order.getId()));
     }
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     @DisplayName("creditApprovedPurchase(): aprobación concurrente con el corte del scheduler nunca deja CANCELADO con créditos comprometidos ni PENDIENTE con stock restaurado")
     void approvalConcurrenteConElCorteDelSchedulerRespetaElInvariante() throws Exception {
-        User user = persistUserForRaceTest("race-approve-scheduler");
-        Dish dish = persistDishWithStock(3);
-        Order order = new TransactionTemplate(txManager).execute(s -> persistOrderAwaitingPayment(user, dish, 1));
-        CreditPurchase purchase = persistDirectPurchase(user, order, 1, 1_000L);
-        PaymentSnapshot approved = new PaymentSnapshot("mp-race-scheduler", PaymentStatus.APPROVED,
+        // Misma operación que OrderConsumptionScheduler.consumeDueOrders() ejecuta por pedido.
+        assertApprovalRaceAgainst("race-approve-scheduler", 3, 1,
+            (user, order) -> orderPlacementService.closeForPaymentFailure(order.getId()));
+    }
+
+    /** Aprueba el pago DIRECT en paralelo con {@code competitor} y verifica el invariante. */
+    private void assertApprovalRaceAgainst(String prefix, int stock, int lunches,
+                                           java.util.function.BiConsumer<User, Order> competitor) throws Exception {
+        User user = persistUserForRaceTest(prefix);
+        Dish dish = persistDishWithStock(stock);
+        Order order = new TransactionTemplate(txManager).execute(s -> persistOrderAwaitingPayment(user, dish, lunches));
+        CreditPurchase purchase = persistDirectPurchase(user, order, lunches, lunches * 1_000L);
+        PaymentSnapshot approved = new PaymentSnapshot("mp-" + prefix, PaymentStatus.APPROVED,
             "accredited", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L);
-
         try {
-            // Misma operación que OrderConsumptionScheduler.consumeDueOrders()
-            // ejecuta por pedido tras el fix.
-            runConcurrently(
-                () -> purchaseService.applySnapshot(approved),
-                () -> orderPlacementService.closeForPaymentFailure(order.getId()));
-
-            assertOrderApprovalRaceInvariant(order.getId(), user.getId(), dish.getId(), 1, 3, 2);
+            runConcurrently(() -> purchaseService.applySnapshot(approved), () -> competitor.accept(user, order));
+            assertOrderApprovalRaceInvariant(order.getId(), user.getId(), dish.getId(), lunches, stock, stock - lunches);
         } finally {
             cleanupRaceTestData(user, order, dish);
         }
     }
 
-    /**
-     * {@link #persistUser}, pero con el teléfono derivado de {@code
-     * System.nanoTime()} en vez del contador estático {@code PHONE_SEQ}: los
-     * dos tests de arriba corren con {@code Propagation.NOT_SUPPORTED} (cada
-     * llamada hace su COMMIT real, sin el rollback de {@code @Transactional}
-     * de la clase), así que sus filas sobreviven entre corridas — y {@code
-     * PHONE_SEQ} arranca de nuevo en 0 en cada JVM, chocando con el teléfono
-     * ya commiteado por una corrida anterior.
-     */
+    /** Como {@link #persistUser}, pero único entre corridas: estos tests commitean de verdad y {@code PHONE_SEQ} se reinicia por JVM. */
     private User persistUserForRaceTest(String prefix) {
         long nanos = System.nanoTime();
         User user = User.builder()
@@ -975,34 +948,26 @@ class CreditPurchaseServiceTest {
         menuSectionRepo.delete(reloaded.getMenuSection());
     }
 
-    private void runConcurrently(Runnable a, Runnable b) throws InterruptedException {
-        CountDownLatch startLatch = new CountDownLatch(2);
-        AtomicReference<Throwable> errorA = new AtomicReference<>();
-        AtomicReference<Throwable> errorB = new AtomicReference<>();
-        Thread threadA = new Thread(() -> {
-            startLatch.countDown();
-            try {
-                startLatch.await();
-                a.run();
-            } catch (Throwable t) {
-                errorA.set(t);
-            }
-        });
-        Thread threadB = new Thread(() -> {
-            startLatch.countDown();
-            try {
-                startLatch.await();
-                b.run();
-            } catch (Throwable t) {
-                errorB.set(t);
-            }
-        });
-        threadA.start();
-        threadB.start();
-        threadA.join(10_000);
-        threadB.join(10_000);
-        assertThat(errorA.get()).isNull();
-        assertThat(errorB.get()).isNull();
+    private void runConcurrently(Runnable... tasks) throws InterruptedException {
+        CountDownLatch startLatch = new CountDownLatch(tasks.length);
+        AtomicReference<Throwable> error = new AtomicReference<>();
+        List<Thread> threads = new java.util.ArrayList<>();
+        for (Runnable task : tasks) {
+            threads.add(new Thread(() -> {
+                startLatch.countDown();
+                try {
+                    startLatch.await();
+                    task.run();
+                } catch (Throwable t) {
+                    error.compareAndSet(null, t);
+                }
+            }));
+        }
+        threads.forEach(Thread::start);
+        for (Thread thread : threads) {
+            thread.join(10_000);
+        }
+        assertThat(error.get()).isNull();
     }
 
     /**
