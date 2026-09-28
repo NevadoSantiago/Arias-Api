@@ -21,6 +21,7 @@ import com.arias.users.UserRepository;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -224,6 +225,84 @@ class OrderNotificationSchedulerTest {
         assertThat(published.get(0).orderId()).isEqualTo(placed.id());
         assertThat(published.get(0).userEmail()).isEqualTo(user.getEmail());
         assertThat(published.get(0).creditTotal()).isEqualTo(2);
+    }
+
+    // ─── Cancelación por corte de un pedido sin pagar (unidad B8) ───────────
+
+    @Test
+    @DisplayName("onUnpaidOrderCancelled(): avisa SOLO al cliente — pedido, día y hora, sin pago registrado y almuerzos disponibles")
+    void cancelacionPorCorteAvisaSoloAlCliente() {
+        User admin = persistSuperAdmin();
+        // 10/03 12:00 ART (martes)
+        OrderUnpaidCancelledEvent event = new OrderUnpaidCancelledEvent(
+            42L, 7L, "cliente-sin-pago@test.arias.com", "Cliente <b>",
+            Instant.parse("2026-03-10T15:00:00Z"));
+
+        scheduler.onUnpaidOrderCancelled(event);
+
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> html = ArgumentCaptor.forClass(String.class);
+        verify(emailService).send(eq("cliente-sin-pago@test.arias.com"), subject.capture(), html.capture());
+        assertThat(subject.getValue()).contains("#42");
+        assertThat(html.getValue())
+            .contains("#42")
+            .contains("martes")
+            .contains("12:00")
+            .contains("Mercado Pago")
+            .contains("almuerzos disponibles")
+            .contains("Cliente &lt;b&gt;")
+            .doesNotContain("crédito");
+        verify(emailService, never()).send(eq(admin.getEmail()), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("onUnpaidOrderCancelled(): sin email del cliente no manda nada")
+    void cancelacionPorCorteSinEmailNoManda() {
+        scheduler.onUnpaidOrderCancelled(new OrderUnpaidCancelledEvent(
+            42L, 7L, " ", "Cliente", FIXED_NOW.plus(2, ChronoUnit.HOURS)));
+
+        verify(emailService, never()).send(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("closeForPaymentFailure(): NO publica evento de mail (rechazo/expiración de MP y cancelación de sistema no avisan)")
+    void cierrePorFalloDePagoNoPublicaEventoDeMail(ApplicationEvents events) {
+        Order order = persistOrder(persistCustomer(), FIXED_NOW.plus(2, ChronoUnit.HOURS), OrderEstado.PENDIENTE_PAGO, 5);
+
+        orderPlacementService.closeForPaymentFailure(order.getId());
+
+        assertThat(orderRepo.findById(order.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(events.stream(OrderUnpaidCancelledEvent.class)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("closeAtCutoff(): cancela el pedido PENDIENTE_PAGO y publica el evento de mail una vez")
+    void cierreEnElCortePublicaElEvento(ApplicationEvents events) {
+        User user = persistCustomer();
+        Instant pickupAt = FIXED_NOW.plus(2, ChronoUnit.HOURS);
+        Order order = persistOrder(user, pickupAt, OrderEstado.PENDIENTE_PAGO, 5);
+
+        orderPlacementService.closeAtCutoff(order.getId());
+
+        assertThat(orderRepo.findById(order.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        List<OrderUnpaidCancelledEvent> published = events.stream(OrderUnpaidCancelledEvent.class).toList();
+        assertThat(published).hasSize(1);
+        assertThat(published.get(0).orderId()).isEqualTo(order.getId());
+        assertThat(published.get(0).userEmail()).isEqualTo(user.getEmail());
+        assertThat(published.get(0).pickupAt()).isEqualTo(pickupAt);
+        // El pedido nunca comprometió almuerzos: tampoco sale el mail de "cancelaste tu pedido".
+        assertThat(events.stream(OrderCancelledEvent.class)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("closeAtCutoff(): idempotente — si el pedido ya no está PENDIENTE_PAGO no cambia nada ni publica evento")
+    void cierreEnElCorteEsIdempotente(ApplicationEvents events) {
+        Order paid = persistOrder(persistCustomer(), FIXED_NOW.plus(2, ChronoUnit.HOURS), OrderEstado.PENDIENTE, 5);
+
+        orderPlacementService.closeAtCutoff(paid.getId());
+
+        assertThat(orderRepo.findById(paid.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.PENDIENTE);
+        assertThat(events.stream(OrderUnpaidCancelledEvent.class)).isEmpty();
     }
 
     // ─── Recordatorio de retiro ─────────────────────────────────────────────

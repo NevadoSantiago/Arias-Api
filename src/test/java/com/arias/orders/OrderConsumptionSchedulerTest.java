@@ -11,6 +11,7 @@ import com.arias.credits.CreditMovementRepository;
 import com.arias.credits.CreditWallet;
 import com.arias.credits.CreditWalletRepository;
 import com.arias.credits.MovementType;
+import com.arias.orders.notifications.OrderUnpaidCancelledEvent;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -23,6 +24,8 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
@@ -41,6 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
 @Transactional
+@RecordApplicationEvents
 @Import(OrderConsumptionSchedulerTest.FixedClockConfig.class)
 class OrderConsumptionSchedulerTest {
 
@@ -247,5 +251,21 @@ class OrderConsumptionSchedulerTest {
         Order unchanged = orderRepo.findById(notYetDue.getId()).orElseThrow();
         assertThat(unchanged.getEstado()).isEqualTo(OrderEstado.PENDIENTE_PAGO);
         assertThat(unchanged.getCancelledAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("consumeDueOrders(): al cancelar un PENDIENTE_PAGO en el corte publica el evento de mail al cliente")
+    void consumeDueOrdersAvisaAlClienteDelPedidoSinPagar(ApplicationEvents events) {
+        User user = persistUser();
+        Order due = persistOrder(user, FIXED_NOW.plus(10, ChronoUnit.MINUTES), OrderEstado.PENDIENTE_PAGO, 5);
+        Order notYetDue = persistOrder(user, FIXED_NOW.plus(30, ChronoUnit.MINUTES), OrderEstado.PENDIENTE_PAGO, 5);
+
+        scheduler.consumeDueOrders();
+
+        List<OrderUnpaidCancelledEvent> published = events.stream(OrderUnpaidCancelledEvent.class).toList();
+        assertThat(published).hasSize(1);
+        assertThat(published.get(0).orderId()).isEqualTo(due.getId());
+        assertThat(published.get(0).userEmail()).isEqualTo(user.getEmail());
+        assertThat(orderRepo.findById(notYetDue.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.PENDIENTE_PAGO);
     }
 }

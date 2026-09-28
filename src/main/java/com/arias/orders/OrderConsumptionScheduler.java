@@ -66,11 +66,12 @@ public class OrderConsumptionScheduler {
 
         // Pedidos esperando pago directo cuyo corte llegó sin que Mercado
         // Pago haya resuelto el pago todavía (unidad B7) — se cancelan por el
-        // mismo camino que un pago rechazado (closeForPaymentFailure):
-        // restaura stock, NUNCA libera créditos (nunca se comprometieron).
+        // mismo cierre que un pago rechazado (closeAtCutoff): restaura
+        // stock, NUNCA libera créditos (nunca se comprometieron) y, solo en
+        // este camino, avisa al cliente por mail (unidad B8).
         List<Order> unpaidDue = orderRepo.findByEstadoAndPickupAtLessThanEqual(OrderEstado.PENDIENTE_PAGO, cutoff);
         for (Order order : unpaidDue) {
-            orderPlacementService.closeForPaymentFailure(order.getId());
+            orderPlacementService.closeAtCutoff(order.getId());
         }
 
         if (!due.isEmpty()) {

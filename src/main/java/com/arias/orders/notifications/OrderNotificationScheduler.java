@@ -129,6 +129,17 @@ public class OrderNotificationScheduler {
     }
 
     /**
+     * Aviso al cliente cuando el corte cancela su pedido sin pagar (unidad
+     * B8) — solo corre si la transacción que publicó el evento commiteó.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onUnpaidOrderCancelled(OrderUnpaidCancelledEvent event) {
+        emails.sendUnpaidOrderCancelled(event);
+        log.info("[EVENT-UNPAID-CANCEL] Pedido #{} — aviso de cancelación por falta de pago enviado al cliente",
+            event.orderId());
+    }
+
+    /**
      * Recordatorio de retiro — chequea cada minuto los pedidos cuyo punto de
      * recordatorio ({@code pickup_at - pickup_reminder_minutes}) ya llegó,
      * excluye {@code CANCELADO} y dedupea por pedido vía claim atómico.

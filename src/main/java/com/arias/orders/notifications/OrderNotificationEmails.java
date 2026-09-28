@@ -1,5 +1,6 @@
 package com.arias.orders.notifications;
 
+import com.arias.email.EmailProperties;
 import com.arias.email.EmailService;
 import com.arias.orders.Order;
 import com.arias.orders.OrderItem;
@@ -13,6 +14,7 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
@@ -29,8 +31,11 @@ public class OrderNotificationEmails {
 
     private static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
     private static final DateTimeFormatter HORA = DateTimeFormatter.ofPattern("HH:mm");
+    private static final DateTimeFormatter DIA =
+        DateTimeFormatter.ofPattern("EEEE d 'de' MMMM", Locale.forLanguageTag("es-AR"));
 
     private final EmailService emailService;
+    private final EmailProperties props;
 
     /** Resumen matutino a los administradores — pedidos del día agrupados por horario de retiro. */
     public void sendDailySummary(List<User> admins, LocalDate fecha, List<Order> orders) {
@@ -95,6 +100,29 @@ public class OrderNotificationEmails {
             String htmlCliente = buildHtml("Cancelaste tu pedido", introCliente);
             emailService.send(event.userEmail(), "Cancelaste tu pedido #" + event.orderId() + " — Arias", htmlCliente);
         }
+    }
+
+    /**
+     * Aviso al cliente (unidad B8): el corte canceló su pedido porque el pago
+     * de Mercado Pago no se registró a tiempo. Si el pago se acredita después,
+     * los almuerzos quedan disponibles en su cuenta.
+     */
+    public void sendUnpaidOrderCancelled(OrderUnpaidCancelledEvent event) {
+        if (event.userEmail() == null || event.userEmail().isBlank()) return;
+
+        var pickup = event.pickupAt().atZone(ZONE);
+        String dia = pickup.format(DIA);
+        String hora = pickup.format(HORA);
+        String nombre = HtmlUtils.htmlEscape(event.userDisplayName());
+
+        String intro = """
+            <p style="line-height: 1.6; margin: 0 0 16px;">Hola %s, cancelamos tu pedido #%d (retiro el %s a las <strong>%s</strong>) porque no registramos el pago de Mercado Pago antes del horario de corte.</p>
+            <p style="line-height: 1.6; margin: 0 0 24px;">Si el pago se acredita más tarde, no lo perdés: tus almuerzos disponibles quedan en tu cuenta para usarlos en otro pedido.</p>
+            <a href="%s" style="display: inline-block; background: #c5191d; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; font-size: 13px;">Ver mis pedidos</a>
+            """.formatted(nombre, event.orderId(), dia, hora, props.appUrl());
+
+        emailService.send(event.userEmail(), "Cancelamos tu pedido #" + event.orderId() + " por falta de pago — Arias",
+            buildHtml("Tu pedido se canceló", intro));
     }
 
     /** Recordatorio de retiro al cliente. */

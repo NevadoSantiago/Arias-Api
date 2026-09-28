@@ -9,6 +9,7 @@ import com.arias.common.exception.BusinessException;
 import com.arias.credits.CreditLedgerService;
 import com.arias.credits.MovementRef;
 import com.arias.orders.notifications.OrderCancelledEvent;
+import com.arias.orders.notifications.OrderUnpaidCancelledEvent;
 import com.arias.payments.CreditPurchaseRepository;
 import com.arias.payments.PurchaseType;
 import com.arias.restaurantconfig.RestaurantConfigRepository;
@@ -304,6 +305,25 @@ public class OrderPlacementService {
      */
     @Transactional
     public void closeForPaymentFailure(Long orderId) {
+        closeAwaitingPayment(orderId, false);
+    }
+
+    /**
+     * Cierre de un pedido {@link OrderEstado#PENDIENTE_PAGO} en el corte
+     * ({@code pickup_at - lead}) — unidad B8. Igual que {@link
+     * #closeForPaymentFailure} (mismo lock, misma idempotencia, mismo cierre
+     * de stock) y, además, avisa al cliente por mail que el pago no se
+     * registró a tiempo y que, si se acredita después, los almuerzos quedan
+     * disponibles. Invocado SOLO por {@code OrderConsumptionScheduler}: el
+     * rechazo/expiración del pago y la cancelación del cliente no mandan este
+     * mail porque el cliente ya lo ve en la app.
+     */
+    @Transactional
+    public void closeAtCutoff(Long orderId) {
+        closeAwaitingPayment(orderId, true);
+    }
+
+    private void closeAwaitingPayment(Long orderId, boolean notifyCustomer) {
         // Relee bajo lock (unidad B7.1, hallazgo de revisión): el llamador
         // (OrderConsumptionScheduler) carga el pedido SIN lock antes de
         // invocar esto, y una aprobación de pago concurrente puede moverlo a
@@ -315,6 +335,14 @@ public class OrderPlacementService {
             return;
         }
         applyCancellation(order, clock.instant());
+
+        if (notifyCustomer) {
+            // Publicado DENTRO de la transacción; el mail sale AFTER_COMMIT
+            // (OrderNotificationScheduler#onUnpaidOrderCancelled).
+            User user = order.getUser();
+            eventPublisher.publishEvent(new OrderUnpaidCancelledEvent(
+                order.getId(), user.getId(), user.getEmail(), displayName(user), order.getPickupAt()));
+        }
     }
 
     /**
