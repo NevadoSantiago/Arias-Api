@@ -1,5 +1,11 @@
 package com.arias.orders;
 
+import com.arias.catalog.categories.Category;
+import com.arias.catalog.categories.CategoryRepository;
+import com.arias.catalog.dishes.Dish;
+import com.arias.catalog.dishes.DishRepository;
+import com.arias.catalog.menusections.MenuSection;
+import com.arias.catalog.menusections.MenuSectionRepository;
 import com.arias.credits.CreditMovement;
 import com.arias.credits.CreditMovementRepository;
 import com.arias.credits.CreditWallet;
@@ -8,6 +14,7 @@ import com.arias.credits.MovementType;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -63,6 +70,18 @@ class OrderConsumptionSchedulerTest {
 
     @Autowired
     private CreditMovementRepository movementRepo;
+
+    @Autowired
+    private CategoryRepository categoryRepo;
+
+    @Autowired
+    private MenuSectionRepository menuSectionRepo;
+
+    @Autowired
+    private DishRepository dishRepo;
+
+    @Autowired
+    private EntityManager entityManager;
 
     private User persistUser() {
         User user = User.builder()
@@ -167,5 +186,66 @@ class OrderConsumptionSchedulerTest {
         assertThat(unchanged.getEstado()).isEqualTo(OrderEstado.CANCELADO);
         assertThat(unchanged.getConfirmedAt()).isNull();
         assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
+    }
+
+    // ─── Unidad B7: pedidos PENDIENTE_PAGO sin pagar al corte se cancelan ───
+
+    @Test
+    @DisplayName("consumeDueOrders(): cancela (no confirma) un pedido PENDIENTE_PAGO cuyo pickup_at - lead <= now, restaura stock y no toca créditos")
+    void consumeDueOrdersCancelaPedidosSinPagarVencidos() {
+        User user = persistUser();
+        Category category = categoryRepo.save(Category.builder()
+            .nombre("Categoria-" + System.nanoTime()).ordenDisplay(0).enabled(true).creditCost(5).build());
+        MenuSection section = menuSectionRepo.save(MenuSection.builder()
+            .nombre("Seccion-" + System.nanoTime()).ordenDisplay(0).enabled(true).build());
+        Dish dish = dishRepo.save(Dish.builder()
+            .nombre("Plato-" + System.nanoTime())
+            .category(category)
+            .menuSection(section)
+            .enabled(true)
+            .especial(false)
+            .stockDiarioDefault(5)
+            .stockActual(4) // ya reservado por placeAwaitingPayment (unidad B7)
+            .build());
+
+        // pickup_at - lead(20) <= now  <=>  pickup_at <= now + 20 -> 10 min ya vencido
+        Order due = persistOrder(user, FIXED_NOW.plus(10, ChronoUnit.MINUTES), OrderEstado.PENDIENTE_PAGO, 5);
+        due.addItem(OrderItem.builder()
+            .dish(dish)
+            .dishNombre(dish.getNombre())
+            .dishCategoria(category.getNombre())
+            .creditCost(5)
+            .build());
+        orderRepo.save(due);
+
+        scheduler.consumeDueOrders();
+
+        entityManager.flush();
+        entityManager.clear();
+
+        Order updated = orderRepo.findById(due.getId()).orElseThrow();
+        assertThat(updated.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(updated.getCancelledAt()).isEqualTo(FIXED_NOW);
+        assertThat(updated.getConfirmedAt()).isNull();
+
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(5);
+
+        // Nunca se comprometieron créditos para un pedido PENDIENTE_PAGO —
+        // no hay nada que liberar ni consumir.
+        assertThat(walletRepo.findById(user.getId())).isEmpty();
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("consumeDueOrders(): no toca un pedido PENDIENTE_PAGO cuyo horario de retiro todavía respeta el lead")
+    void consumeDueOrdersIgnoraPendientePagoNoVencido() {
+        User user = persistUser();
+        Order notYetDue = persistOrder(user, FIXED_NOW.plus(30, ChronoUnit.MINUTES), OrderEstado.PENDIENTE_PAGO, 5);
+
+        scheduler.consumeDueOrders();
+
+        Order unchanged = orderRepo.findById(notYetDue.getId()).orElseThrow();
+        assertThat(unchanged.getEstado()).isEqualTo(OrderEstado.PENDIENTE_PAGO);
+        assertThat(unchanged.getCancelledAt()).isNull();
     }
 }

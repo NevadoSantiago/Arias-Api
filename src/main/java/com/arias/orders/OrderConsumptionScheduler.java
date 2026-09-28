@@ -28,6 +28,14 @@ import java.util.List;
  * forma determinística. Al volver, este job procesa TODO el atraso en el
  * primer tick porque la consulta es por {@code pickup_at}, no por "el minuto
  * actual".
+ *
+ * <p><b>Unidad B7</b>: el MISMO corte también cierra los pedidos {@code
+ * PENDIENTE_PAGO} (esperando el pago directo de Mercado Pago) que todavía no
+ * se resolvieron — "pago pendiente al momento de confirmar/preparar → se
+ * cancela". Se cancelan, no se confirman: nunca comprometieron créditos, así
+ * que no hay nada que consumir; si el pago se aprueba después de este cierre,
+ * {@code CreditPurchaseService} lo detecta (pedido ya {@code CANCELADO}) y
+ * acredita los almuerzos a {@code AVAILABLE} en vez de perderlos.
  */
 @Component
 @RequiredArgsConstructor
@@ -37,6 +45,7 @@ public class OrderConsumptionScheduler {
     private final OrderRepository orderRepo;
     private final CreditLedgerService creditLedgerService;
     private final RestaurantConfigRepository configRepo;
+    private final OrderPlacementService orderPlacementService;
     private final Clock clock;
 
     @Scheduled(cron = "30 * * * * *", zone = "America/Argentina/Buenos_Aires")
@@ -55,8 +64,20 @@ public class OrderConsumptionScheduler {
             order.setConfirmedAt(now);
         }
 
+        // Pedidos esperando pago directo cuyo corte llegó sin que Mercado
+        // Pago haya resuelto el pago todavía (unidad B7) — se cancelan por el
+        // mismo camino que un pago rechazado (closeForPaymentFailure):
+        // restaura stock, NUNCA libera créditos (nunca se comprometieron).
+        List<Order> unpaidDue = orderRepo.findByEstadoAndPickupAtLessThanEqual(OrderEstado.PENDIENTE_PAGO, cutoff);
+        for (Order order : unpaidDue) {
+            orderPlacementService.closeForPaymentFailure(order);
+        }
+
         if (!due.isEmpty()) {
             log.info("[CRON] Consumo automático de créditos: {} pedidos confirmados", due.size());
+        }
+        if (!unpaidDue.isEmpty()) {
+            log.info("[CRON] Cancelación automática de pedidos sin pagar: {} pedidos cancelados", unpaidDue.size());
         }
     }
 }
