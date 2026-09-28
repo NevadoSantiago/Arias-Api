@@ -54,4 +54,32 @@ public class OrderPlacementController {
         orderPlacementService.cancel(user.userId(), id);
         return ResponseEntity.noContent().build();
     }
+
+    /**
+     * Agrega ítems a un pedido existente mientras sea MODIFICABLE (unidad
+     * B6, pedido del usuario 2026-09-27). Ver {@link
+     * OrderPlacementService#addItems}.
+     */
+    @PostMapping("/{id}/items")
+    public OrderDto addItems(
+        @AuthenticationPrincipal JwtUser user,
+        @PathVariable Long id,
+        @Valid @RequestBody AddOrderItemsRequest req
+    ) {
+        return orderPlacementService.addItems(user.userId(), id, req);
+    }
+
+    /**
+     * Quita un ítem de un pedido existente mientras sea MODIFICABLE — si era
+     * el último, cancela el pedido entero (unidad B6). Ver {@link
+     * OrderPlacementService#removeItem}.
+     */
+    @DeleteMapping("/{id}/items/{itemId}")
+    public OrderDto removeItem(
+        @AuthenticationPrincipal JwtUser user,
+        @PathVariable Long id,
+        @PathVariable Long itemId
+    ) {
+        return orderPlacementService.removeItem(user.userId(), id, itemId);
+    }
 }

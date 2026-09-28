@@ -134,37 +134,9 @@ public class OrderPlacementService {
         int total = 0;
 
         for (PlaceOrderV2Request.OrderItemRequest itemReq : req.items()) {
-            Dish dish = dishRepo.findById(itemReq.dishId())
-                .orElseThrow(() -> BusinessException.notFound("dish-not-found", "Plato no encontrado"));
-
-            if (!Boolean.TRUE.equals(dish.getEnabled())) {
-                throw BusinessException.conflict("dish-disabled", "Ese plato no está disponible");
-            }
-
-            Side side = validateAndResolveSide(dish, itemReq.sideId());
-
-            // Decremento atómico ANTES de comprometer créditos — si se agotó,
-            // el pedido entero se rechaza sin haber tocado el libro mayor.
-            int updated = dishRepo.decrementStock(dish.getId());
-            if (updated == 0) {
-                throw BusinessException.conflict("out-of-stock",
-                    "Se agotó el stock de " + dish.getNombre());
-            }
-
-            Category category = dish.getCategory();
-            int creditCost = category.getCreditCost();
-            total += creditCost;
-
-            items.add(OrderItem.builder()
-                .dish(dish)
-                .side(side)
-                .category(category)
-                .dishNombre(dish.getNombre())
-                .dishCategoria(category.getNombre())
-                .sideNombre(side != null ? side.getNombre() : null)
-                .creditCost(creditCost)
-                .notas(trimOrNull(itemReq.notas()))
-                .build());
+            OrderItem item = buildItemAndReserveStock(itemReq);
+            total += item.getCreditCost();
+            items.add(item);
         }
 
         Order order = Order.builder()
@@ -239,6 +211,86 @@ public class OrderPlacementService {
         }
 
         applyCancellation(order, now);
+    }
+
+    /**
+     * Agrega ítems a un pedido existente (unidad B6, pedido del usuario
+     * 2026-09-27) — mientras el pedido sea MODIFICABLE, misma regla exacta
+     * que {@link #isCancellable}. Reutiliza {@link #buildItemAndReserveStock}
+     * — la MISMA validación de plato/guarnición/stock que {@link #place} — y
+     * comprometé los créditos de los ítems agregados con el mismo movimiento
+     * ({@code COMMIT}) que un pedido nuevo: si el saldo no alcanza, {@link
+     * CreditLedgerService#commit} lanza {@code insufficient-credits} dentro de
+     * la MISMA transacción, revirtiendo también el stock ya decrementado —
+     * ningún compromiso parcial es posible, igual que en {@link #place}.
+     */
+    @Transactional
+    public OrderDto addItems(Long userId, Long orderId, AddOrderItemsRequest req) {
+        Order order = orderRepo.findByIdAndUserId(orderId, userId)
+            .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
+
+        Instant now = clock.instant();
+        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
+        assertModifiable(order, now, lead);
+
+        if (req.items() == null || req.items().isEmpty()) {
+            throw BusinessException.badRequest("empty-order", "Debe agregar al menos un ítem");
+        }
+
+        int added = 0;
+        for (PlaceOrderV2Request.OrderItemRequest itemReq : req.items()) {
+            OrderItem item = buildItemAndReserveStock(itemReq);
+            added += item.getCreditCost();
+            order.addItem(item);
+        }
+
+        order.setCreditTotal(order.getCreditTotal() + added);
+        Order saved = orderRepo.save(order);
+
+        creditLedgerService.commit(userId, added,
+            MovementRef.forOrder(orderId, "Ítems agregados al pedido #" + orderId));
+
+        return OrderDto.from(saved, isCancellable(saved, now, lead));
+    }
+
+    /**
+     * Quita un ítem de un pedido existente (unidad B6) — mientras el pedido
+     * sea MODIFICABLE, misma regla que {@link #isCancellable}. Libera los
+     * créditos comprometidos de ESE ítem (RELEASE) y restaura su stock — el
+     * MISMO movimiento que hace {@link #applyCancellation} para el pedido
+     * completo, pero acotado al costo de un solo ítem.
+     *
+     * <p>Si era el ÚLTIMO ítem, quitarlo equivale a cancelar el pedido
+     * entero: se delega directamente en {@link #applyCancellation} (mismo
+     * cierre, mismos eventos/mails que {@link #cancel}) en vez de liberar el
+     * ítem y además cancelar por separado — así el crédito del pedido se
+     * libera EXACTAMENTE una vez.
+     */
+    @Transactional
+    public OrderDto removeItem(Long userId, Long orderId, Long itemId) {
+        Order order = orderRepo.findByIdAndUserId(orderId, userId)
+            .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
+
+        Instant now = clock.instant();
+        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
+        assertModifiable(order, now, lead);
+
+        OrderItem item = order.getItems().stream()
+            .filter(i -> i.getId().equals(itemId))
+            .findFirst()
+            .orElseThrow(() -> BusinessException.notFound("order-item-not-found", "Ítem no encontrado"));
+
+        if (order.getItems().size() == 1) {
+            applyCancellation(order, now);
+        } else {
+            dishRepo.incrementStock(item.getDish().getId());
+            creditLedgerService.release(userId, item.getCreditCost(),
+                MovementRef.forOrder(orderId, "Ítem removido del pedido #" + orderId));
+            order.getItems().remove(item);
+            order.setCreditTotal(order.getCreditTotal() - item.getCreditCost());
+        }
+
+        return OrderDto.from(order, isCancellable(order, now, lead));
     }
 
     /**
@@ -331,6 +383,60 @@ public class OrderPlacementService {
         }
         Instant deadline = order.getPickupAt().minus(leadMinutes, ChronoUnit.MINUTES);
         return now.isBefore(deadline);
+    }
+
+    /**
+     * Un pedido es MODIFICABLE exactamente cuando es cancelable — decisión de
+     * usuario 2026-09-27 (unidad B6): misma regla ({@link #isCancellable}),
+     * mismo par de razones subyacentes (estado distinto de {@code PENDIENTE},
+     * o dentro de {@code lead} minutos del retiro), pero un solo código de
+     * error para ambas — a diferencia de {@link #cancel}, que distingue
+     * {@code order-locked} de {@code cancel-window-closed}.
+     */
+    private static void assertModifiable(Order order, Instant now, int leadMinutes) {
+        if (!isCancellable(order, now, leadMinutes)) {
+            throw BusinessException.conflict("order-not-modifiable",
+                "El pedido ya no se puede modificar");
+        }
+    }
+
+    /**
+     * Valida un ítem exactamente como {@link #place} (plato habilitado,
+     * guarnición permitida) y reserva su stock atómicamente ANTES de que el
+     * llamador comprometa créditos — compartido por {@link #place} y {@link
+     * #addItems} para que ambos caminos nunca diverjan en esta validación.
+     */
+    private OrderItem buildItemAndReserveStock(PlaceOrderV2Request.OrderItemRequest itemReq) {
+        Dish dish = dishRepo.findById(itemReq.dishId())
+            .orElseThrow(() -> BusinessException.notFound("dish-not-found", "Plato no encontrado"));
+
+        if (!Boolean.TRUE.equals(dish.getEnabled())) {
+            throw BusinessException.conflict("dish-disabled", "Ese plato no está disponible");
+        }
+
+        Side side = validateAndResolveSide(dish, itemReq.sideId());
+
+        // Decremento atómico ANTES de comprometer créditos — si se agotó, el
+        // pedido/agregado entero se rechaza sin haber tocado el libro mayor.
+        int updated = dishRepo.decrementStock(dish.getId());
+        if (updated == 0) {
+            throw BusinessException.conflict("out-of-stock",
+                "Se agotó el stock de " + dish.getNombre());
+        }
+
+        Category category = dish.getCategory();
+        int creditCost = category.getCreditCost();
+
+        return OrderItem.builder()
+            .dish(dish)
+            .side(side)
+            .category(category)
+            .dishNombre(dish.getNombre())
+            .dishCategoria(category.getNombre())
+            .sideNombre(side != null ? side.getNombre() : null)
+            .creditCost(creditCost)
+            .notas(trimOrNull(itemReq.notas()))
+            .build();
     }
 
     private Side validateAndResolveSide(Dish dish, Long sideId) {

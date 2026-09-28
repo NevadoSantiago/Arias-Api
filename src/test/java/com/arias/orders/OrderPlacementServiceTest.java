@@ -9,8 +9,11 @@ import com.arias.catalog.menusections.MenuSectionRepository;
 import com.arias.common.exception.BusinessException;
 import com.arias.companies.Company;
 import com.arias.companies.CompanyRepository;
+import com.arias.credits.CreditMovement;
+import com.arias.credits.CreditMovementRepository;
 import com.arias.credits.CreditWallet;
 import com.arias.credits.CreditWalletRepository;
+import com.arias.credits.MovementType;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -97,6 +100,9 @@ class OrderPlacementServiceTest {
 
     @Autowired
     private CreditWalletRepository walletRepo;
+
+    @Autowired
+    private CreditMovementRepository movementRepo;
 
     /** Ver el comentario equivalente en {@code OrderServiceCompanyFlowTest}: los
      *  UPDATE en bloque de {@code DishRepository} no refrescan el first-level
@@ -668,5 +674,307 @@ class OrderPlacementServiceTest {
         OrderDto found = orders.stream().filter(o -> o.id().equals(placed.id())).findFirst().orElseThrow();
         assertThat(found.estado()).isEqualTo(OrderEstado.CANCELADO);
         assertThat(found.cancellable()).isFalse();
+    }
+
+    // ─── B6: modify an existing order (add/remove items) ──────────────────
+
+    private AddOrderItemsRequest addItemsRequest(Long dishId) {
+        return new AddOrderItemsRequest(
+            List.of(new PlaceOrderV2Request.OrderItemRequest(dishId, null, null)));
+    }
+
+    @Test
+    @DisplayName("addItems(): grows creditTotal, commits credits for the added items, decrements stock and records a movement")
+    void addItemsGrowsTotalCommitsCreditsAndDecrementsStock() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishA.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        assertThat(placed.creditTotal()).isEqualTo(2);
+
+        OrderDto updated = orderPlacementService.addItems(user.getId(), placed.id(), addItemsRequest(dishB.getId()));
+
+        assertThat(updated.creditTotal()).isEqualTo(4);
+        assertThat(updated.items()).hasSize(2);
+
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(6);
+        assertThat(wallet.getCommitted()).isEqualTo(4);
+
+        entityManager.clear();
+        assertThat(dishRepo.findById(dishB.getId()).orElseThrow().getStockActual()).isEqualTo(4);
+
+        List<CreditMovement> movements = movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId());
+        CreditMovement last = movements.get(0);
+        assertThat(last.getType()).isEqualTo(MovementType.COMMIT);
+        assertThat(last.getOrderId()).isEqualTo(placed.id());
+        assertThat(last.getDeltaCommitted()).isEqualTo(2);
+    }
+
+    @Test
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    @DisplayName("addItems(): insufficient balance rejects with the same error as placing — nothing changes")
+    void addItemsRechazaPorSaldoInsuficienteSinTocarNada() {
+        Category category = persistCategory(3);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 3); // exactamente el costo del primer ítem
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishA.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+
+        try {
+            assertThatThrownBy(() -> orderPlacementService.addItems(user.getId(), placed.id(), addItemsRequest(dishB.getId())))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("errorCode", "insufficient-credits");
+
+            entityManager.clear();
+            assertThat(dishRepo.findById(dishB.getId()).orElseThrow().getStockActual()).isEqualTo(5);
+            assertThat(orderRepo.findById(placed.id()).orElseThrow().getCreditTotal()).isEqualTo(3);
+
+            CreditWallet wallet = walletRepo.findById(user.getId()).orElseThrow();
+            assertThat(wallet.getAvailable()).isZero();
+            assertThat(wallet.getCommitted()).isEqualTo(3);
+        } finally {
+            // A diferencia del test equivalente de place(), acá el COMMIT de
+            // place() SÍ llegó a persistirse (esta prueba solo falla en el
+            // segundo llamado, addItems()) — credit_movement.user_id tiene FK
+            // a users, así que hay que borrar el movimiento antes que el
+            // usuario o la limpieza misma revienta.
+            orderRepo.findById(placed.id()).ifPresent(orderRepo::delete);
+            movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId()).forEach(movementRepo::delete);
+            walletRepo.findById(user.getId()).ifPresent(walletRepo::delete);
+            userRepo.delete(user);
+            dishRepo.delete(dishA);
+            dishRepo.delete(dishB);
+            categoryRepo.delete(category);
+            menuSectionRepo.delete(section);
+        }
+    }
+
+    @Test
+    @DisplayName("addItems(): an unavailable dish rejects with the same error as placing")
+    void addItemsRechazaPlatoDeshabilitado() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        dishB.setEnabled(false);
+        dishRepo.save(dishB);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishA.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+
+        assertThatThrownBy(() -> orderPlacementService.addItems(user.getId(), placed.id(), addItemsRequest(dishB.getId())))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "dish-disabled");
+    }
+
+    @Test
+    @DisplayName("addItems(): rejects on a non-modifiable order — past the cancellation deadline")
+    void addItemsRechazaPedidoNoModificablePorVentanaCerrada() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        // Deadline exactamente en "ahora" — mismo límite que cancelRechazaFueraDeVentana.
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishA.getId(), FIXED_NOW.plus(20, ChronoUnit.MINUTES)));
+
+        assertThatThrownBy(() -> orderPlacementService.addItems(user.getId(), placed.id(), addItemsRequest(dishB.getId())))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-modifiable");
+    }
+
+    @Test
+    @DisplayName("addItems(): rejects on a non-modifiable order — already CONFIRMADO")
+    void addItemsRechazaPedidoConfirmado() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishA.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        Order order = orderRepo.findById(placed.id()).orElseThrow();
+        order.setEstado(OrderEstado.CONFIRMADO);
+        orderRepo.save(order);
+
+        assertThatThrownBy(() -> orderPlacementService.addItems(user.getId(), placed.id(), addItemsRequest(dishB.getId())))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-modifiable");
+    }
+
+    @Test
+    @DisplayName("addItems(): a non-owner is rejected exactly like cancelling someone else's order")
+    void addItemsRechazaSiNoEsElDueño() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User owner = persistB2cUser();
+        User stranger = persistB2cUser();
+        seedWallet(owner.getId(), 10);
+        seedWallet(stranger.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(owner.getId(),
+            singleItemRequest(dishA.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+
+        assertThatThrownBy(() -> orderPlacementService.addItems(stranger.getId(), placed.id(), addItemsRequest(dishB.getId())))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-found");
+    }
+
+    @Test
+    @DisplayName("removeItem(): releases credits, restores stock and lowers creditTotal — not the last item")
+    void removeItemLiberaCreditosYRestauraStockSinCancelar() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        PlaceOrderV2Request req = new PlaceOrderV2Request(
+            List.of(
+                new PlaceOrderV2Request.OrderItemRequest(dishA.getId(), null, null),
+                new PlaceOrderV2Request.OrderItemRequest(dishB.getId(), null, null)
+            ),
+            FIXED_NOW.plus(90, ChronoUnit.MINUTES),
+            null
+        );
+        OrderDto placed = orderPlacementService.place(user.getId(), req);
+        assertThat(placed.creditTotal()).isEqualTo(4);
+        Long itemBId = placed.items().stream()
+            .filter(i -> i.dishId().equals(dishB.getId())).findFirst().orElseThrow().id();
+
+        OrderDto updated = orderPlacementService.removeItem(user.getId(), placed.id(), itemBId);
+
+        assertThat(updated.creditTotal()).isEqualTo(2);
+        assertThat(updated.items()).hasSize(1);
+        assertThat(updated.estado()).isEqualTo(OrderEstado.PENDIENTE);
+
+        // flush() antes de clear(): el UPDATE de credit_wallet dentro de
+        // CreditLedgerService.apply() queda pendiente por dirty-checking
+        // (mismo motivo documentado en cancelDentroDeVentanaLiberaCreditosYRestauraStock).
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dishB.getId()).orElseThrow().getStockActual()).isEqualTo(5);
+
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(8);
+        assertThat(wallet.getCommitted()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("removeItem(): removing the last item cancels the whole order — released exactly once")
+    void removeItemUltimoItemCancelaElPedido() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 3);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        Long itemId = placed.items().get(0).id();
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(2);
+
+        OrderDto updated = orderPlacementService.removeItem(user.getId(), placed.id(), itemId);
+
+        assertThat(updated.estado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(updated.cancellable()).isFalse();
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(3);
+
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(10);
+        assertThat(wallet.getCommitted()).isZero();
+
+        List<CreditMovement> releases = movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId()).stream()
+            .filter(m -> m.getType() == MovementType.RELEASE)
+            .toList();
+        assertThat(releases).hasSize(1);
+        assertThat(releases.get(0).getDeltaCommitted()).isEqualTo(-2);
+
+        Order cancelled = orderRepo.findById(placed.id()).orElseThrow();
+        assertThat(cancelled.getCancelledAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("removeItem(): rejects on a non-modifiable order")
+    void removeItemRechazaPedidoNoModificable() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 3);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(20, ChronoUnit.MINUTES)));
+        Long itemId = placed.items().get(0).id();
+
+        assertThatThrownBy(() -> orderPlacementService.removeItem(user.getId(), placed.id(), itemId))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-modifiable");
+    }
+
+    @Test
+    @DisplayName("removeItem(): a non-owner is rejected exactly like cancelling someone else's order")
+    void removeItemRechazaSiNoEsElDueño() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 3);
+        User owner = persistB2cUser();
+        User stranger = persistB2cUser();
+        seedWallet(owner.getId(), 10);
+        seedWallet(stranger.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(owner.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        Long itemId = placed.items().get(0).id();
+
+        assertThatThrownBy(() -> orderPlacementService.removeItem(stranger.getId(), placed.id(), itemId))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-found");
+    }
+
+    @Test
+    @DisplayName("removeItem(): an itemId from another order is rejected with 404")
+    void removeItemRechazaItemDeOtroPedido() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto orderOne = orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        OrderDto orderTwo = orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        Long itemFromOrderTwo = orderTwo.items().get(0).id();
+
+        assertThatThrownBy(() -> orderPlacementService.removeItem(user.getId(), orderOne.id(), itemFromOrderTwo))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-item-not-found");
     }
 }
