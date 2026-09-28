@@ -385,19 +385,38 @@ public class CreditPurchaseService {
      *       pedido cancelado se deja exactamente como está, nunca se
      *       reabre.</li>
      * </ul>
+     *
+     * <p><b>Lock del pedido</b> (unidad B7.1, hallazgo de revisión): leer
+     * {@code purchase.getOrder().getEstado()} sin bloquear la fila corría en
+     * paralelo con {@link OrderPlacementService#cancel} y el corte de {@code
+     * OrderConsumptionScheduler} — ambos pueden cancelar este MISMO pedido
+     * mientras esta aprobación decide, y esta rama podía leer una foto vieja
+     * (pedido CANCELADO con créditos igual comprometidos, o pedido PENDIENTE
+     * con el stock ya restaurado por la cancelación). Por eso acá se bloquea
+     * el pedido con {@link OrderRepository#findByIdForUpdate} ANTES de leer
+     * su estado. Orden de locks: compra (YA bloqueada arriba por {@link
+     * #applySnapshot} vía {@code findByIdForUpdate}) → pedido → billetera —
+     * ni {@code cancel} ni {@code closeForPaymentFailure} bloquean nunca la
+     * compra, así que no hay ciclo nuevo de deadlock con este lock extra.
      */
     private void creditApprovedPurchase(CreditPurchase purchase) {
-        if (purchase.getType() == PurchaseType.DIRECT && purchase.getOrder() != null
-            && purchase.getOrder().getEstado() == OrderEstado.CANCELADO) {
+        if (purchase.getType() != PurchaseType.DIRECT || purchase.getOrder() == null) {
+            creditPurchase(purchase);
+            return;
+        }
+
+        Order order = orderRepo.findByIdForUpdate(purchase.getOrder().getId())
+            .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
+
+        if (order.getEstado() == OrderEstado.CANCELADO) {
             creditAsRefundToAvailable(purchase);
             return;
         }
 
         creditPurchase(purchase);
 
-        if (purchase.getType() == PurchaseType.DIRECT && purchase.getOrder() != null
-            && purchase.getOrder().getEstado() == OrderEstado.PENDIENTE_PAGO) {
-            purchase.getOrder().setEstado(OrderEstado.PENDIENTE);
+        if (order.getEstado() == OrderEstado.PENDIENTE_PAGO) {
+            order.setEstado(OrderEstado.PENDIENTE);
         }
     }
 
@@ -485,7 +504,7 @@ public class CreditPurchaseService {
      */
     private void closeAssociatedOrderIfDirect(CreditPurchase purchase) {
         if (purchase.getType() == PurchaseType.DIRECT && purchase.getOrder() != null) {
-            orderPlacementService.closeForPaymentFailure(purchase.getOrder());
+            orderPlacementService.closeForPaymentFailure(purchase.getOrder().getId());
         }
     }
 

@@ -70,7 +70,7 @@ public class OrderConsumptionScheduler {
         // restaura stock, NUNCA libera créditos (nunca se comprometieron).
         List<Order> unpaidDue = orderRepo.findByEstadoAndPickupAtLessThanEqual(OrderEstado.PENDIENTE_PAGO, cutoff);
         for (Order order : unpaidDue) {
-            orderPlacementService.closeForPaymentFailure(order);
+            orderPlacementService.closeForPaymentFailure(order.getId());
         }
 
         if (!due.isEmpty()) {

@@ -19,6 +19,7 @@ import com.arias.credits.packs.CreditPackRepository;
 import com.arias.orders.Order;
 import com.arias.orders.OrderEstado;
 import com.arias.orders.OrderItem;
+import com.arias.orders.OrderPlacementService;
 import com.arias.orders.OrderRepository;
 import com.arias.users.Role;
 import com.arias.users.User;
@@ -29,13 +30,18 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -64,6 +70,12 @@ class CreditPurchaseServiceTest {
 
     @Autowired
     private OrderRepository orderRepo;
+
+    @Autowired
+    private OrderPlacementService orderPlacementService;
+
+    @Autowired
+    private PlatformTransactionManager txManager;
 
     @Autowired
     private UserRepository userRepo;
@@ -854,5 +866,168 @@ class CreditPurchaseServiceTest {
             .filter(m -> m.getType() == MovementType.PACK_PURCHASE)
             .count();
         assertThat(packPurchaseMovements).isEqualTo(1); // no extra movement from the second APPROVED
+    }
+
+    // ─── B7.1 (revisión): concurrencia real en creditApprovedPurchase() ────
+    //
+    // Sin lock, creditApprovedPurchase() leía purchase.getOrder().getEstado()
+    // con un SELECT plano. Un cancel() del cliente o el corte del scheduler
+    // pueden cancelar el MISMO pedido en paralelo con la aprobación, y esa
+    // lectura sin lock podía decidir sobre una foto vieja: pedido CANCELADO
+    // con créditos igual comprometidos (nunca liberados), o pedido PENDIENTE
+    // con el stock ya restaurado por la cancelación.
+    //
+    // Fix: creditApprovedPurchase() ahora bloquea el pedido con
+    // OrderRepository#findByIdForUpdate ANTES de decidir, y
+    // OrderPlacementService#closeForPaymentFailure (la misma operación que
+    // OrderConsumptionScheduler ejecuta por pedido) relee bajo el MISMO lock.
+    // Mismo patrón de dos hilos reales que
+    // OrderPlacementServiceTest#removeItemConcurrenteSerializaBajoElLock...:
+    // NOT_SUPPORTED suspende la transacción de test para que cada llamada
+    // abra su propia transacción física, visible entre conexiones.
+    //
+    // Nota de honestidad: la carrera en sí (qué hilo llega primero al lock)
+    // depende del scheduler del SO/JDBC y no está forzada con ningún latch
+    // dentro del código bajo prueba, así que el RED no está 100% garantizado
+    // en cada corrida — se observó al ejecutar contra el código sin lock. El
+    // GREEN es determinístico: bajo el lock, el resultado siempre cae en una
+    // de las dos ramas válidas del invariante de abajo, nunca en la
+    // combinación inválida.
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    @DisplayName("creditApprovedPurchase(): aprobación concurrente con cancel() del cliente nunca deja CANCELADO con créditos comprometidos ni PENDIENTE con stock restaurado")
+    void approvalConcurrenteConCancelDelClienteRespetaElInvariante() throws Exception {
+        User user = persistUserForRaceTest("race-approve-cancel");
+        Dish dish = persistDishWithStock(5);
+        Order order = new TransactionTemplate(txManager).execute(s -> persistOrderAwaitingPayment(user, dish, 2));
+        CreditPurchase purchase = persistDirectPurchase(user, order, 2, 2_000L);
+        PaymentSnapshot approved = new PaymentSnapshot("mp-race-cancel", PaymentStatus.APPROVED,
+            "accredited", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L);
+
+        try {
+            runConcurrently(
+                () -> purchaseService.applySnapshot(approved),
+                () -> orderPlacementService.cancel(user.getId(), order.getId()));
+
+            assertOrderApprovalRaceInvariant(order.getId(), user.getId(), dish.getId(), 2, 5, 4);
+        } finally {
+            cleanupRaceTestData(user, order, dish);
+        }
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    @DisplayName("creditApprovedPurchase(): aprobación concurrente con el corte del scheduler nunca deja CANCELADO con créditos comprometidos ni PENDIENTE con stock restaurado")
+    void approvalConcurrenteConElCorteDelSchedulerRespetaElInvariante() throws Exception {
+        User user = persistUserForRaceTest("race-approve-scheduler");
+        Dish dish = persistDishWithStock(3);
+        Order order = new TransactionTemplate(txManager).execute(s -> persistOrderAwaitingPayment(user, dish, 1));
+        CreditPurchase purchase = persistDirectPurchase(user, order, 1, 1_000L);
+        PaymentSnapshot approved = new PaymentSnapshot("mp-race-scheduler", PaymentStatus.APPROVED,
+            "accredited", purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L);
+
+        try {
+            // Misma operación que OrderConsumptionScheduler.consumeDueOrders()
+            // ejecuta por pedido tras el fix.
+            runConcurrently(
+                () -> purchaseService.applySnapshot(approved),
+                () -> orderPlacementService.closeForPaymentFailure(order.getId()));
+
+            assertOrderApprovalRaceInvariant(order.getId(), user.getId(), dish.getId(), 1, 3, 2);
+        } finally {
+            cleanupRaceTestData(user, order, dish);
+        }
+    }
+
+    /**
+     * {@link #persistUser}, pero con el teléfono derivado de {@code
+     * System.nanoTime()} en vez del contador estático {@code PHONE_SEQ}: los
+     * dos tests de arriba corren con {@code Propagation.NOT_SUPPORTED} (cada
+     * llamada hace su COMMIT real, sin el rollback de {@code @Transactional}
+     * de la clase), así que sus filas sobreviven entre corridas — y {@code
+     * PHONE_SEQ} arranca de nuevo en 0 en cada JVM, chocando con el teléfono
+     * ya commiteado por una corrida anterior.
+     */
+    private User persistUserForRaceTest(String prefix) {
+        long nanos = System.nanoTime();
+        User user = User.builder()
+            .email(prefix + "-" + nanos + "@test.arias.com")
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .emailVerifiedAt(Instant.now())
+            .phone("+549" + (1_000_000_000L + (nanos % 900_000_000L)))
+            .nickname("Apodo-" + nanos)
+            .build();
+        return userRepo.save(user);
+    }
+
+    /** Limpieza manual — necesaria porque estos tests commitean de verdad (ver {@link #persistUserForRaceTest}). */
+    private void cleanupRaceTestData(User user, Order order, Dish dish) {
+        movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId()).forEach(movementRepo::delete);
+        walletRepo.findById(user.getId()).ifPresent(walletRepo::delete);
+        purchaseRepo.findByOrderIdAndType(order.getId(), PurchaseType.DIRECT).ifPresent(purchaseRepo::delete);
+        orderRepo.findById(order.getId()).ifPresent(orderRepo::delete);
+        userRepo.delete(user);
+        Dish reloaded = dishRepo.findById(dish.getId()).orElseThrow();
+        dishRepo.delete(reloaded);
+        categoryRepo.delete(reloaded.getCategory());
+        menuSectionRepo.delete(reloaded.getMenuSection());
+    }
+
+    private void runConcurrently(Runnable a, Runnable b) throws InterruptedException {
+        CountDownLatch startLatch = new CountDownLatch(2);
+        AtomicReference<Throwable> errorA = new AtomicReference<>();
+        AtomicReference<Throwable> errorB = new AtomicReference<>();
+        Thread threadA = new Thread(() -> {
+            startLatch.countDown();
+            try {
+                startLatch.await();
+                a.run();
+            } catch (Throwable t) {
+                errorA.set(t);
+            }
+        });
+        Thread threadB = new Thread(() -> {
+            startLatch.countDown();
+            try {
+                startLatch.await();
+                b.run();
+            } catch (Throwable t) {
+                errorB.set(t);
+            }
+        });
+        threadA.start();
+        threadB.start();
+        threadA.join(10_000);
+        threadB.join(10_000);
+        assertThat(errorA.get()).isNull();
+        assertThat(errorB.get()).isNull();
+    }
+
+    /**
+     * Único invariante válido tras la carrera, sin importar qué hilo ganó:
+     * o el pedido quedó PENDIENTE con los créditos comprometidos EXACTAMENTE
+     * una vez y el stock todavía reservado, o quedó CANCELADO con los
+     * créditos reembolsados a AVAILABLE y el stock totalmente restaurado.
+     * NUNCA CANCELADO con créditos comprometidos, NUNCA PENDIENTE con el
+     * stock ya restaurado.
+     */
+    private void assertOrderApprovalRaceInvariant(
+        Long orderId, Long userId, Long dishId, int creditTotal, int fullStock, int reservedStock) {
+        Order finalOrder = orderRepo.findById(orderId).orElseThrow();
+        CreditWallet wallet = walletRepo.findById(userId).orElseThrow();
+        int stock = dishRepo.findById(dishId).orElseThrow().getStockActual();
+
+        if (finalOrder.getEstado() == OrderEstado.PENDIENTE) {
+            assertThat(wallet.getCommitted()).isEqualTo(creditTotal);
+            assertThat(wallet.getAvailable()).isZero();
+            assertThat(stock).isEqualTo(reservedStock);
+        } else {
+            assertThat(finalOrder.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+            assertThat(wallet.getCommitted()).isZero();
+            assertThat(wallet.getAvailable()).isEqualTo(creditTotal);
+            assertThat(stock).isEqualTo(fullStock);
+        }
     }
 }

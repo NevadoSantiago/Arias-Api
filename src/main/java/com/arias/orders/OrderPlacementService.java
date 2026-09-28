@@ -303,8 +303,15 @@ public class OrderPlacementService {
      * stock dos veces ni pisan un pedido que ya está en otro estado.
      */
     @Transactional
-    public void closeForPaymentFailure(Order order) {
-        if (order.getEstado() != OrderEstado.PENDIENTE_PAGO) {
+    public void closeForPaymentFailure(Long orderId) {
+        // Relee bajo lock (unidad B7.1, hallazgo de revisión): el llamador
+        // (OrderConsumptionScheduler) carga el pedido SIN lock antes de
+        // invocar esto, y una aprobación de pago concurrente puede moverlo a
+        // PENDIENTE entre esa lectura y esta llamada — si ya ganó la
+        // carrera, el estado fresco ya no es PENDIENTE_PAGO y este método es
+        // un no-op, en vez de cancelar un pedido que la aprobación ya activó.
+        Order order = orderRepo.findByIdForUpdate(orderId).orElse(null);
+        if (order == null || order.getEstado() != OrderEstado.PENDIENTE_PAGO) {
             return;
         }
         applyCancellation(order, clock.instant());

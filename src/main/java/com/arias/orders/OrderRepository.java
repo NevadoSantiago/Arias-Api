@@ -52,6 +52,21 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     Optional<Order> findByIdAndUserIdForUpdate(@Param("id") Long id, @Param("userId") Long userId);
 
     /**
+     * Mismo {@link #findByIdAndUserIdForUpdate}, sin el scope de {@code
+     * userId} — para los dos caminos DEL SISTEMA que deciden sobre un pedido
+     * sin tener un cliente autenticado (unidad B7.1, hallazgo de revisión):
+     * {@code CreditPurchaseService#creditApprovedPurchase} (aprobación de
+     * Mercado Pago) y {@link OrderPlacementService#closeForPaymentFailure}
+     * (invocado también por {@code OrderConsumptionScheduler} en su corte).
+     * Bloquea la fila ANTES de decidir para que un cancel del cliente y una
+     * de estas dos decisiones del sistema nunca lean la misma foto vieja del
+     * {@code estado}.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT o FROM Order o WHERE o.id = :id")
+    Optional<Order> findByIdForUpdate(@Param("id") Long id);
+
+    /**
      * Pedidos {@code PENDIENTE} cuyo punto de consumo ya llegó ({@code
      * pickup_at - lead <= now}, equivalente a {@code pickup_at <= cutoff} con
      * {@code cutoff = now + lead}) — usado por {@link
