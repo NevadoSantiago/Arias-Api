@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -62,14 +63,18 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     /**
      * Pedidos del día para el resumen matutino (unidad 12) — excluye
-     * {@code CANCELADO}, el resto de la app los trata como si no existieran.
+     * {@code CANCELADO} y, desde la unidad B7, {@code PENDIENTE_PAGO}: el
+     * resto de la app los trata como si no existieran (un pedido esperando
+     * pago todavía puede no confirmarse nunca).
      */
-    List<Order> findByFechaAndEstadoNot(LocalDate fecha, OrderEstado estadoExcluido);
+    List<Order> findByFechaAndEstadoNotIn(LocalDate fecha, Collection<OrderEstado> excluidos);
 
     /**
      * Pedidos elegibles para el recordatorio de retiro (unidad 12): todavía
-     * no se les mandó ({@code reminder_sent_at IS NULL}), no están
-     * {@code CANCELADO}, y su punto de recordatorio ya llegó ({@code
+     * no se les mandó ({@code reminder_sent_at IS NULL}), no están en
+     * {@code excluidos} ({@code CANCELADO} y, desde la unidad B7, {@code
+     * PENDIENTE_PAGO} — no tiene sentido recordarle el retiro a un pedido que
+     * todavía no se pagó), y su punto de recordatorio ya llegó ({@code
      * pickup_at - pickup_reminder_minutes <= now}, equivalente a
      * {@code pickup_at <= cutoff} con {@code cutoff = now + reminderMinutes}
      * — mismo patrón que {@link #findByEstadoAndPickupAtLessThanEqual} para
@@ -82,17 +87,22 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
         SELECT DISTINCT o FROM Order o
         JOIN FETCH o.user
         LEFT JOIN FETCH o.items
-        WHERE o.estado <> :estadoExcluido
+        WHERE o.estado NOT IN (:excluidos)
           AND o.reminderSentAt IS NULL
           AND o.pickupAt <= :cutoff
     """)
-    List<Order> findByEstadoNotAndReminderSentAtIsNullAndPickupAtLessThanEqual(
-        @Param("estadoExcluido") OrderEstado estadoExcluido, @Param("cutoff") Instant cutoff);
+    List<Order> findByEstadoNotInAndReminderSentAtIsNullAndPickupAtLessThanEqual(
+        @Param("excluidos") Collection<OrderEstado> excluidos, @Param("cutoff") Instant cutoff);
 
     /**
      * Claim atómico del recordatorio de retiro — mismo patrón que {@code
      * dishRepo.decrementStock}: si devuelve 0, otra instancia ya lo mandó (o
-     * el pedido se canceló entre el SELECT y este UPDATE).
+     * el pedido se canceló entre el SELECT y este UPDATE). Excluye también
+     * {@code PENDIENTE_PAGO} en defensa en profundidad (unidad B7): el
+     * llamador ya filtra con {@link
+     * #findByEstadoNotInAndReminderSentAtIsNullAndPickupAtLessThanEqual},
+     * pero este UPDATE nunca debe reclamar el slot de un pedido sin pagar
+     * aunque cambie el llamador en el futuro.
      */
     @Modifying
     @Query("""
@@ -100,27 +110,28 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
         WHERE o.id = :orderId
           AND o.reminderSentAt IS NULL
           AND o.estado <> com.arias.orders.OrderEstado.CANCELADO
+          AND o.estado <> com.arias.orders.OrderEstado.PENDIENTE_PAGO
     """)
     int claimReminderSlot(@Param("orderId") Long orderId, @Param("now") Instant now);
 
     /**
      * Consolidado admin por horario de retiro (unidad 13, spec {@code
      * admin-order-fulfillment}) — mismo criterio de exclusión que {@link
-     * #findByFechaAndEstadoNot}: {@code CANCELADO} no se muestra, la cocina
-     * lo trata como si no existiera. {@code JOIN FETCH user/items} porque
-     * {@link AdminOrderController} arma el DTO agrupado sin abrir una
-     * transacción por ítem.
+     * #findByFechaAndEstadoNotIn}: {@code CANCELADO} y {@code PENDIENTE_PAGO}
+     * no se muestran, la cocina los trata como si no existieran. {@code JOIN
+     * FETCH user/items} porque {@link AdminOrderController} arma el DTO
+     * agrupado sin abrir una transacción por ítem.
      */
     @Query("""
         SELECT DISTINCT o FROM Order o
         JOIN FETCH o.user
         LEFT JOIN FETCH o.items
         WHERE o.fecha = :fecha
-          AND o.estado <> :estadoExcluido
+          AND o.estado NOT IN (:excluidos)
         ORDER BY o.pickupAt ASC
     """)
-    List<Order> findByFechaAndEstadoNotOrderByPickupAtAsc(
-        @Param("fecha") LocalDate fecha, @Param("estadoExcluido") OrderEstado estadoExcluido);
+    List<Order> findByFechaAndEstadoNotInOrderByPickupAtAsc(
+        @Param("fecha") LocalDate fecha, @Param("excluidos") Collection<OrderEstado> excluidos);
 
     /**
      * "Mis pedidos" del cliente (gap fix, {@code GET /api/v2/orders}) — scope

@@ -281,6 +281,21 @@ class AdminOrderControllerTest {
     }
 
     @Test
+    @DisplayName("getOrdersByPickup(): excluye pedidos PENDIENTE_PAGO (unidad B7 — esperando pago directo, la cocina no los ve)")
+    void getOrdersByPickupExcluyePendientePago() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section);
+        User cliente = persistB2cUser("Coty");
+
+        persistOrder(cliente, dish, FIXED_NOW.plus(60, ChronoUnit.MINUTES), OrderEstado.PENDIENTE_PAGO, null);
+
+        List<AdminOrderDto.PickupGroupDto> groups = controller.getOrdersByPickup(TODAY);
+
+        assertThat(groups).isEmpty();
+    }
+
+    @Test
     @DisplayName("getOrdersByPickup(): no mezcla pedidos de la tabla daily_choice (empresa)")
     void getOrdersByPickupNoMezclaConDailyChoice() {
         Category category = persistCategory(1);

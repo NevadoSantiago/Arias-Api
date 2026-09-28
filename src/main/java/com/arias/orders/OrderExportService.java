@@ -29,6 +29,14 @@ public class OrderExportService {
     private static final Set<OrderEstado> EXPORTABLE_ESTADOS =
         EnumSet.of(OrderEstado.CONFIRMADO, OrderEstado.COMANDADO, OrderEstado.ENTREGADO);
 
+    /**
+     * Mismo criterio de exclusión que {@link AdminOrderController} (unidad
+     * B7): {@code CANCELADO} y {@code PENDIENTE_PAGO} no se exportan a
+     * cocina.
+     */
+    private static final List<OrderEstado> PICKUP_EXPORT_ESTADOS_EXCLUIDOS =
+        List.of(OrderEstado.CANCELADO, OrderEstado.PENDIENTE_PAGO);
+
     private static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
 
     private final DailyChoiceRepository orderRepo;
@@ -131,7 +139,8 @@ public class OrderExportService {
      */
     @Transactional(readOnly = true)
     public byte[] exportByPickupToExcel(LocalDate fecha) {
-        List<Order> orders = orderRepository.findByFechaAndEstadoNotOrderByPickupAtAsc(fecha, OrderEstado.CANCELADO);
+        List<Order> orders = orderRepository.findByFechaAndEstadoNotInOrderByPickupAtAsc(
+            fecha, PICKUP_EXPORT_ESTADOS_EXCLUIDOS);
 
         if (orders.isEmpty()) {
             throw BusinessException.badRequest("no-orders",

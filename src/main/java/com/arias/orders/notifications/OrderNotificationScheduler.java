@@ -49,6 +49,15 @@ public class OrderNotificationScheduler {
     private static final int WINDOW_MINUTES = 5;
     private static final String ZONE = "America/Argentina/Buenos_Aires";
 
+    /**
+     * Estados que ninguna notificación/resumen debe mostrar (unidad B7):
+     * {@code CANCELADO} (ya excluido desde la unidad 12) y {@code
+     * PENDIENTE_PAGO} (pedido esperando pago — todavía puede no confirmarse
+     * nunca, no es un pedido real para cocina/cliente todavía).
+     */
+    private static final List<OrderEstado> RESUMEN_ESTADOS_EXCLUIDOS =
+        List.of(OrderEstado.CANCELADO, OrderEstado.PENDIENTE_PAGO);
+
     private final OrderRepository orderRepo;
     private final UserRepository userRepo;
     private final RestaurantConfigRepository configRepo;
@@ -77,7 +86,7 @@ public class OrderNotificationScheduler {
             return;
         }
 
-        List<Order> orders = orderRepo.findByFechaAndEstadoNot(today, OrderEstado.CANCELADO);
+        List<Order> orders = orderRepo.findByFechaAndEstadoNotIn(today, RESUMEN_ESTADOS_EXCLUIDOS);
         List<User> admins = userRepo.findActiveSuperAdmins();
         if (admins.isEmpty()) {
             log.info("[CRON-DAILY-SUMMARY] {} — sin administradores activos, no se envía", today);
@@ -130,8 +139,8 @@ public class OrderNotificationScheduler {
         int reminderMinutes = configRepo.getSingleton().getPickupReminderMinutes();
         Instant cutoff = now.plus(reminderMinutes, ChronoUnit.MINUTES);
 
-        List<Order> due = orderRepo.findByEstadoNotAndReminderSentAtIsNullAndPickupAtLessThanEqual(
-            OrderEstado.CANCELADO, cutoff);
+        List<Order> due = orderRepo.findByEstadoNotInAndReminderSentAtIsNullAndPickupAtLessThanEqual(
+            RESUMEN_ESTADOS_EXCLUIDOS, cutoff);
 
         int sent = 0;
         for (Order order : due) {

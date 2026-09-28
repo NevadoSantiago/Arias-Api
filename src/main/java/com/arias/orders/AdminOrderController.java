@@ -36,6 +36,15 @@ public class AdminOrderController {
 
     private static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
 
+    /**
+     * Estados que la cocina/admin nunca deben ver (unidad B7): {@code
+     * CANCELADO} (ya excluido desde la unidad 13) y {@code PENDIENTE_PAGO}
+     * (pedido esperando el pago directo por Mercado Pago — todavía puede no
+     * confirmarse nunca, no hay nada que cocinar todavía).
+     */
+    private static final List<OrderEstado> KITCHEN_ESTADOS_EXCLUIDOS =
+        List.of(OrderEstado.CANCELADO, OrderEstado.PENDIENTE_PAGO);
+
     private final DailyChoiceRepository orderRepo;
     private final OrderRepository orderRepository;
     private final CompanyRepository companyRepo;
@@ -108,7 +117,8 @@ public class AdminOrderController {
     @Transactional(readOnly = true)
     public List<AdminOrderDto.PickupGroupDto> getOrdersByPickup(@RequestParam(required = false) LocalDate fecha) {
         LocalDate target = fecha != null ? fecha : LocalDate.now(clock);
-        List<Order> orders = orderRepository.findByFechaAndEstadoNotOrderByPickupAtAsc(target, OrderEstado.CANCELADO);
+        List<Order> orders = orderRepository.findByFechaAndEstadoNotInOrderByPickupAtAsc(
+            target, KITCHEN_ESTADOS_EXCLUIDOS);
         return AdminOrderDto.PickupGroupDto.groupByPickup(orders, ZONE);
     }
 
