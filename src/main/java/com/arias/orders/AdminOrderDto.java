@@ -1,6 +1,5 @@
 package com.arias.orders;
 
-import com.arias.users.User;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -77,7 +76,8 @@ public record AdminOrderDto(
     /**
      * Un pedido dentro de la agrupación por horario de retiro — legible por
      * cocina: apodo del cliente (capturado en el autorregistro, ver {@code
-     * User.nickname}), sus ítems y sus notas. Cae a nombre y apellido si el
+     * User.nickname}), sus ítems y sus notas. Cae a nombre y apellido, y luego al
+     * correo (ver {@code User#displayName}), si el
      * usuario no tiene apodo (caso del empleado de empresa, que no pasa por
      * el autorregistro B2C).
      */
@@ -85,23 +85,10 @@ public record AdminOrderDto(
         public static PickupOrderDto from(Order order) {
             return new PickupOrderDto(
                 order.getId(),
-                customerLabel(order.getUser()),
+                order.getUser().displayName(),
                 order.getItems().stream().map(PickupOrderItemDto::from).toList(),
                 order.getNotas()
             );
-        }
-
-        private static String customerLabel(User user) {
-            String nickname = user.getNickname();
-            if (nickname != null && !nickname.isBlank()) {
-                return nickname;
-            }
-            String first = user.getFirstName();
-            String last = user.getLastName();
-            String name = "";
-            if (first != null) name += first;
-            if (last != null) name += (name.isEmpty() ? "" : " ") + last;
-            return name.isBlank() ? user.getEmail() : name.trim();
         }
     }
 

@@ -130,6 +130,23 @@ public class User {
     }
 
     /**
+     * Nombre con el que el mostrador llama al cliente: el apodo, y si no
+     * tiene (caso del empleado de empresa, que no pasa por el autorregistro
+     * B2C) nombre y apellido, y en última instancia el correo. Único punto de
+     * verdad: lo usan la etiqueta de cocina y {@code /auth/me}, así cliente y
+     * mostrador ven siempre el mismo nombre.
+     */
+    public String displayName() {
+        if (nickname != null && !nickname.isBlank()) {
+            return nickname;
+        }
+        String name = "";
+        if (firstName != null) name += firstName;
+        if (lastName != null) name += (name.isEmpty() ? "" : " ") + lastName;
+        return name.isBlank() ? email : name.trim();
+    }
+
+    /**
      * {@code true} cuando el usuario debe verificar su correo antes de poder
      * pedir o comprar créditos ({@code 409 email-not-verified}, diseño
      * §Seguridad, "Cuentas sin verificar"). Los usuarios con empresa quedan

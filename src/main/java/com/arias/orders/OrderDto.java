@@ -34,9 +34,17 @@ public record OrderDto(
      * ({@code estado == PENDIENTE && now < pickupAt - lead}). Ver {@code
      * OrderPlacementService#changePickupTime}.
      */
-    boolean pickupTimeChangeable
+    boolean pickupTimeChangeable,
+    /**
+     * Si el pedido tiene una compra DIRECT (Mercado Pago), en cualquier estado
+     * de la compra. La comanda lo combina con {@code estado}: {@code
+     * PENDIENTE_PAGO} es "esperando el pago"; {@code PENDIENTE}/{@code
+     * CONFIRMADO} con este flag es "pagado con Mercado Pago".
+     */
+    boolean paidWithMercadoPago
 ) {
-    public static OrderDto from(Order order, boolean cancellable, boolean modifiable, boolean pickupTimeChangeable) {
+    public static OrderDto from(Order order, boolean cancellable, boolean modifiable, boolean pickupTimeChangeable,
+                                boolean paidWithMercadoPago) {
         return new OrderDto(
             order.getId(),
             order.getFecha(),
@@ -47,7 +55,8 @@ public record OrderDto(
             order.getItems().stream().map(OrderItemDto::from).toList(),
             cancellable,
             modifiable,
-            pickupTimeChangeable
+            pickupTimeChangeable,
+            paidWithMercadoPago
         );
     }
 }

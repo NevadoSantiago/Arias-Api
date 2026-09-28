@@ -44,6 +44,8 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -1334,6 +1336,66 @@ class OrderPlacementServiceTest {
         CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
         assertThat(wallet.getAvailable()).isEqualTo(8);
         assertThat(wallet.getCommitted()).isEqualTo(2);
+    }
+
+    // ─── B12: `paidWithMercadoPago` para la comanda ───────────────────────
+
+    @Test
+    @DisplayName("list(): paidWithMercadoPago is true only for orders with a DIRECT purchase, whatever its status")
+    void listMarcaPagadoConMercadoPagoSoloConCompraDirecta() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 9);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 20);
+
+        OrderDto normal = orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt()));
+        OrderDto directPaid = orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt().plus(30, ChronoUnit.MINUTES)));
+        persistDirectPurchase(user, orderRepo.findById(directPaid.id()).orElseThrow(), CreditPurchaseStatus.APPROVED);
+
+        Order awaiting = orderPlacementService.placeAwaitingPayment(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt().plus(60, ChronoUnit.MINUTES)));
+        persistDirectPurchase(user, awaiting, CreditPurchaseStatus.PENDING);
+        Order awaitingNoPurchase = orderPlacementService.placeAwaitingPayment(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt().plus(90, ChronoUnit.MINUTES)));
+
+        entityManager.flush();
+        entityManager.clear();
+
+        Map<Long, OrderDto> byId = orderPlacementService.list(user.getId()).stream()
+            .collect(Collectors.toMap(OrderDto::id, o -> o));
+
+        assertThat(byId.get(normal.id()).paidWithMercadoPago()).isFalse();
+        assertThat(byId.get(directPaid.id()).paidWithMercadoPago()).isTrue();
+        assertThat(byId.get(awaiting.getId()).estado()).isEqualTo(OrderEstado.PENDIENTE_PAGO);
+        assertThat(byId.get(awaiting.getId()).paidWithMercadoPago()).isTrue();
+        assertThat(byId.get(awaitingNoPurchase.getId()).paidWithMercadoPago()).isFalse();
+        // `modifiable` no cambia: PENDIENTE_PAGO nunca es modificable, DIRECT tampoco.
+        assertThat(byId.get(awaiting.getId()).modifiable()).isFalse();
+        assertThat(byId.get(directPaid.id()).modifiable()).isFalse();
+        assertThat(byId.get(normal.id()).modifiable()).isTrue();
+    }
+
+    @Test
+    @DisplayName("single-order responses (place/changePickupTime) also carry paidWithMercadoPago")
+    void respuestasDeUnSoloPedidoIncluyenPaidWithMercadoPago() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        assertThat(placed.paidWithMercadoPago()).isFalse();
+
+        persistDirectPurchase(user, orderRepo.findById(placed.id()).orElseThrow(), CreditPurchaseStatus.APPROVED);
+        OrderDto moved = orderPlacementService.changePickupTime(user.getId(), placed.id(),
+            FIXED_NOW.plus(120, ChronoUnit.MINUTES));
+
+        assertThat(moved.paidWithMercadoPago()).isTrue();
     }
 
     @Test

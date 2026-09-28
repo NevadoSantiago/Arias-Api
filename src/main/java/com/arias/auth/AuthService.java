@@ -169,6 +169,8 @@ public class AuthService {
             user.getCompany() != null ? user.getCompany().getId() : null,
             user.getCompany() != null ? user.getCompany().getNombre() : null,
             user.getCategory() != null ? user.getCategory().getId() : null,
+            user.getNickname(),
+            user.displayName(),
             user.getEmailVerifiedAt() != null,
             user.isProfileComplete()
         );

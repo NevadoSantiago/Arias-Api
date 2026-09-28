@@ -1,10 +1,12 @@
 package com.arias.auth;
 
 import com.arias.auth.dto.FirstLoginRequest;
+import com.arias.auth.dto.MeResponse;
 import com.arias.common.exception.InvalidCredentialsException;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -49,6 +51,37 @@ class AuthServiceTest {
 
         assertThat(result.accessToken()).isNotBlank();
         assertThat(result.refreshTokenValue()).isNotBlank();
+    }
+
+    @Test
+    @DisplayName("me(): returns the nickname and the displayName with the kitchen fallback")
+    void meDevuelveApodoYDisplayNameConElFallbackDeCocina() {
+        User conApodo = saveUser("Coty", "Ana", "Perez");
+        User sinApodo = saveUser(null, "Ana", "Perez");
+        User sinNombre = saveUser(null, null, null);
+
+        MeResponse a = authService.me(conApodo.getId());
+        assertThat(a.nickname()).isEqualTo("Coty");
+        assertThat(a.displayName()).isEqualTo("Coty");
+
+        MeResponse b = authService.me(sinApodo.getId());
+        assertThat(b.nickname()).isNull();
+        assertThat(b.displayName()).isEqualTo("Ana Perez");
+
+        MeResponse c = authService.me(sinNombre.getId());
+        assertThat(c.displayName()).isEqualTo(sinNombre.getEmail());
+    }
+
+    private User saveUser(String nickname, String firstName, String lastName) {
+        return userRepo.save(User.builder()
+            .email("me-" + System.nanoTime() + "@test.arias.com")
+            .passwordHash(passwordEncoder.encode("clave-segura-123"))
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .nickname(nickname)
+            .firstName(firstName)
+            .lastName(lastName)
+            .build());
     }
 
     @Test

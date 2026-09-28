@@ -560,17 +560,23 @@ public class OrderPlacementService {
         return order.getEstado() == OrderEstado.PENDIENTE && isCancellable(order, now, leadMinutes);
     }
 
-    /** DTO de un solo pedido: la compra DIRECT se consulta solo si hace falta. */
+    /** DTO de un solo pedido: una única consulta {@code existsBy} de la compra DIRECT. */
     private OrderDto toDto(Order order, Instant now, int leadMinutes) {
         return toDto(order, now, leadMinutes,
             () -> creditPurchaseRepo.existsByOrderIdAndType(order.getId(), PurchaseType.DIRECT));
     }
 
     private static OrderDto toDto(Order order, Instant now, int leadMinutes, BooleanSupplier hasDirectPurchase) {
+        // Se resuelve UNA vez: `paidWithMercadoPago` y `modifiable` comparten
+        // la misma consulta (o el mismo Set del listado), sin consulta extra.
+        // `modifiable` no depende de que la compra exista para PENDIENTE_PAGO
+        // (notModifiableReason corta antes por estado).
+        boolean paidWithMercadoPago = hasDirectPurchase.getAsBoolean();
         return OrderDto.from(order,
             isCancellable(order, now, leadMinutes),
-            notModifiableReason(order, now, leadMinutes, hasDirectPurchase) == null,
-            isPickupTimeChangeable(order, now, leadMinutes));
+            notModifiableReason(order, now, leadMinutes, () -> paidWithMercadoPago) == null,
+            isPickupTimeChangeable(order, now, leadMinutes),
+            paidWithMercadoPago);
     }
 
     /**

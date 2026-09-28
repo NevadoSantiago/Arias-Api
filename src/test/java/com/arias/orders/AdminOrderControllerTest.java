@@ -266,6 +266,21 @@ class AdminOrderControllerTest {
     }
 
     @Test
+    @DisplayName("getOrdersByPickup(): cae al correo cuando el usuario no tiene apodo ni nombre")
+    void getOrdersByPickupCaeAlCorreoSinApodoNiNombre() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section);
+        User cliente = persistB2cUser(null);
+
+        persistOrder(cliente, dish, FIXED_NOW.plus(60, ChronoUnit.MINUTES), OrderEstado.PENDIENTE, null);
+
+        List<AdminOrderDto.PickupGroupDto> groups = controller.getOrdersByPickup(TODAY);
+
+        assertThat(groups.get(0).orders().get(0).customerNickname()).isEqualTo(cliente.getEmail());
+    }
+
+    @Test
     @DisplayName("getOrdersByPickup(): excluye pedidos CANCELADO")
     void getOrdersByPickupExcluyeCancelados() {
         Category category = persistCategory(1);

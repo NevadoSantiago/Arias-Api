@@ -3,7 +3,6 @@ package com.arias.orders;
 import com.arias.common.exception.BusinessException;
 import com.arias.companies.Company;
 import com.arias.companies.CompanyRepository;
-import com.arias.users.User;
 import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFColor;
@@ -173,7 +172,7 @@ public class OrderExportService {
                 }
                 lastPickupTime = pickupTime;
 
-                String customer = customerLabel(order.getUser());
+                String customer = order.getUser().displayName();
                 for (OrderItem item : order.getItems()) {
                     Row row = sheet.createRow(rowNum++);
                     row.createCell(0).setCellValue(pickupTime.toString());
@@ -213,20 +212,6 @@ public class OrderExportService {
         if (first != null) name += first;
         if (last != null) name += " " + last;
         return name.trim();
-    }
-
-    /** Ver el comentario equivalente en {@code AdminOrderDto.PickupOrderDto}: cae a nombre y apellido sin apodo. */
-    private String customerLabel(User user) {
-        String nickname = user.getNickname();
-        if (nickname != null && !nickname.isBlank()) {
-            return nickname;
-        }
-        String first = user.getFirstName();
-        String last = user.getLastName();
-        String name = "";
-        if (first != null) name += first;
-        if (last != null) name += (name.isEmpty() ? "" : " ") + last;
-        return name.isBlank() ? user.getEmail() : name.trim();
     }
 
     private CellStyle createHeaderStyle(XSSFWorkbook workbook) {
