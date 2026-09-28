@@ -244,6 +244,61 @@ public class OrderPlacementService {
     }
 
     /**
+     * Cambia el horario de retiro de un pedido (unidad B11, pedido del
+     * usuario 2026-09-28). Solo un pedido programado ({@code PENDIENTE}) y
+     * ANTES del corte del horario ACTUAL ({@code pickupAt - lead}, ver {@link
+     * #isPickupTimeChangeable}); confirmado, esperando pago, cancelado o ya
+     * cortado responde 409 {@code pickup-time-locked}. Un pedido pagado
+     * aparte (DIRECT) SÍ puede cambiarlo: el importe no varía.
+     *
+     * <p>El horario nuevo debe caer el MISMO día (fecha de Buenos Aires) —
+     * otro día es otro menú y otro stock — y pasa por {@link
+     * PickupSlotService#assertValidPickupTime}: rango, día cerrado, ventana
+     * del día de la semana, alineación y lead. Igual al actual es un no-op.
+     * Actualiza {@code pickupAt} y {@code fecha} (misma derivación que {@link
+     * #buildValidatedOrder}) y limpia {@code reminderSentAt} para que el
+     * recordatorio salga para el horario nuevo. Stock y créditos no cambian.
+     * Pasar a un horario donde ya hay otro pedido es válido: siguen siendo
+     * pedidos separados, no hay fusión.
+     *
+     * <p>Toma el lock de la fila del pedido (mismo orden de locks que {@link
+     * #addItems}/{@link #cancel}, unidad B7.1): la aprobación de pago y el
+     * corte del scheduler también tocan pedidos.
+     */
+    @Transactional
+    public OrderDto changePickupTime(Long userId, Long orderId, Instant newPickupAt) {
+        if (newPickupAt == null) {
+            throw BusinessException.badRequest("pickup-at-required", "Debe indicar el horario de retiro");
+        }
+        Order order = orderRepo.findByIdAndUserIdForUpdate(orderId, userId)
+            .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
+
+        Instant now = clock.instant();
+        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
+        if (!isPickupTimeChangeable(order, now, lead)) {
+            throw BusinessException.conflict("pickup-time-locked",
+                "El horario de retiro ya no se puede cambiar.");
+        }
+
+        if (newPickupAt.equals(order.getPickupAt())) {
+            return toDto(order, now, lead);
+        }
+
+        if (!LocalDate.ofInstant(newPickupAt, ZONE).equals(order.getFecha())) {
+            throw BusinessException.conflict("pickup-day-change-not-allowed",
+                "Solo podés cambiar el horario dentro del mismo día.");
+        }
+        pickupSlotService.assertValidPickupTime(newPickupAt);
+
+        order.setPickupAt(newPickupAt);
+        order.setFecha(LocalDate.ofInstant(newPickupAt, ZONE));
+        order.setReminderSentAt(null);
+        Order saved = orderRepo.save(order);
+
+        return toDto(saved, now, lead);
+    }
+
+    /**
      * Quita un ítem de un pedido existente (unidad B6) — mientras el pedido
      * sea MODIFICABLE, misma regla que {@link #isCancellable}. Libera los
      * créditos comprometidos de ESE ítem (RELEASE) y restaura su stock — el

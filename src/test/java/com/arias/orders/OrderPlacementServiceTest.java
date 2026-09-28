@@ -7,6 +7,7 @@ import com.arias.catalog.dishes.DishRepository;
 import com.arias.catalog.menusections.MenuSection;
 import com.arias.catalog.menusections.MenuSectionRepository;
 import com.arias.common.exception.BusinessException;
+import com.arias.common.security.JwtUser;
 import com.arias.companies.Company;
 import com.arias.companies.CompanyRepository;
 import com.arias.credits.CreditMovement;
@@ -23,6 +24,7 @@ import com.arias.users.User;
 import com.arias.users.UserRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.validation.Validator;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +33,9 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -87,6 +92,9 @@ class OrderPlacementServiceTest {
 
     @Autowired
     private OrderPlacementService orderPlacementService;
+
+    @Autowired
+    private OrderPlacementController orderPlacementController;
 
     @Autowired
     private OrderRepository orderRepo;
@@ -1466,5 +1474,282 @@ class OrderPlacementServiceTest {
         assertThat(foundCutoff.pickupTimeChangeable()).isFalse();
         assertThat(foundConfirmed.modifiable()).isFalse();
         assertThat(foundConfirmed.pickupTimeChangeable()).isFalse();
+    }
+
+    // ─── B11: cambiar el horario de retiro ─────────────────────────────────
+    //
+    // FIXED_NOW = martes 10:40 ART, ventana 11:00-15:00, paso de 10 min, lead
+    // de 20 min. +90 min = 12:10, +120 min = 12:40.
+
+    /** El controller tiene @PreAuthorize: hace falta un usuario autenticado en el contexto. */
+    private void authenticateAs(User user) {
+        JwtUser principal = new JwtUser(user.getId(), user.getEmail(), Role.EMPLOYEE, null, null);
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+            principal, null, List.of(new SimpleGrantedAuthority("ROLE_EMPLOYEE"))));
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
+
+    private OrderDto placeScheduled(User user, Dish dish, long minutesFromNow) {
+        return orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(minutesFromNow, ChronoUnit.MINUTES)));
+    }
+
+    private void assertPickupChangeRejected(User user, Long orderId, Instant newPickupAt, String errorCode) {
+        assertThatThrownBy(() -> orderPlacementService.changePickupTime(user.getId(), orderId, newPickupAt))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", errorCode);
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): moves a scheduled order within the same day, keeps fecha, resets reminderSentAt and touches no stock/credits")
+    void changePickupTimeMueveElHorarioDentroDelMismoDia() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeScheduled(user, dish, 90);
+        Order order = orderRepo.findById(placed.id()).orElseThrow();
+        order.setReminderSentAt(FIXED_NOW);
+        orderRepo.save(order);
+        Instant newPickup = FIXED_NOW.plus(120, ChronoUnit.MINUTES);
+
+        OrderDto changed = orderPlacementService.changePickupTime(user.getId(), placed.id(), newPickup);
+
+        assertThat(changed.pickupAt()).isEqualTo(newPickup);
+        assertThat(changed.fecha()).isEqualTo(placed.fecha());
+        assertThat(changed.estado()).isEqualTo(OrderEstado.PENDIENTE);
+        assertThat(changed.modifiable()).isTrue();
+        assertThat(changed.pickupTimeChangeable()).isTrue();
+        entityManager.flush();
+        entityManager.clear();
+        Order reloaded = orderRepo.findById(placed.id()).orElseThrow();
+        assertThat(reloaded.getPickupAt()).isEqualTo(newPickup);
+        assertThat(reloaded.getReminderSentAt()).isNull();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(4);
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(8);
+        assertThat(wallet.getCommitted()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): the same time is a harmless no-op that keeps reminderSentAt")
+    void changePickupTimeConElMismoHorarioEsNoOp() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeScheduled(user, dish, 90);
+        Order order = orderRepo.findById(placed.id()).orElseThrow();
+        order.setReminderSentAt(FIXED_NOW);
+        orderRepo.save(order);
+
+        OrderDto same = orderPlacementService.changePickupTime(user.getId(), placed.id(), placed.pickupAt());
+
+        assertThat(same.pickupAt()).isEqualTo(placed.pickupAt());
+        assertThat(orderRepo.findById(placed.id()).orElseThrow().getReminderSentAt()).isEqualTo(FIXED_NOW);
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): a DIRECT-paid order can change its time (the amount does not change)")
+    void changePickupTimeAceptaUnPedidoPagadoDirecto() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeScheduled(user, dish, 90);
+        persistDirectPurchase(user, orderRepo.findById(placed.id()).orElseThrow(), CreditPurchaseStatus.PENDING);
+        Instant newPickup = FIXED_NOW.plus(120, ChronoUnit.MINUTES);
+
+        OrderDto changed = orderPlacementService.changePickupTime(user.getId(), placed.id(), newPickup);
+
+        assertThat(changed.pickupAt()).isEqualTo(newPickup);
+        assertThat(changed.modifiable()).isFalse();
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): rejects a CONFIRMADO order with 409 pickup-time-locked and changes nothing")
+    void changePickupTimeRechazaPedidoConfirmado() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeScheduled(user, dish, 90);
+        Order order = orderRepo.findById(placed.id()).orElseThrow();
+        order.setEstado(OrderEstado.CONFIRMADO);
+        orderRepo.save(order);
+
+        assertPickupChangeRejected(user, placed.id(), FIXED_NOW.plus(120, ChronoUnit.MINUTES), "pickup-time-locked");
+
+        assertThat(orderRepo.findById(placed.id()).orElseThrow().getPickupAt()).isEqualTo(placed.pickupAt());
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): rejects a PENDIENTE_PAGO order with 409 pickup-time-locked")
+    void changePickupTimeRechazaPedidoEsperandoPago() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        Order awaiting = orderPlacementService.placeAwaitingPayment(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+
+        assertPickupChangeRejected(user, awaiting.getId(), FIXED_NOW.plus(120, ChronoUnit.MINUTES), "pickup-time-locked");
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): rejects a CANCELADO order with 409 pickup-time-locked")
+    void changePickupTimeRechazaPedidoCancelado() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeScheduled(user, dish, 90);
+        orderPlacementService.cancel(user.getId(), placed.id());
+
+        assertPickupChangeRejected(user, placed.id(), FIXED_NOW.plus(120, ChronoUnit.MINUTES), "pickup-time-locked");
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): rejects once the CURRENT pickup's cutoff has passed")
+    void changePickupTimeRechazaDespuesDelCorteDelHorarioActual() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        // Corte exactamente "ahora" (pickupAt - 20 min == FIXED_NOW).
+        OrderDto placed = placeScheduled(user, dish, 20);
+
+        assertPickupChangeRejected(user, placed.id(), FIXED_NOW.plus(120, ChronoUnit.MINUTES), "pickup-time-locked");
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): rejects a different day with pickup-day-change-not-allowed")
+    void changePickupTimeRechazaOtroDia() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeScheduled(user, dish, 90);
+
+        // Mañana a la misma hora: válido como horario, pero es OTRO día (otro menú y stock).
+        assertPickupChangeRejected(user, placed.id(),
+            placed.pickupAt().plus(1, ChronoUnit.DAYS), "pickup-day-change-not-allowed");
+
+        assertThat(orderRepo.findById(placed.id()).orElseThrow().getPickupAt()).isEqualTo(placed.pickupAt());
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): the new time goes through PickupSlotService — misaligned and outside the window are rejected")
+    void changePickupTimeValidaElHorarioNuevoConPickupSlotService() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeScheduled(user, dish, 90);
+
+        // 12:15 — no cae en un slot de 10 minutos desde las 11:00.
+        assertPickupChangeRejected(user, placed.id(),
+            FIXED_NOW.plus(95, ChronoUnit.MINUTES), "pickup-time-not-aligned");
+        // 10:50 — antes de que abra la ventana (11:00).
+        assertPickupChangeRejected(user, placed.id(),
+            FIXED_NOW.plus(10, ChronoUnit.MINUTES), "pickup-outside-service-window");
+        // 15:00 — la ventana es [11:00, 15:00).
+        assertPickupChangeRejected(user, placed.id(),
+            FIXED_NOW.plus(260, ChronoUnit.MINUTES), "pickup-outside-service-window");
+
+        assertThat(orderRepo.findById(placed.id()).orElseThrow().getPickupAt()).isEqualTo(placed.pickupAt());
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): someone else's order is 404 order-not-found")
+    void changePickupTimeRechazaSiNoEsElDueño() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User owner = persistB2cUser();
+        User stranger = persistB2cUser();
+        seedWallet(owner.getId(), 10);
+        OrderDto placed = placeScheduled(owner, dish, 90);
+
+        assertPickupChangeRejected(stranger, placed.id(), FIXED_NOW.plus(120, ChronoUnit.MINUTES), "order-not-found");
+        assertThat(orderRepo.findById(placed.id()).orElseThrow().getPickupAt()).isEqualTo(placed.pickupAt());
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): a null time is a 400 pickup-at-required")
+    void changePickupTimeRechazaHorarioNulo() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeScheduled(user, dish, 90);
+
+        assertPickupChangeRejected(user, placed.id(), null, "pickup-at-required");
+    }
+
+    @Test
+    @DisplayName("changePickupTime(): moving onto a time where another order exists keeps them as two separate orders")
+    void changePickupTimeAMismaHoraDeOtroPedidoNoLosFusiona() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto first = placeScheduled(user, dishA, 90);
+        OrderDto second = placeScheduled(user, dishB, 120);
+
+        orderPlacementService.changePickupTime(user.getId(), second.id(), first.pickupAt());
+
+        List<Order> orders = orderRepo.findByUserIdAndFecha(user.getId(), first.fecha());
+        assertThat(orders).hasSize(2);
+        assertThat(orders).allSatisfy(o -> assertThat(o.getPickupAt()).isEqualTo(first.pickupAt()));
+    }
+
+    @Test
+    @DisplayName("ChangePickupTimeRequest: a null pickupAt fails bean validation (→ 400 via @Valid)")
+    void changePickupTimeRequestSinHorarioFallaLaValidacion() {
+        assertThat(validator.validate(new ChangePickupTimeRequest(null))).isNotEmpty();
+        assertThat(validator.validate(new ChangePickupTimeRequest(FIXED_NOW))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("PATCH /api/v2/orders/{id}/pickup-time (controller): scopes by the authenticated user and returns the updated order")
+    void controllerCambiaElHorarioDelPedidoDelUsuarioAutenticado() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User owner = persistB2cUser();
+        User stranger = persistB2cUser();
+        seedWallet(owner.getId(), 10);
+        OrderDto placed = placeScheduled(owner, dish, 90);
+        Instant newPickup = FIXED_NOW.plus(120, ChronoUnit.MINUTES);
+
+        authenticateAs(owner);
+        OrderDto changed = orderPlacementController.changePickupTime(
+            new JwtUser(owner.getId(), owner.getEmail(), Role.EMPLOYEE, null, null),
+            placed.id(), new ChangePickupTimeRequest(newPickup));
+
+        assertThat(changed.id()).isEqualTo(placed.id());
+        assertThat(changed.pickupAt()).isEqualTo(newPickup);
+        authenticateAs(stranger);
+        assertThatThrownBy(() -> orderPlacementController.changePickupTime(
+            new JwtUser(stranger.getId(), stranger.getEmail(), Role.EMPLOYEE, null, null),
+            placed.id(), new ChangePickupTimeRequest(FIXED_NOW.plus(100, ChronoUnit.MINUTES))))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-found");
     }
 }

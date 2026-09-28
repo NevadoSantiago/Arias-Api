@@ -101,6 +101,20 @@ public class OrderPlacementController {
     }
 
     /**
+     * Cambia el horario de retiro de un pedido programado (unidad B11,
+     * pedido del usuario 2026-09-28). Ver {@link
+     * OrderPlacementService#changePickupTime}.
+     */
+    @PatchMapping("/{id}/pickup-time")
+    public OrderDto changePickupTime(
+        @AuthenticationPrincipal JwtUser user,
+        @PathVariable Long id,
+        @Valid @RequestBody ChangePickupTimeRequest req
+    ) {
+        return orderPlacementService.changePickupTime(user.userId(), id, req.pickupAt());
+    }
+
+    /**
      * Quita un ítem de un pedido existente mientras sea MODIFICABLE — si era
      * el último, cancela el pedido entero (unidad B6). Ver {@link
      * OrderPlacementService#removeItem}.
