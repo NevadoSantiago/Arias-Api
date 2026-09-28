@@ -32,4 +32,29 @@ public interface CreditPurchaseRepository extends JpaRepository<CreditPurchase, 
      * h expira) sobre el mismo resultado, ordenando por antigüedad.
      */
     List<CreditPurchase> findByStatusAndCreatedAtBefore(CreditPurchaseStatus status, Instant cutoff);
+
+    /**
+     * ¿Este pedido tiene una compra DIRECTA asociada? (unidad B6.1, hallazgo
+     * de revisión). Usado por {@code OrderPlacementService#assertModifiable}
+     * para rechazar {@code addItems}/{@code removeItem} sobre un pedido
+     * pagado aparte por Mercado Pago: {@code DIRECT_PURCHASE} acredita
+     * derecho a {@code committed} sin pasar por {@code available} (ver {@code
+     * CreditPurchaseService#creditPurchase}), así que mover
+     * {@code available}↔{@code committed} de la billetera por un ítem
+     * agregado/quitado — como hacen esos dos métodos para un pedido pagado
+     * con saldo propio — desincronizaría el {@code creditTotal} del pedido
+     * del importe que la compra DIRECT ya cobra (o va a cobrar) por Mercado
+     * Pago.
+     *
+     * <p>No filtra por {@code status} a propósito: mientras el pedido siga
+     * {@code PENDIENTE}, cualquier compra DIRECTA asociada (
+     * {@code PENDING}, {@code APPROVED} o {@code IN_MEDIATION}) todavía puede
+     * acreditar/haber acreditado créditos sobre el total original. Si la
+     * compra ya terminó en {@code REJECTED}/{@code CANCELLED}/{@code EXPIRED},
+     * el pedido ya quedó {@code CANCELADO} ({@code
+     * CreditPurchaseService#closeAssociatedOrderIfDirect}) y {@code
+     * assertModifiable} lo rechaza de todos modos por ese motivo — este
+     * método no necesita distinguir ese caso.
+     */
+    boolean existsByOrderIdAndType(Long orderId, PurchaseType type);
 }

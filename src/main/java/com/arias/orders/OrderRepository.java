@@ -1,7 +1,9 @@
 package com.arias.orders;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -24,6 +26,29 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     /** Para validar propiedad antes de cancelar — evita el patrón findById + chequeo manual. */
     Optional<Order> findByIdAndUserId(Long id, Long userId);
+
+    /**
+     * Mismo {@link #findByIdAndUserId}, pero con {@code SELECT ... FOR UPDATE}
+     * — mismo patrón que {@code CreditPurchaseRepository#findByIdForUpdate}
+     * (unidad B6.1, hallazgo de revisión). {@link OrderPlacementService#addItems},
+     * {@link OrderPlacementService#removeItem} y {@link OrderPlacementService#cancel}
+     * cargaban el pedido con {@link #findByIdAndUserId} (sin lock): dos
+     * llamadas concurrentes sobre el MISMO pedido pueden leer cada una la
+     * misma foto de {@code items}/{@code creditTotal} antes de que la otra
+     * confirme su cambio — por ejemplo, dos {@code removeItem} en un pedido
+     * de dos ítems pueden ver cada uno {@code items.size() == 2}, así que
+     * ninguno toma la rama "es el último ítem", y el pedido termina con CERO
+     * ítems pero sigue {@code PENDIENTE} (créditos liberados sin cancelar).
+     * Bloquear la fila del pedido serializa esas llamadas: la segunda en
+     * llegar espera a que la primera confirme y relee el estado ya
+     * actualizado. El orden de lock (pedido primero, billetera después) es el
+     * MISMO que ya usan estos tres métodos al llamar a
+     * {@code CreditLedgerService} después de esta carga — no cambia, así que
+     * no hay riesgo nuevo de deadlock entre ambos locks.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT o FROM Order o WHERE o.id = :id AND o.user.id = :userId")
+    Optional<Order> findByIdAndUserIdForUpdate(@Param("id") Long id, @Param("userId") Long userId);
 
     /**
      * Pedidos {@code PENDIENTE} cuyo punto de consumo ya llegó ({@code

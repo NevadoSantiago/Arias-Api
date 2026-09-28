@@ -14,10 +14,15 @@ import com.arias.credits.CreditMovementRepository;
 import com.arias.credits.CreditWallet;
 import com.arias.credits.CreditWalletRepository;
 import com.arias.credits.MovementType;
+import com.arias.payments.CreditPurchase;
+import com.arias.payments.CreditPurchaseRepository;
+import com.arias.payments.CreditPurchaseStatus;
+import com.arias.payments.PurchaseType;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
 import jakarta.persistence.EntityManager;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,6 +31,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
@@ -33,7 +39,9 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -103,6 +111,15 @@ class OrderPlacementServiceTest {
 
     @Autowired
     private CreditMovementRepository movementRepo;
+
+    @Autowired
+    private CreditPurchaseRepository purchaseRepo;
+
+    @Autowired
+    private OrderItemRepository orderItemRepo;
+
+    @Autowired
+    private Validator validator;
 
     /** Ver el comentario equivalente en {@code OrderServiceCompanyFlowTest}: los
      *  UPDATE en bloque de {@code DishRepository} no refrescan el first-level
@@ -878,6 +895,23 @@ class OrderPlacementServiceTest {
         CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
         assertThat(wallet.getAvailable()).isEqualTo(8);
         assertThat(wallet.getCommitted()).isEqualTo(2);
+
+        // Gap de cobertura (revisión B6.1): releer el pedido de la base — no
+        // solo confiar en el DTO devuelto — prueba que el ítem quitado y el
+        // creditTotal nuevo quedaron REALMENTE persistidos, no solo en la
+        // instancia en memoria de removeItem().
+        Order reloaded = orderRepo.findById(placed.id()).orElseThrow();
+        assertThat(reloaded.getCreditTotal()).isEqualTo(2);
+        assertThat(reloaded.getItems()).hasSize(1);
+        assertThat(reloaded.getItems().get(0).getDish().getId()).isEqualTo(dishA.getId());
+
+        CreditMovement release = movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId()).stream()
+            .filter(m -> m.getType() == MovementType.RELEASE)
+            .findFirst()
+            .orElseThrow();
+        assertThat(release.getOrderId()).isEqualTo(placed.id());
+        assertThat(release.getDeltaCommitted()).isEqualTo(-2); // costo del ítem quitado (dishB)
+        assertThat(release.getDeltaAvailable()).isEqualTo(2);
     }
 
     @Test
@@ -976,5 +1010,250 @@ class OrderPlacementServiceTest {
         assertThatThrownBy(() -> orderPlacementService.removeItem(user.getId(), orderOne.id(), itemFromOrderTwo))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "order-item-not-found");
+    }
+
+    // ─── B6.1 (revisión): concurrencia real en removeItem() ────────────────
+    //
+    // Sin lock, addItems/removeItem/cancel cargaban el pedido con un SELECT
+    // plano (findByIdAndUserId). Dos removeItem() concurrentes sobre un
+    // pedido de DOS ítems pueden leer cada uno items.size()==2 (la foto de
+    // ANTES de que el otro hilo confirme su propio removeItem), así que
+    // ninguno toma la rama "es el último ítem" — el pedido queda con CERO
+    // ítems pero sigue PENDIENTE, y los créditos se liberan sin cancelar.
+    //
+    // Este test dispara los dos removeItem() en hilos separados con
+    // transacciones reales (NOT_SUPPORTED suspende la transacción de test
+    // para que cada llamada abra su propia transacción física, visible entre
+    // conexiones — mismo patrón que los tests de rollback atómico de arriba).
+    // Con el lock (findByIdAndUserIdForUpdate, PESSIMISTIC_WRITE) el segundo
+    // hilo en llegar se BLOQUEA en el SELECT ... FOR UPDATE hasta que el
+    // primero confirma, y entonces relee el estado YA actualizado (un solo
+    // ítem) — así que el resultado final es determinístico pase lo que pase
+    // el orden real de ejecución: el pedido SIEMPRE termina CANCELADO con
+    // los créditos totalmente liberados, nunca PENDIENTE sin ítems.
+    //
+    // Nota de honestidad: la carrera en sí (que dos hilos lleguen a leer el
+    // mismo estado stale) depende del scheduler del SO/JDBC y no está forzada
+    // con ningún latch dentro del método bajo prueba — así que el RED (antes
+    // del fix) no está 100% garantizado en cada corrida, aunque se observó al
+    // ejecutar este test contra el código sin lock. El GREEN (después del
+    // fix) sí es determinístico: el lock hace que el resultado final no
+    // dependa de qué hilo gana la carrera.
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    @DisplayName("removeItem(): dos llamadas concurrentes sobre un pedido de 2 ítems serializan bajo el lock — nunca queda PENDIENTE sin ítems")
+    void removeItemConcurrenteSerializaBajoElLockYNuncaDejaElPedidoVacioPendiente() throws Exception {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        PlaceOrderV2Request req = new PlaceOrderV2Request(
+            List.of(
+                new PlaceOrderV2Request.OrderItemRequest(dishA.getId(), null, null),
+                new PlaceOrderV2Request.OrderItemRequest(dishB.getId(), null, null)
+            ),
+            FIXED_NOW.plus(90, ChronoUnit.MINUTES),
+            null
+        );
+        OrderDto placed = orderPlacementService.place(user.getId(), req);
+        Long itemAId = placed.items().stream()
+            .filter(i -> i.dishId().equals(dishA.getId())).findFirst().orElseThrow().id();
+        Long itemBId = placed.items().stream()
+            .filter(i -> i.dishId().equals(dishB.getId())).findFirst().orElseThrow().id();
+
+        try {
+            CountDownLatch startLatch = new CountDownLatch(2);
+            AtomicReference<Exception> errorA = new AtomicReference<>();
+            AtomicReference<Exception> errorB = new AtomicReference<>();
+
+            Thread threadA = new Thread(() -> {
+                startLatch.countDown();
+                awaitQuietly(startLatch);
+                try {
+                    orderPlacementService.removeItem(user.getId(), placed.id(), itemAId);
+                } catch (Exception e) {
+                    errorA.set(e);
+                }
+            });
+            Thread threadB = new Thread(() -> {
+                startLatch.countDown();
+                awaitQuietly(startLatch);
+                try {
+                    orderPlacementService.removeItem(user.getId(), placed.id(), itemBId);
+                } catch (Exception e) {
+                    errorB.set(e);
+                }
+            });
+
+            threadA.start();
+            threadB.start();
+            threadA.join(10_000);
+            threadB.join(10_000);
+
+            // Ambas llamadas deben terminar sin error: la segunda relee el
+            // pedido ya actualizado por la primera (bajo el lock) en vez de
+            // chocar contra él.
+            assertThat(errorA.get()).isNull();
+            assertThat(errorB.get()).isNull();
+
+            // findById() fuera de transacción (NOT_SUPPORTED de este test): no
+            // hay sesión para inicializar la colección LAZY items, así que se
+            // cuenta por OrderItemRepository en vez de finalOrder.getItems().
+            //
+            // El ítem que dispara la rama "es el último" queda en la fila —
+            // applyCancellation() (mismo camino que cancel()) es un soft-cancel
+            // que NUNCA borra ítems, solo marca CANCELADO — así que queda
+            // exactamente 1 fila (el ítem que el segundo hilo en llegar vio
+            // como "el último"), no 0.
+            Order finalOrder = orderRepo.findById(placed.id()).orElseThrow();
+            assertThat(finalOrder.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+            assertThat(orderItemRepo.findByOrderId(placed.id())).hasSize(1);
+
+            CreditWallet wallet = walletRepo.findById(user.getId()).orElseThrow();
+            assertThat(wallet.getAvailable()).isEqualTo(10);
+            assertThat(wallet.getCommitted()).isZero();
+        } finally {
+            orderRepo.findById(placed.id()).ifPresent(orderRepo::delete);
+            movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId()).forEach(movementRepo::delete);
+            walletRepo.findById(user.getId()).ifPresent(walletRepo::delete);
+            userRepo.delete(user);
+            dishRepo.delete(dishA);
+            dishRepo.delete(dishB);
+            categoryRepo.delete(category);
+            menuSectionRepo.delete(section);
+        }
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    // ─── B6.1 (revisión): pedidos pagados por compra DIRECTA ───────────────
+    //
+    // Una compra DIRECT (Mercado Pago) acredita DIRECT_PURCHASE derecho a
+    // COMMITTED, sin pasar por AVAILABLE (CreditPurchaseService#creditPurchase).
+    // Si addItems/removeItem tocaran ese pedido moviendo AVAILABLE↔COMMITTED
+    // de la billetera igual que un pedido pagado con saldo propio, el total
+    // que la compra DIRECT ya cobra (o va a cobrar) por Mercado Pago quedaría
+    // desincronizado del creditTotal real del pedido. Se rechaza con el mismo
+    // código "order-not-modifiable" que ya usa assertModifiable, pero con un
+    // mensaje que aclara el motivo real.
+
+    private CreditPurchase persistDirectPurchase(User user, Order order, CreditPurchaseStatus status) {
+        return purchaseRepo.save(CreditPurchase.builder()
+            .user(user)
+            .type(PurchaseType.DIRECT)
+            .order(order)
+            .creditAmount(order.getCreditTotal())
+            .amountCents(order.getCreditTotal() * 1_000L)
+            .status(status)
+            .build());
+    }
+
+    @Test
+    @DisplayName("addItems(): rejects a DIRECT-paid order with 409 order-not-modifiable — nothing changes")
+    void addItemsRechazaPedidoPagadoDirecto() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishA.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        Order order = orderRepo.findById(placed.id()).orElseThrow();
+        persistDirectPurchase(user, order, CreditPurchaseStatus.PENDING);
+
+        assertThatThrownBy(() -> orderPlacementService.addItems(user.getId(), placed.id(), addItemsRequest(dishB.getId())))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-modifiable");
+
+        entityManager.clear();
+        assertThat(dishRepo.findById(dishB.getId()).orElseThrow().getStockActual()).isEqualTo(5);
+        assertThat(orderRepo.findById(placed.id()).orElseThrow().getCreditTotal()).isEqualTo(2);
+        assertThat(orderRepo.findById(placed.id()).orElseThrow().getItems()).hasSize(1);
+
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(8);
+        assertThat(wallet.getCommitted()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("removeItem(): rejects a DIRECT-paid order with 409 order-not-modifiable — nothing changes")
+    void removeItemRechazaPedidoPagadoDirecto() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        Order order = orderRepo.findById(placed.id()).orElseThrow();
+        persistDirectPurchase(user, order, CreditPurchaseStatus.PENDING);
+        Long itemId = placed.items().get(0).id();
+
+        assertThatThrownBy(() -> orderPlacementService.removeItem(user.getId(), placed.id(), itemId))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-modifiable");
+
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(4);
+        assertThat(orderRepo.findById(placed.id()).orElseThrow().getItems()).hasSize(1);
+
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(8);
+        assertThat(wallet.getCommitted()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("addItems(): an APPROVED DIRECT purchase also rejects modification of its order")
+    void addItemsRechazaPedidoPagadoDirectoYaAprobado() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishA.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        Order order = orderRepo.findById(placed.id()).orElseThrow();
+        persistDirectPurchase(user, order, CreditPurchaseStatus.APPROVED);
+
+        assertThatThrownBy(() -> orderPlacementService.addItems(user.getId(), placed.id(), addItemsRequest(dishB.getId())))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-modifiable");
+    }
+
+    // ─── B6.1 (revisión): 400 en POST /items con lista vacía o nula ────────
+    //
+    // Patrón más liviano que ya usa el repo (ver
+    // CreditPurchaseServiceTest#quantityFueraDeRangoFallaLaValidacionDelBean):
+    // validar el bean directo con el Validator de Bean Validation en vez de
+    // un test @WebMvcTest completo — AddOrderItemsRequest.items() ya lleva
+    // @NotEmpty, y GlobalExceptionHandler ya mapea
+    // MethodArgumentNotValidException a 400 para cualquier @Valid @RequestBody.
+
+    @Test
+    @DisplayName("AddOrderItemsRequest: una lista de ítems vacía o nula falla la validación del bean (→ 400 vía @Valid)")
+    void addOrderItemsRequestConListaVaciaOInexistenteFallaLaValidacion() {
+        AddOrderItemsRequest vacio = new AddOrderItemsRequest(List.of());
+        assertThat(validator.validate(vacio)).isNotEmpty();
+
+        AddOrderItemsRequest nulo = new AddOrderItemsRequest(null);
+        assertThat(validator.validate(nulo)).isNotEmpty();
+
+        AddOrderItemsRequest valido = new AddOrderItemsRequest(
+            List.of(new PlaceOrderV2Request.OrderItemRequest(1L, null, null)));
+        assertThat(validator.validate(valido)).isEmpty();
     }
 }

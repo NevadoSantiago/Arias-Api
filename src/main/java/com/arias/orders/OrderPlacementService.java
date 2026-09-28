@@ -9,6 +9,8 @@ import com.arias.common.exception.BusinessException;
 import com.arias.credits.CreditLedgerService;
 import com.arias.credits.MovementRef;
 import com.arias.orders.notifications.OrderCancelledEvent;
+import com.arias.payments.CreditPurchaseRepository;
+import com.arias.payments.PurchaseType;
 import com.arias.restaurantconfig.RestaurantConfigRepository;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -84,6 +86,7 @@ public class OrderPlacementService {
     private final CreditLedgerService creditLedgerService;
     private final PickupSlotService pickupSlotService;
     private final RestaurantConfigRepository restaurantConfigRepo;
+    private final CreditPurchaseRepository creditPurchaseRepo;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
 
@@ -193,7 +196,7 @@ public class OrderPlacementService {
      */
     @Transactional
     public void cancel(Long userId, Long orderId) {
-        Order order = orderRepo.findByIdAndUserId(orderId, userId)
+        Order order = orderRepo.findByIdAndUserIdForUpdate(orderId, userId)
             .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
 
         if (order.getEstado() != OrderEstado.PENDIENTE) {
@@ -226,7 +229,7 @@ public class OrderPlacementService {
      */
     @Transactional
     public OrderDto addItems(Long userId, Long orderId, AddOrderItemsRequest req) {
-        Order order = orderRepo.findByIdAndUserId(orderId, userId)
+        Order order = orderRepo.findByIdAndUserIdForUpdate(orderId, userId)
             .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
 
         Instant now = clock.instant();
@@ -268,7 +271,7 @@ public class OrderPlacementService {
      */
     @Transactional
     public OrderDto removeItem(Long userId, Long orderId, Long itemId) {
-        Order order = orderRepo.findByIdAndUserId(orderId, userId)
+        Order order = orderRepo.findByIdAndUserIdForUpdate(orderId, userId)
             .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
 
         Instant now = clock.instant();
@@ -392,11 +395,29 @@ public class OrderPlacementService {
      * o dentro de {@code lead} minutos del retiro), pero un solo código de
      * error para ambas — a diferencia de {@link #cancel}, que distingue
      * {@code order-locked} de {@code cancel-window-closed}.
+     *
+     * <p><b>Pedidos pagados por compra DIRECTA</b> (unidad B6.1, hallazgo de
+     * revisión): {@code addItems}/{@code removeItem} mueven {@code
+     * available}↔{@code committed} de la billetera, exactamente como un
+     * pedido pagado con saldo propio — pero una compra {@code DIRECT}
+     * acredita {@code DIRECT_PURCHASE} derecho a {@code committed}, sin pasar
+     * por {@code available} (ver {@code CreditPurchaseService#creditPurchase}).
+     * Si se dejara modificar un pedido así, el {@code creditTotal} que queda
+     * después del cambio ya no coincidiría con el importe que la compra
+     * DIRECT cobró (o va a cobrar) por Mercado Pago — el pago queda atado al
+     * total ORIGINAL del pedido, no al que resulte de agregar/quitar ítems.
+     * Se rechaza con el MISMO código {@code order-not-modifiable} de arriba
+     * (mismo contrato para el frontend), pero un mensaje que aclara el motivo
+     * real en vez de mezclarlo con "ya no se puede cancelar".
      */
-    private static void assertModifiable(Order order, Instant now, int leadMinutes) {
+    private void assertModifiable(Order order, Instant now, int leadMinutes) {
         if (!isCancellable(order, now, leadMinutes)) {
             throw BusinessException.conflict("order-not-modifiable",
                 "El pedido ya no se puede modificar");
+        }
+        if (creditPurchaseRepo.existsByOrderIdAndType(order.getId(), PurchaseType.DIRECT)) {
+            throw BusinessException.conflict("order-not-modifiable",
+                "Este pedido se pagó aparte y no se puede modificar.");
         }
     }
 
