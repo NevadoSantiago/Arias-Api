@@ -443,6 +443,120 @@ class OrderPlacementServiceTest {
         assertThat(stillPending.getEstado()).isEqualTo(OrderEstado.PENDIENTE);
     }
 
+    // ─── placeAwaitingPayment() / B7: pedido "esperando pago" ──────────────
+
+    @Test
+    @DisplayName("placeAwaitingPayment(): crea el pedido PENDIENTE_PAGO, reserva stock, y NO compromete créditos")
+    void placeAwaitingPaymentReservaStockSinComprometerCreditos() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 3);
+        User user = persistB2cUser();
+        // Saldo CERO a propósito: el pago directo es justamente para un
+        // cliente sin almuerzos suficientes — placeAwaitingPayment() nunca
+        // debe tocar el libro mayor, así que ni siquiera necesita billetera.
+
+        Order order = orderPlacementService.placeAwaitingPayment(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt()));
+
+        assertThat(order.getEstado()).isEqualTo(OrderEstado.PENDIENTE_PAGO);
+        assertThat(order.getCreditTotal()).isEqualTo(2);
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(2);
+
+        assertThat(walletRepo.findById(user.getId())).isEmpty();
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("placeAwaitingPayment(): rechaza un horario de retiro inválido exactamente como place()")
+    void placeAwaitingPaymentValidaHorarioIgualQuePlace() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 3);
+        User user = persistB2cUser();
+
+        assertThatThrownBy(() -> orderPlacementService.placeAwaitingPayment(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(1, ChronoUnit.MINUTES))))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "pickup-outside-service-window");
+
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(3);
+    }
+
+    // ─── cancel() de un pedido esperando pago (B7): sin liberar créditos ───
+
+    @Test
+    @DisplayName("cancel(): un pedido PENDIENTE_PAGO se puede cancelar, restaura stock y NO libera créditos (nunca se comprometieron)")
+    void cancelPedidoEsperandoPagoRestauraStockSinLiberarCreditos() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 3);
+        User user = persistB2cUser();
+
+        Order order = orderPlacementService.placeAwaitingPayment(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(2);
+
+        orderPlacementService.cancel(user.getId(), order.getId());
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(3);
+
+        // Sin billetera (o vacía): nunca se comprometió nada, así que no hay
+        // nada que liberar — a diferencia de cancelar un pedido PENDIENTE.
+        assertThat(walletRepo.findById(user.getId())
+            .map(w -> w.getAvailable() + w.getCommitted()).orElse(0)).isZero();
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
+
+        Order cancelled = orderRepo.findById(order.getId()).orElseThrow();
+        assertThat(cancelled.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(cancelled.getCancelledAt()).isNotNull();
+    }
+
+    // ─── B7: un pedido PENDIENTE_PAGO nunca es MODIFICABLE ─────────────────
+
+    @Test
+    @DisplayName("addItems(): rechaza un pedido PENDIENTE_PAGO con 409 order-not-modifiable")
+    void addItemsRechazaPedidoEsperandoPago() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 3);
+        User user = persistB2cUser();
+
+        Order order = orderPlacementService.placeAwaitingPayment(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt()));
+
+        assertThatThrownBy(() -> orderPlacementService.addItems(user.getId(), order.getId(),
+            new AddOrderItemsRequest(List.of(new PlaceOrderV2Request.OrderItemRequest(dish.getId(), null, null)))))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-modifiable");
+    }
+
+    @Test
+    @DisplayName("removeItem(): rechaza un pedido PENDIENTE_PAGO con 409 order-not-modifiable")
+    void removeItemRechazaPedidoEsperandoPago() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 3);
+        User user = persistB2cUser();
+
+        Order order = orderPlacementService.placeAwaitingPayment(user.getId(),
+            singleItemRequest(dish.getId(), defaultPickupAt()));
+        Long itemId = order.getItems().get(0).getId();
+
+        assertThatThrownBy(() -> orderPlacementService.removeItem(user.getId(), order.getId(), itemId))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-modifiable");
+    }
+
     // ─── Empleado de empresa también consume créditos ──────────────────────
 
     @Test

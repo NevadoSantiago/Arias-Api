@@ -97,70 +97,15 @@ public class OrderPlacementService {
      */
     @Transactional
     public OrderDto place(Long userId, PlaceOrderV2Request req) {
-        User user = userRepo.findById(userId)
-            .orElseThrow(() -> BusinessException.notFound("user-not-found", "Usuario no encontrado"));
-
-        // Gap de la unidad 4/5: la verificación de correo se controla acá,
-        // donde el usuario efectivamente gasta créditos — no en el login
-        // (diseño §Seguridad, "Cuentas sin verificar"). Empleados de empresa
-        // quedan exentos aunque emailVerifiedAt sea NULL (ver User.mustVerifyEmailToSpend).
-        if (user.mustVerifyEmailToSpend()) {
-            throw BusinessException.conflict("email-not-verified",
-                "Debés verificar tu correo electrónico antes de pedir");
-        }
-
-        // Gap de la unidad 5/9 (diseño §Decisión 9): quien entró con Google
-        // nunca dio teléfono ni apodo — sin eso la cocina no tiene a quién
-        // nombrar ni a quién llamar. Va DESPUÉS del gate de email porque no
-        // tiene sentido pedirle datos de perfil a una identidad todavía no
-        // verificada. Empleados de empresa quedan exentos (ver
-        // User.mustCompleteProfileToSpend).
-        if (user.mustCompleteProfileToSpend()) {
-            throw BusinessException.conflict("profile-incomplete",
-                "Completá tu teléfono y apodo antes de pedir");
-        }
-
-        if (req.items() == null || req.items().isEmpty()) {
-            throw BusinessException.badRequest("empty-order", "El pedido debe tener al menos un ítem");
-        }
-
-        if (req.pickupAt() == null) {
-            throw BusinessException.badRequest("pickup-at-required", "Debe indicar el horario de retiro");
-        }
-        // Ventana de semana actual/siguiente, horario dentro del servicio y
-        // tiempo mínimo de preparación — spec pickup-scheduling completa
-        // (unidad 8), un solo punto de validación reutilizado también por
-        // GET /api/v1/orders/pickup-slots.
-        pickupSlotService.assertValidPickupTime(req.pickupAt());
-
-        List<OrderItem> items = new ArrayList<>();
-        int total = 0;
-
-        for (PlaceOrderV2Request.OrderItemRequest itemReq : req.items()) {
-            OrderItem item = buildItemAndReserveStock(itemReq);
-            total += item.getCreditCost();
-            items.add(item);
-        }
-
-        Order order = Order.builder()
-            .user(user)
-            .company(user.getCompany())
-            .fecha(LocalDate.ofInstant(req.pickupAt(), ZONE))
-            .pickupAt(req.pickupAt())
-            .estado(OrderEstado.PENDIENTE)
-            .creditTotal(total)
-            .notas(trimOrNull(req.notas()))
-            .build();
-
-        items.forEach(order::addItem);
-
+        User user = findUserAndAssertCanSpend(userId);
+        Order order = buildValidatedOrder(user, req, OrderEstado.PENDIENTE);
         Order saved = orderRepo.save(order);
 
         // Si el saldo no alcanza, CreditLedgerService.commit lanza
         // insufficient-credits DENTRO de esta misma transacción — Spring
         // revierte también el save() del pedido y los decrementos de stock
         // de arriba. Ningún compromiso parcial es posible.
-        creditLedgerService.commit(userId, total,
+        creditLedgerService.commit(userId, saved.getCreditTotal(),
             MovementRef.forOrder(saved.getId(), "Pedido #" + saved.getId()));
 
         int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
@@ -168,12 +113,39 @@ public class OrderPlacementService {
     }
 
     /**
+     * Crea un pedido "esperando pago" (unidad B7, {@code POST
+     * /api/v2/orders/direct-checkout}) — MISMA validación que {@link #place}
+     * (gates de perfil, ítems, horario de retiro vía {@link
+     * PickupSlotService#assertValidPickupTime}) y la MISMA reserva de stock
+     * por ítem ({@link #buildItemAndReserveStock}), pero SIN comprometer
+     * créditos: el pedido queda {@link OrderEstado#PENDIENTE_PAGO} hasta que
+     * Mercado Pago apruebe el pago de la compra DIRECT asociada.
+     *
+     * <p>Se invoca DENTRO de la misma transacción que crea esa compra DIRECT
+     * y el checkout de Mercado Pago ({@code
+     * CreditPurchaseService#createDirectCheckout}) — un fallo en cualquier
+     * paso posterior (incluida la llamada a Mercado Pago) revierte también
+     * este pedido y el stock reservado, exactamente como {@link
+     * com.arias.payments.CreditPurchaseService#createPurchase} revierte su
+     * compra si el checkout falla.
+     */
+    @Transactional
+    public Order placeAwaitingPayment(Long userId, PlaceOrderV2Request req) {
+        User user = findUserAndAssertCanSpend(userId);
+        Order order = buildValidatedOrder(user, req, OrderEstado.PENDIENTE_PAGO);
+        // Sin creditLedgerService.commit a propósito — el pago de Mercado
+        // Pago cubre el pedido entero, no el saldo de créditos del cliente.
+        return orderRepo.save(order);
+    }
+
+    /**
      * "Mis pedidos" (gap fix): pedidos del cliente autenticado, acotados y
      * ordenados por {@link OrderRepository#findRecentByUserId} — próximos
      * primero, luego los más recientes del pasado. Incluye pedidos
-     * {@code CANCELADO} (soft-cancel, el cliente ve qué pasó con sus
-     * créditos) a diferencia de {@link OrderRepository#findByFechaAndEstadoNot},
-     * que los excluye para la cocina.
+     * {@code CANCELADO} y {@code PENDIENTE_PAGO} (soft-cancel/esperando pago,
+     * el cliente necesita verlos para pagar o ver qué pasó con sus créditos)
+     * a diferencia de {@link OrderRepository#findByFechaAndEstadoNotIn}, que
+     * los excluye para la cocina.
      *
      * <p>{@code cancellable} se calcula acá, no en el frontend: es
      * exactamente la misma regla que {@link #cancel}, y esa regla ya divergió
@@ -190,16 +162,19 @@ public class OrderPlacementService {
     }
 
     /**
-     * Cancela el pedido — solo mientras esté PENDIENTE y falte más de {@code
-     * lead} minutos para el retiro (misma re-validación perezosa del diseño
-     * §Decisión 4, independiente de si el job de consumo corrió).
+     * Cancela el pedido — solo mientras esté PENDIENTE o {@code
+     * PENDIENTE_PAGO} (unidad B7: un pedido esperando pago también se puede
+     * cancelar, sin liberar créditos porque nunca se comprometieron — ver
+     * {@link #applyCancellation}) y falte más de {@code lead} minutos para el
+     * retiro (misma re-validación perezosa del diseño §Decisión 4,
+     * independiente de si el job de consumo corrió).
      */
     @Transactional
     public void cancel(Long userId, Long orderId) {
         Order order = orderRepo.findByIdAndUserIdForUpdate(orderId, userId)
             .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
 
-        if (order.getEstado() != OrderEstado.PENDIENTE) {
+        if (order.getEstado() != OrderEstado.PENDIENTE && order.getEstado() != OrderEstado.PENDIENTE_PAGO) {
             throw BusinessException.conflict("order-locked",
                 "El pedido ya no se puede cancelar");
         }
@@ -297,34 +272,39 @@ public class OrderPlacementService {
     }
 
     /**
-     * Cierra el pedido de una compra DIRECTA cuyo pago terminó en un estado
-     * no pagado — rechazado, cancelado, o expirado por {@code
-     * PaymentReconciliationScheduler} (diseño §Flujo de datos, tabla "Estado
+     * Cierra un pedido "esperando pago" (unidad B7, {@link
+     * OrderEstado#PENDIENTE_PAGO}) cuyo pago DIRECT terminó sin pagarse
+     * (rechazado, cancelado, o expirado por {@code
+     * PaymentReconciliationScheduler} — diseño §Flujo de datos, tabla "Estado
      * del pago → Acción": "si era compra directa, se cancela el pedido
-     * asociado"). Invocado por {@code CreditPurchaseService}, nunca
-     * directamente desde un controller.
+     * asociado"), o cuyo punto de consumo (pickup − lead) llegó sin que el
+     * pago se haya resuelto todavía ({@code OrderConsumptionScheduler} —
+     * bullet "pago pendiente al momento de confirmar/preparar → se cancela").
+     * Invocado por {@code CreditPurchaseService} y por {@code
+     * OrderConsumptionScheduler}, nunca directamente desde un controller.
      *
-     * <p>Reutiliza el MISMO cierre que {@link #cancel} — liberar créditos
-     * COMMITTED, restaurar stock, marcar {@code CANCELADO} — vía {@link
-     * #applyCancellation}, pero A PROPÓSITO sin la ventana de cancelación del
-     * cliente ({@code now < pickupAt - lead}): esa ventana existe para que un
-     * cliente no cancele "a último momento" un pedido que SÍ iba a cocinarse,
-     * no para este caso — acá el pedido de todos modos NUNCA se va a pagar
-     * (el pago ya falló), y el rechazo de Mercado Pago o la reconciliación
-     * horaria pueden llegar después de que esa ventana ya cerró. Por eso no
-     * puede reusarse {@link #cancel} tal cual: exige {@code userId} (ownership
-     * del cliente, no aplica a un cierre disparado por el sistema) y ese
-     * deadline (que acá no debe aplicar).
+     * <p>Reutiliza el MISMO cierre que {@link #cancel} — restaurar stock,
+     * marcar {@code CANCELADO} — vía {@link #applyCancellation}, que NUNCA
+     * libera créditos para un pedido {@code PENDIENTE_PAGO} porque {@link
+     * #placeAwaitingPayment} nunca los comprometió, y A PROPÓSITO sin la
+     * ventana de cancelación del cliente ({@code now < pickupAt - lead}): esa
+     * ventana existe para que un cliente no cancele "a último momento" un
+     * pedido que SÍ iba a cocinarse, no para este caso — acá el pedido de
+     * todos modos NUNCA se va a pagar a tiempo. Por eso no puede reusarse
+     * {@link #cancel} tal cual: exige {@code userId} (ownership del cliente,
+     * no aplica a un cierre disparado por el sistema) y ese deadline (que acá
+     * no debe aplicar).
      *
-     * <p><b>Idempotente</b>: si el pedido ya no está {@code PENDIENTE} (ya se
-     * cerró por un webhook/reconciliación anterior, ya se pagó con créditos
-     * propios, ya se canceló, o ya se consumió), es un no-op — así un webhook
-     * duplicado o una segunda pasada de reconciliación nunca libera
-     * stock/créditos dos veces.
+     * <p><b>Idempotente</b>: si el pedido ya no está {@code PENDIENTE_PAGO}
+     * (ya se cerró por un webhook/reconciliación/scheduler anterior, el pago
+     * ya se aprobó, o el cliente ya lo canceló), es un no-op — así un webhook
+     * duplicado, una segunda pasada de reconciliación, o un tick del
+     * scheduler que corre después de que el pago se resolvió, nunca liberan
+     * stock dos veces ni pisan un pedido que ya está en otro estado.
      */
     @Transactional
     public void closeForPaymentFailure(Order order) {
-        if (order.getEstado() != OrderEstado.PENDIENTE) {
+        if (order.getEstado() != OrderEstado.PENDIENTE_PAGO) {
             return;
         }
         applyCancellation(order, clock.instant());
@@ -332,33 +312,42 @@ public class OrderPlacementService {
 
     /**
      * Núcleo compartido de {@link #cancel} y {@link #closeForPaymentFailure}:
-     * restaura stock, libera créditos COMMITTED, marca {@code CANCELADO} y
-     * publica el evento de cancelación. El llamador es responsable de
-     * cualquier validación previa (ventana de cancelación, ownership,
-     * idempotencia) — acá se asume que YA se decidió que el pedido debe
-     * cerrarse.
+     * restaura stock, marca {@code CANCELADO} y, SOLO si el pedido tenía
+     * créditos comprometidos ({@code estado == PENDIENTE} — nunca para
+     * {@code PENDIENTE_PAGO}, unidad B7, cuyos créditos jamás se
+     * comprometieron), libera esos créditos COMMITTED y publica el evento de
+     * cancelación (su copy de cliente asume créditos liberados — para
+     * {@code PENDIENTE_PAGO} no aplica y no se publica). El llamador es
+     * responsable de cualquier validación previa (ventana de cancelación,
+     * ownership, idempotencia) — acá se asume que YA se decidió que el
+     * pedido debe cerrarse.
      */
     private void applyCancellation(Order order, Instant now) {
         Long userId = order.getUser().getId();
+        boolean teniaCreditosComprometidos = order.getEstado() == OrderEstado.PENDIENTE;
 
         for (OrderItem item : order.getItems()) {
             dishRepo.incrementStock(item.getDish().getId());
         }
 
-        creditLedgerService.release(userId, order.getCreditTotal(),
-            MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()));
+        if (teniaCreditosComprometidos) {
+            creditLedgerService.release(userId, order.getCreditTotal(),
+                MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()));
+        }
 
         order.setEstado(OrderEstado.CANCELADO);
         order.setCancelledAt(now);
 
-        // Publicado DENTRO de la transacción — OrderNotificationScheduler lo
-        // escucha con @TransactionalEventListener(phase = AFTER_COMMIT), así
-        // que si esta transacción termina en rollback el mail nunca sale
-        // (unidad 12, diseño §Decisión 11).
-        User user = order.getUser();
-        eventPublisher.publishEvent(new OrderCancelledEvent(
-            order.getId(), userId, user.getEmail(), displayName(user),
-            order.getPickupAt(), order.getCreditTotal()));
+        if (teniaCreditosComprometidos) {
+            // Publicado DENTRO de la transacción — OrderNotificationScheduler
+            // lo escucha con @TransactionalEventListener(phase = AFTER_COMMIT),
+            // así que si esta transacción termina en rollback el mail nunca
+            // sale (unidad 12, diseño §Decisión 11).
+            User user = order.getUser();
+            eventPublisher.publishEvent(new OrderCancelledEvent(
+                order.getId(), userId, user.getEmail(), displayName(user),
+                order.getPickupAt(), order.getCreditTotal()));
+        }
     }
 
     private static String displayName(User user) {
@@ -374,14 +363,16 @@ public class OrderPlacementService {
     // ─── helpers ──────────────────────────────────────────────────────────
 
     /**
-     * Misma regla que {@link #cancel} sin lanzar: {@code PENDIENTE && now <
-     * pickupAt - lead}. Único punto de verdad para "¿se puede cancelar ESTE
-     * pedido AHORA?" — usado por {@link #place} y {@link #list} para que el
-     * campo {@code cancellable} de {@link OrderDto} nunca se calcule dos
-     * veces con lógica distinta.
+     * Misma regla que {@link #cancel} sin lanzar: {@code (PENDIENTE ||
+     * PENDIENTE_PAGO) && now < pickupAt - lead}. Único punto de verdad para
+     * "¿se puede cancelar ESTE pedido AHORA?" — usado por {@link #place} y
+     * {@link #list} para que el campo {@code cancellable} de {@link
+     * OrderDto} nunca se calcule dos veces con lógica distinta. {@code
+     * PENDIENTE_PAGO} (unidad B7) es cancelable con la MISMA ventana — pero
+     * NO es MODIFICABLE, ver {@link #assertModifiable}.
      */
     private static boolean isCancellable(Order order, Instant now, int leadMinutes) {
-        if (order.getEstado() != OrderEstado.PENDIENTE) {
+        if (order.getEstado() != OrderEstado.PENDIENTE && order.getEstado() != OrderEstado.PENDIENTE_PAGO) {
             return false;
         }
         Instant deadline = order.getPickupAt().minus(leadMinutes, ChronoUnit.MINUTES);
@@ -409,8 +400,23 @@ public class OrderPlacementService {
      * Se rechaza con el MISMO código {@code order-not-modifiable} de arriba
      * (mismo contrato para el frontend), pero un mensaje que aclara el motivo
      * real en vez de mezclarlo con "ya no se puede cancelar".
+     *
+     * <p><b>Pedidos esperando pago</b> (unidad B7): un pedido {@code
+     * PENDIENTE_PAGO} es CANCELABLE ({@link #isCancellable} lo acepta) pero
+     * nunca MODIFICABLE — agregar/quitar ítems movería {@code creditTotal},
+     * que ya es el importe exacto que la compra DIRECT le cobra (o le va a
+     * cobrar) al cliente por Mercado Pago. Chequeo explícito ANTES de {@link
+     * #isCancellable} en vez de depender de que después falle el chequeo de
+     * {@code existsByOrderIdAndType} de abajo, porque ESE chequeo es sobre
+     * compras ya asociadas — un pedido recién creado por {@code
+     * placeAwaitingPayment} puede no tener su compra DIRECT todavía
+     * persistida en el instante exacto en que se evalúa esto.
      */
     private void assertModifiable(Order order, Instant now, int leadMinutes) {
+        if (order.getEstado() == OrderEstado.PENDIENTE_PAGO) {
+            throw BusinessException.conflict("order-not-modifiable",
+                "Este pedido está esperando el pago y no se puede modificar.");
+        }
         if (!isCancellable(order, now, leadMinutes)) {
             throw BusinessException.conflict("order-not-modifiable",
                 "El pedido ya no se puede modificar");
@@ -419,6 +425,76 @@ public class OrderPlacementService {
             throw BusinessException.conflict("order-not-modifiable",
                 "Este pedido se pagó aparte y no se puede modificar.");
         }
+    }
+
+    /**
+     * Carga el usuario y aplica los dos gates de "puede gastar" (email
+     * verificado, perfil completo) — compartido por {@link #place} y {@link
+     * #placeAwaitingPayment} para que ambos caminos nunca diverjan en esta
+     * validación. Ver el javadoc original de cada gate en el historial de
+     * {@link #place} (unidades 4/5 y 5/9).
+     */
+    private User findUserAndAssertCanSpend(Long userId) {
+        User user = userRepo.findById(userId)
+            .orElseThrow(() -> BusinessException.notFound("user-not-found", "Usuario no encontrado"));
+
+        if (user.mustVerifyEmailToSpend()) {
+            throw BusinessException.conflict("email-not-verified",
+                "Debés verificar tu correo electrónico antes de pedir");
+        }
+        if (user.mustCompleteProfileToSpend()) {
+            throw BusinessException.conflict("profile-incomplete",
+                "Completá tu teléfono y apodo antes de pedir");
+        }
+        return user;
+    }
+
+    /**
+     * Valida el request exactamente como el {@link #place} original (ítems no
+     * vacíos, horario de retiro requerido y válido vía {@link
+     * PickupSlotService#assertValidPickupTime}), reserva el stock de cada
+     * ítem ({@link #buildItemAndReserveStock}) y arma — SIN persistir — el
+     * {@link Order} resultante en el {@code estado} pedido. Compartido por
+     * {@link #place} ({@code PENDIENTE}) y {@link #placeAwaitingPayment}
+     * ({@code PENDIENTE_PAGO}, unidad B7) para que ambos caminos nunca
+     * diverjan en esta validación; lo único que cambia entre los dos es si el
+     * llamador compromete créditos después.
+     */
+    private Order buildValidatedOrder(User user, PlaceOrderV2Request req, OrderEstado estado) {
+        if (req.items() == null || req.items().isEmpty()) {
+            throw BusinessException.badRequest("empty-order", "El pedido debe tener al menos un ítem");
+        }
+
+        if (req.pickupAt() == null) {
+            throw BusinessException.badRequest("pickup-at-required", "Debe indicar el horario de retiro");
+        }
+        // Ventana de semana actual/siguiente, horario dentro del servicio y
+        // tiempo mínimo de preparación — spec pickup-scheduling completa
+        // (unidad 8), un solo punto de validación reutilizado también por
+        // GET /api/v1/orders/pickup-slots.
+        pickupSlotService.assertValidPickupTime(req.pickupAt());
+
+        List<OrderItem> items = new ArrayList<>();
+        int total = 0;
+
+        for (PlaceOrderV2Request.OrderItemRequest itemReq : req.items()) {
+            OrderItem item = buildItemAndReserveStock(itemReq);
+            total += item.getCreditCost();
+            items.add(item);
+        }
+
+        Order order = Order.builder()
+            .user(user)
+            .company(user.getCompany())
+            .fecha(LocalDate.ofInstant(req.pickupAt(), ZONE))
+            .pickupAt(req.pickupAt())
+            .estado(estado)
+            .creditTotal(total)
+            .notas(trimOrNull(req.notas()))
+            .build();
+
+        items.forEach(order::addItem);
+        return order;
     }
 
     /**
