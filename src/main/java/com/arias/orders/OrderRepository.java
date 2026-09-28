@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -119,6 +120,9 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
      * pero este UPDATE nunca debe reclamar el slot de un pedido sin pagar
      * aunque cambie el llamador en el futuro.
      */
+    // Transacción propia: el llamador (cron de recordatorios) no tiene una, y cada claim
+    // debe commitear antes de mandar el email, sin envolver todo el loop.
+    @Transactional
     @Modifying
     @Query("""
         UPDATE Order o SET o.reminderSentAt = :now

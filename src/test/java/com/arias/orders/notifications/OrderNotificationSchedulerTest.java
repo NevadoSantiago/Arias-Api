@@ -31,6 +31,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
@@ -341,5 +342,30 @@ class OrderNotificationSchedulerTest {
         scheduler.sendPickupReminders(); // segundo tick del minuto siguiente
 
         verify(emailService, times(1)).send(eq(user.getEmail()), anyString(), anyString());
+    }
+
+    /**
+     * Regresión B9: el scheduler real corre SIN transacción, y el
+     * {@code @Modifying} de {@code claimReminderSlot} exige una. Los demás
+     * tests de la clase corren dentro de la transacción de test, que la
+     * provee y enmascara el bug. NOT_SUPPORTED suspende esa transacción: la
+     * llamada se comporta como el tick real del cron y los datos commitean
+     * de verdad (se limpian a mano en el finally).
+     */
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    @DisplayName("sendPickupReminders(): sin transacción del llamador, el claim corre en la suya, marca reminderSentAt y envía el email")
+    void recordatorioFuncionaSinTransaccionDelLlamador() {
+        User user = persistCustomer();
+        Order order = persistOrder(user, FIXED_NOW.plus(25, ChronoUnit.MINUTES), OrderEstado.PENDIENTE, 1);
+        try {
+            scheduler.sendPickupReminders();
+
+            verify(emailService).send(eq(user.getEmail()), anyString(), anyString());
+            assertThat(orderRepo.findById(order.getId()).orElseThrow().getReminderSentAt()).isNotNull();
+        } finally {
+            orderRepo.deleteById(order.getId());
+            userRepo.deleteById(user.getId());
+        }
     }
 }
