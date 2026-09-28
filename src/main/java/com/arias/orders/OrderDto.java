@@ -20,9 +20,23 @@ public record OrderDto(
      * "mis pedidos": esa regla ya divergió una vez en este proyecto). Ver
      * {@code OrderPlacementService#isCancellable}.
      */
-    boolean cancellable
+    boolean cancellable,
+    /**
+     * Si al pedido se le pueden agregar/quitar ítems EN ESTE MOMENTO — el
+     * MISMO predicado que usa {@code OrderPlacementService#assertModifiable}
+     * (no {@code PENDIENTE_PAGO}, cancelable, sin compra DIRECT asociada), así
+     * el frontend nunca decide "agregar platos" con {@code cancellable}, que
+     * también es true para esos dos casos.
+     */
+    boolean modifiable,
+    /**
+     * Si el cliente puede cambiar el horario de retiro EN ESTE MOMENTO
+     * ({@code estado == PENDIENTE && now < pickupAt - lead}). Ver {@code
+     * OrderPlacementService#changePickupTime}.
+     */
+    boolean pickupTimeChangeable
 ) {
-    public static OrderDto from(Order order, boolean cancellable) {
+    public static OrderDto from(Order order, boolean cancellable, boolean modifiable, boolean pickupTimeChangeable) {
         return new OrderDto(
             order.getId(),
             order.getFecha(),
@@ -31,7 +45,9 @@ public record OrderDto(
             order.getCreditTotal(),
             order.getNotas(),
             order.getItems().stream().map(OrderItemDto::from).toList(),
-            cancellable
+            cancellable,
+            modifiable,
+            pickupTimeChangeable
         );
     }
 }

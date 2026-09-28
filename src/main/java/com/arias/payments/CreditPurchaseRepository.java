@@ -7,8 +7,10 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 public interface CreditPurchaseRepository extends JpaRepository<CreditPurchase, UUID> {
@@ -57,6 +59,16 @@ public interface CreditPurchaseRepository extends JpaRepository<CreditPurchase, 
      * método no necesita distinguir ese caso.
      */
     boolean existsByOrderIdAndType(Long orderId, PurchaseType type);
+
+    /**
+     * Versión en bloque de {@link #existsByOrderIdAndType} para el listado
+     * "mis pedidos" (unidad B10): de los pedidos dados, los ids que tienen una
+     * compra del tipo indicado — UNA consulta para todo el listado en vez de
+     * una por pedido (N+1). Misma semántica: no filtra por {@code status}.
+     */
+    @Query("SELECT DISTINCT p.order.id FROM CreditPurchase p WHERE p.order.id IN :orderIds AND p.type = :type")
+    Set<Long> findOrderIdsWithPurchaseType(@Param("orderIds") Collection<Long> orderIds,
+                                           @Param("type") PurchaseType type);
 
     /**
      * La compra DIRECT de un pedido dado (unidad B7, resumir un pago

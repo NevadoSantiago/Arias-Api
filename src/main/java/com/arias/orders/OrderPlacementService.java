@@ -29,6 +29,8 @@ import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.function.BooleanSupplier;
 
 /**
  * Lógica del pedido nuevo por créditos (unidad 7, diseño §Decisión 2 y §Decisión 4).
@@ -110,7 +112,7 @@ public class OrderPlacementService {
             MovementRef.forOrder(saved.getId(), "Pedido #" + saved.getId()));
 
         int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
-        return OrderDto.from(saved, isCancellable(saved, clock.instant(), lead));
+        return toDto(saved, clock.instant(), lead);
     }
 
     /**
@@ -157,8 +159,17 @@ public class OrderPlacementService {
         Instant now = clock.instant();
         int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
 
-        return orderRepo.findRecentByUserId(userId, PageRequest.of(0, RECENT_ORDERS_LIMIT)).stream()
-            .map(order -> OrderDto.from(order, isCancellable(order, now, lead)))
+        List<Order> orders = orderRepo.findRecentByUserId(userId, PageRequest.of(0, RECENT_ORDERS_LIMIT));
+
+        // Una sola consulta para saber cuáles tienen compra DIRECT (evita un
+        // existsBy por pedido). `modifiable` la necesita; el resto no.
+        Set<Long> directOrderIds = orders.isEmpty()
+            ? Set.of()
+            : creditPurchaseRepo.findOrderIdsWithPurchaseType(
+                orders.stream().map(Order::getId).toList(), PurchaseType.DIRECT);
+
+        return orders.stream()
+            .map(order -> toDto(order, now, lead, () -> directOrderIds.contains(order.getId())))
             .toList();
     }
 
@@ -229,7 +240,7 @@ public class OrderPlacementService {
         creditLedgerService.commit(userId, added,
             MovementRef.forOrder(orderId, "Ítems agregados al pedido #" + orderId));
 
-        return OrderDto.from(saved, isCancellable(saved, now, lead));
+        return toDto(saved, now, lead);
     }
 
     /**
@@ -269,7 +280,7 @@ public class OrderPlacementService {
             order.setCreditTotal(order.getCreditTotal() - item.getCreditCost());
         }
 
-        return OrderDto.from(order, isCancellable(order, now, lead));
+        return toDto(order, now, lead);
     }
 
     /**
@@ -448,18 +459,63 @@ public class OrderPlacementService {
      * persistida en el instante exacto en que se evalúa esto.
      */
     private void assertModifiable(Order order, Instant now, int leadMinutes) {
+        String reason = notModifiableReason(order, now, leadMinutes,
+            () -> creditPurchaseRepo.existsByOrderIdAndType(order.getId(), PurchaseType.DIRECT));
+        if (reason != null) {
+            throw BusinessException.conflict("order-not-modifiable", reason);
+        }
+    }
+
+    /**
+     * Único punto de verdad de "¿a este pedido se le pueden agregar/quitar
+     * ítems AHORA?" (unidad B10): lo usan {@link #assertModifiable} (que lanza
+     * con el motivo) y el campo {@code modifiable} de {@link OrderDto} (que
+     * solo mira si hay motivo), así ambos nunca pueden divergir. Devuelve el
+     * mensaje para el cliente, o {@code null} si el pedido es modificable.
+     *
+     * <p>El orden de los chequeos es el de siempre (estado {@code
+     * PENDIENTE_PAGO}, ventana, compra DIRECT) y la consulta de la compra
+     * DIRECT es perezosa ({@code hasDirectPurchase}): el listado la resuelve
+     * en bloque, sin una consulta por pedido, y un pedido ya no modificable
+     * por estado/ventana ni la evalúa.
+     */
+    private static String notModifiableReason(Order order, Instant now, int leadMinutes,
+                                              BooleanSupplier hasDirectPurchase) {
         if (order.getEstado() == OrderEstado.PENDIENTE_PAGO) {
-            throw BusinessException.conflict("order-not-modifiable",
-                "Este pedido está esperando el pago y no se puede modificar.");
+            return "Este pedido está esperando el pago y no se puede modificar.";
         }
         if (!isCancellable(order, now, leadMinutes)) {
-            throw BusinessException.conflict("order-not-modifiable",
-                "El pedido ya no se puede modificar");
+            return "El pedido ya no se puede modificar";
         }
-        if (creditPurchaseRepo.existsByOrderIdAndType(order.getId(), PurchaseType.DIRECT)) {
-            throw BusinessException.conflict("order-not-modifiable",
-                "Este pedido se pagó aparte y no se puede modificar.");
+        if (hasDirectPurchase.getAsBoolean()) {
+            return "Este pedido se pagó aparte y no se puede modificar.";
         }
+        return null;
+    }
+
+    /**
+     * ¿Se puede cambiar el horario de retiro AHORA? (unidad B11) — pedido
+     * programado ({@code PENDIENTE}) y antes del corte {@code pickupAt -
+     * lead}. A diferencia de {@link #isCancellable}, excluye {@code
+     * PENDIENTE_PAGO} (no cambia de horario); a diferencia de {@link
+     * #notModifiableReason}, un pedido pagado aparte (DIRECT) SÍ puede
+     * cambiarlo porque el importe no varía.
+     */
+    private static boolean isPickupTimeChangeable(Order order, Instant now, int leadMinutes) {
+        return order.getEstado() == OrderEstado.PENDIENTE && isCancellable(order, now, leadMinutes);
+    }
+
+    /** DTO de un solo pedido: la compra DIRECT se consulta solo si hace falta. */
+    private OrderDto toDto(Order order, Instant now, int leadMinutes) {
+        return toDto(order, now, leadMinutes,
+            () -> creditPurchaseRepo.existsByOrderIdAndType(order.getId(), PurchaseType.DIRECT));
+    }
+
+    private static OrderDto toDto(Order order, Instant now, int leadMinutes, BooleanSupplier hasDirectPurchase) {
+        return OrderDto.from(order,
+            isCancellable(order, now, leadMinutes),
+            notModifiableReason(order, now, leadMinutes, hasDirectPurchase) == null,
+            isPickupTimeChangeable(order, now, leadMinutes));
     }
 
     /**

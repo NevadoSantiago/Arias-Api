@@ -1370,4 +1370,101 @@ class OrderPlacementServiceTest {
             List.of(new PlaceOrderV2Request.OrderItemRequest(1L, null, null)));
         assertThat(validator.validate(valido)).isEmpty();
     }
+
+    // ─── B10: `modifiable` y `pickupTimeChangeable` en el DTO ──────────────
+    //
+    // El frontend decidía "agregar platos a este pedido" con `cancellable`,
+    // que también es true para PENDIENTE_PAGO y para pedidos pagados aparte
+    // (DIRECT) — el backend después los rechazaba con 409. `modifiable` sale
+    // del MISMO predicado que assertModifiable.
+
+    @Test
+    @DisplayName("list(): modifiable is true for a normal scheduled order before the cutoff")
+    void listMarcaModifiableUnPedidoProgramadoNormal() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto placed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+
+        assertThat(placed.modifiable()).isTrue();
+        OrderDto listed = orderPlacementService.list(user.getId()).get(0);
+        assertThat(listed.modifiable()).isTrue();
+        assertThat(listed.pickupTimeChangeable()).isTrue();
+    }
+
+    @Test
+    @DisplayName("list(): modifiable is false for PENDIENTE_PAGO even though it is cancellable")
+    void listNoMarcaModifiableUnPedidoEsperandoPago() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 5);
+        User user = persistB2cUser();
+
+        Order awaiting = orderPlacementService.placeAwaitingPayment(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+
+        OrderDto listed = orderPlacementService.list(user.getId()).stream()
+            .filter(o -> o.id().equals(awaiting.getId())).findFirst().orElseThrow();
+        assertThat(listed.cancellable()).isTrue();
+        assertThat(listed.modifiable()).isFalse();
+        assertThat(listed.pickupTimeChangeable()).isFalse();
+    }
+
+    @Test
+    @DisplayName("list(): modifiable is false for a DIRECT-paid order but its pickup time can still change")
+    void listNoMarcaModifiableUnPedidoPagadoDirecto() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto direct = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishA.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        persistDirectPurchase(user, orderRepo.findById(direct.id()).orElseThrow(), CreditPurchaseStatus.PENDING);
+        OrderDto normal = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishB.getId(), FIXED_NOW.plus(120, ChronoUnit.MINUTES)));
+
+        List<OrderDto> orders = orderPlacementService.list(user.getId());
+        OrderDto foundDirect = orders.stream().filter(o -> o.id().equals(direct.id())).findFirst().orElseThrow();
+        OrderDto foundNormal = orders.stream().filter(o -> o.id().equals(normal.id())).findFirst().orElseThrow();
+
+        assertThat(foundDirect.modifiable()).isFalse();
+        assertThat(foundDirect.pickupTimeChangeable()).isTrue();
+        // El bulk de DIRECT no contamina al resto de los pedidos del listado.
+        assertThat(foundNormal.modifiable()).isTrue();
+    }
+
+    @Test
+    @DisplayName("list(): modifiable and pickupTimeChangeable are false after the cutoff and for CONFIRMADO")
+    void listNoMarcaModifiableDespuesDelCorteNiConfirmado() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+
+        OrderDto atCutoff = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishA.getId(), FIXED_NOW.plus(20, ChronoUnit.MINUTES)));
+        OrderDto confirmed = orderPlacementService.place(user.getId(),
+            singleItemRequest(dishB.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+        Order confirmedOrder = orderRepo.findById(confirmed.id()).orElseThrow();
+        confirmedOrder.setEstado(OrderEstado.CONFIRMADO);
+        orderRepo.save(confirmedOrder);
+
+        List<OrderDto> orders = orderPlacementService.list(user.getId());
+        OrderDto foundCutoff = orders.stream().filter(o -> o.id().equals(atCutoff.id())).findFirst().orElseThrow();
+        OrderDto foundConfirmed = orders.stream().filter(o -> o.id().equals(confirmed.id())).findFirst().orElseThrow();
+
+        assertThat(foundCutoff.modifiable()).isFalse();
+        assertThat(foundCutoff.pickupTimeChangeable()).isFalse();
+        assertThat(foundConfirmed.modifiable()).isFalse();
+        assertThat(foundConfirmed.pickupTimeChangeable()).isFalse();
+    }
 }
