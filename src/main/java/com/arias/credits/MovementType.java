@@ -10,6 +10,9 @@ package com.arias.credits;
  * <ul>
  *   <li>{@link #WELCOME_GRANT}, {@link #PACK_PURCHASE} — {@code +N available}</li>
  *   <li>{@link #DIRECT_PURCHASE} — {@code +N committed}, sin pasar por available</li>
+ *   <li>{@link #DIRECT_PURCHASE_REFUND} — {@code +N available} (unidad B7):
+ *       una compra DIRECT se aprobó pero el pedido ya estaba CANCELADO — los
+ *       almuerzos van a disponibles en vez de perderse o reabrir el pedido</li>
  *   <li>{@link #COMMIT} — {@code -N available, +N committed}</li>
  *   <li>{@link #RELEASE} — {@code +N available, -N committed}</li>
  *   <li>{@link #CONSUME} — {@code -N committed}</li>
@@ -22,6 +25,7 @@ public enum MovementType {
     WELCOME_GRANT,
     PACK_PURCHASE,
     DIRECT_PURCHASE,
+    DIRECT_PURCHASE_REFUND,
     COMMIT,
     RELEASE,
     CONSUME,

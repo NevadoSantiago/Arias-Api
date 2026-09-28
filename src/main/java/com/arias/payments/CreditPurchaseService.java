@@ -11,6 +11,7 @@ import com.arias.orders.Order;
 import com.arias.orders.OrderEstado;
 import com.arias.orders.OrderPlacementService;
 import com.arias.orders.OrderRepository;
+import com.arias.orders.PlaceOrderV2Request;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -64,9 +65,22 @@ public class CreditPurchaseService {
      * Mercado Pago no está configurado, {@link PaymentGateway#createCheckout}
      * lanza 503 y esta transacción entera se revierte — no queda una compra
      * huérfana en la base.
+     *
+     * <p><b>{@code type = DIRECT} ya NO se admite acá</b> (unidad B7, cierre
+     * del camino viejo): antes exigía un pedido {@code PENDIENTE} ya creado,
+     * pero crear ese pedido con {@code OrderPlacementService.place()} YA
+     * comprometía créditos del saldo — pagarlo "directo" después cobraba dos
+     * veces (bug verificado: {@code committed} pasaba de 2 a 4). El pago
+     * directo ahora nace ATADO a su propio pedido, sin comprometer saldo, en
+     * {@link #createDirectCheckout}.
      */
     @Transactional
     public CreditPurchaseCheckoutDto createPurchase(Long userId, CreatePurchaseRequest req) {
+        if (req.type() == PurchaseType.DIRECT) {
+            throw BusinessException.badRequest("direct-purchase-not-supported",
+                "La compra directa ya no se paga acá — pagá el pedido directamente desde su checkout.");
+        }
+
         User user = userRepo.findById(userId)
             .orElseThrow(() -> BusinessException.notFound("user-not-found", "Usuario no encontrado"));
 
@@ -87,55 +101,27 @@ public class CreditPurchaseService {
                 "Completá tu teléfono y apodo antes de comprar créditos");
         }
 
-        CreditPack pack = null;
-        Order order = null;
-        int creditAmount;
-        long amountCents;
-        int quantity = 1;
-        long mpUnitPriceCents;
-
-        if (req.type() == PurchaseType.PACK) {
-            if (req.packId() == null) {
-                throw BusinessException.badRequest("pack-id-required", "Debe indicar el paquete a comprar");
-            }
-            pack = packRepo.findById(req.packId())
-                .filter(p -> p.getDeletedAt() == null && Boolean.TRUE.equals(p.getEnabled()))
-                .orElseThrow(() -> BusinessException.notFound("credit-pack-not-found",
-                    "Paquete de créditos no encontrado"));
-            // Sueltos sobre el pack DAY (decisión de usuario 2026-09-25): quantity
-            // opcional (1..10, validado en CreatePurchaseRequest); null equivale a 1.
-            quantity = req.quantity() != null ? req.quantity() : 1;
-            creditAmount = pack.getCreditAmount() * quantity;
-            amountCents = pack.getPriceCents() * quantity;
-            // La línea de Mercado Pago lleva quantity * precio unitario del
-            // paquete, para que el total que ve Mercado Pago coincida siempre
-            // con amountCents calculado acá — nunca un importe único inventado.
-            mpUnitPriceCents = pack.getPriceCents();
-        } else {
-            if (req.orderId() == null) {
-                throw BusinessException.badRequest("order-id-required",
-                    "Debe indicar el pedido a pagar directamente");
-            }
-            if (req.quantity() != null && req.quantity() != 1) {
-                throw BusinessException.badRequest("direct-quantity-not-supported",
-                    "La cantidad solo aplica a la compra de paquetes");
-            }
-            order = orderRepo.findByIdAndUserId(req.orderId(), userId)
-                .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
-            if (order.getEstado() != OrderEstado.PENDIENTE) {
-                throw BusinessException.conflict("order-not-payable",
-                    "Ese pedido ya no admite un pago directo");
-            }
-            creditAmount = order.getCreditTotal();
-            amountCents = directAmountCentsFor(creditAmount);
-            mpUnitPriceCents = amountCents;
+        if (req.packId() == null) {
+            throw BusinessException.badRequest("pack-id-required", "Debe indicar el paquete a comprar");
         }
+        CreditPack pack = packRepo.findById(req.packId())
+            .filter(p -> p.getDeletedAt() == null && Boolean.TRUE.equals(p.getEnabled()))
+            .orElseThrow(() -> BusinessException.notFound("credit-pack-not-found",
+                "Paquete de créditos no encontrado"));
+        // Sueltos sobre el pack DAY (decisión de usuario 2026-09-25): quantity
+        // opcional (1..10, validado en CreatePurchaseRequest); null equivale a 1.
+        int quantity = req.quantity() != null ? req.quantity() : 1;
+        int creditAmount = pack.getCreditAmount() * quantity;
+        long amountCents = pack.getPriceCents() * quantity;
+        // La línea de Mercado Pago lleva quantity * precio unitario del
+        // paquete, para que el total que ve Mercado Pago coincida siempre
+        // con amountCents calculado acá — nunca un importe único inventado.
+        long mpUnitPriceCents = pack.getPriceCents();
 
         CreditPurchase purchase = CreditPurchase.builder()
             .user(user)
-            .type(req.type())
+            .type(PurchaseType.PACK)
             .pack(pack)
-            .order(order)
             .creditAmount(creditAmount)
             .amountCents(amountCents)
             .currency("ARS")
@@ -147,7 +133,7 @@ public class CreditPurchaseService {
         String returnUrl = frontendUrl + "/compras/" + purchase.getId() + "/procesando";
         CheckoutRequest checkoutReq = new CheckoutRequest(
             purchase.getId().toString(),
-            checkoutTitle(req.type(), creditAmount),
+            checkoutTitle(PurchaseType.PACK, creditAmount),
             quantity,
             mpUnitPriceCents,
             user.getEmail(),
@@ -160,6 +146,101 @@ public class CreditPurchaseService {
         purchase.setMpPreferenceId(session.preferenceId());
 
         return new CreditPurchaseCheckoutDto(purchase.getId(), session.initPoint());
+    }
+
+    /**
+     * "Pagá este pedido directo con Mercado Pago" (unidad B7, {@code POST
+     * /api/v2/orders/direct-checkout}) — reemplaza al camino DIRECT viejo
+     * cerrado en {@link #createPurchase}. En UNA sola transacción: crea el
+     * pedido en {@link OrderEstado#PENDIENTE_PAGO} reservando stock (
+     * {@link OrderPlacementService#placeAwaitingPayment}, SIN comprometer
+     * créditos), calcula el importe con la MISMA lógica que la compra DIRECT
+     * vieja ({@link #findEnabledDayPackOrThrow}/{@link #unitPriceCentsFor} —
+     * precio del paquete {@code DAY} × créditos del pedido, 503 si no hay
+     * paquete {@code DAY} habilitado),
+     * crea la compra {@code PENDING} y arranca el checkout de Mercado Pago.
+     *
+     * <p>Si {@link PaymentGateway#createCheckout} falla (o cualquier paso
+     * anterior), Spring revierte TODA la transacción — pedido, ítems, stock
+     * reservado y compra — exactamente como {@link #createPurchase} revierte
+     * su compra {@code PACK} si el checkout falla. Nunca queda un pedido o
+     * una compra huérfanos.
+     *
+     * <p>El paquete {@code DAY} se busca ANTES de crear el pedido/reservar
+     * stock a propósito (fail fast): si no hay uno habilitado, el 503 se
+     * lanza sin haber tocado {@code orders}/stock todavía, en vez de crearlos
+     * y confiar en el rollback para deshacerlos.
+     */
+    @Transactional
+    public DirectCheckoutDto createDirectCheckout(Long userId, PlaceOrderV2Request req) {
+        CreditPack dayPack = findEnabledDayPackOrThrow();
+
+        Order order = orderPlacementService.placeAwaitingPayment(userId, req);
+        User user = order.getUser();
+
+        int creditAmount = order.getCreditTotal();
+        long amountCents = unitPriceCentsFor(dayPack) * creditAmount;
+
+        CreditPurchase purchase = CreditPurchase.builder()
+            .user(user)
+            .type(PurchaseType.DIRECT)
+            .order(order)
+            .creditAmount(creditAmount)
+            .amountCents(amountCents)
+            .currency("ARS")
+            .status(CreditPurchaseStatus.PENDING)
+            .build();
+        purchase = purchaseRepo.save(purchase);
+
+        String frontendUrl = publicUrlProps.frontendUrl();
+        String returnUrl = frontendUrl + "/compras/" + purchase.getId() + "/procesando";
+        CheckoutRequest checkoutReq = new CheckoutRequest(
+            purchase.getId().toString(),
+            checkoutTitle(PurchaseType.DIRECT, creditAmount),
+            1,
+            amountCents,
+            user.getEmail(),
+            returnUrl,
+            returnUrl,
+            returnUrl,
+            publicUrlProps.backendUrl() + WEBHOOK_PATH
+        );
+        CheckoutSession session = paymentGateway.createCheckout(checkoutReq);
+        purchase.setMpPreferenceId(session.preferenceId());
+        // Persistido para poder devolverlo de nuevo sin crear un segundo
+        // cobro si el cliente abandona Mercado Pago sin pagar — ver
+        // #resumeDirectCheckout.
+        purchase.setInitPoint(session.initPoint());
+
+        return new DirectCheckoutDto(order.getId(), purchase.getId(), session.initPoint());
+    }
+
+    /**
+     * Retoma un pago directo abandonado (unidad B7, pedido del usuario: "si
+     * el cliente cierra Mercado Pago sin pagar, necesita un 'Pagar ahora'") —
+     * {@code GET /api/v2/orders/{id}/direct-checkout}. NUNCA crea una compra
+     * ni un checkout nuevo: devuelve el {@code initPoint} ya persistido de la
+     * compra DIRECT {@code PENDING} de ese pedido. Solo el dueño del pedido
+     * (scope por {@code userId}, mismo patrón que el resto de {@code
+     * OrderRepository}); {@code order-not-found} si no es suyo, igual que los
+     * demás endpoints v2.
+     */
+    @Transactional(readOnly = true)
+    public DirectCheckoutDto resumeDirectCheckout(Long userId, Long orderId) {
+        Order order = orderRepo.findByIdAndUserId(orderId, userId)
+            .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
+
+        if (order.getEstado() != OrderEstado.PENDIENTE_PAGO) {
+            throw BusinessException.conflict("order-not-awaiting-payment",
+                "Este pedido no está esperando pago");
+        }
+
+        CreditPurchase purchase = purchaseRepo.findByOrderIdAndType(orderId, PurchaseType.DIRECT)
+            .filter(p -> p.getStatus() == CreditPurchaseStatus.PENDING && p.getInitPoint() != null)
+            .orElseThrow(() -> BusinessException.conflict("direct-checkout-not-resumable",
+                "No hay un pago directo pendiente para retomar en este pedido"));
+
+        return new DirectCheckoutDto(order.getId(), purchase.getId(), purchase.getInitPoint());
     }
 
     @Transactional(readOnly = true)
@@ -259,7 +340,7 @@ public class CreditPurchaseService {
                     // durante) — Mercado Pago resuelve la mediación a favor
                     // del comprador: se acredita ahora (gap fix, unidad 11,
                     // feature b2c-ordering-redesign tarea B4).
-                    creditPurchase(purchase);
+                    creditApprovedPurchase(purchase);
                 } else if (purchase.getStatus() == CreditPurchaseStatus.IN_MEDIATION) {
                     // Ya se había acreditado antes de entrar en mediación —
                     // vuelve a APPROVED sin acreditar una segunda vez.
@@ -281,6 +362,66 @@ public class CreditPurchaseService {
             case UNKNOWN -> log.warn("Estado de pago desconocido de Mercado Pago para la compra {}: detail={}",
                 purchase.getId(), snapshot.statusDetail());
         }
+    }
+
+    /**
+     * Acredita una compra recién aprobada (unidad B7, extiende el gap fix B4
+     * de arriba con un segundo caso). Una compra DIRECT puede aprobarse con
+     * su pedido en exactamente dos estados posibles — {@link
+     * OrderPlacementService#placeAwaitingPayment} nunca deja otro:
+     * <ul>
+     *   <li>{@code PENDIENTE_PAGO} (caso normal): se acredita COMMITTED como
+     *       siempre ({@link #creditPurchase}) y el pedido pasa a {@code
+     *       PENDIENTE} — un pedido programado común, con sus créditos ya
+     *       comprometidos por esta MISMA compra (nunca por {@code
+     *       OrderPlacementService.place()}, que la compra DIRECT ya no
+     *       invoca — cierra el doble cobro verificado antes de esta unidad,
+     *       ver el hallazgo de {@code b2c-ordering-redesign.md} sobre B7).</li>
+     *   <li>{@code CANCELADO} (el cliente lo canceló, o el corte automático
+     *       lo canceló mientras el pago seguía en curso): el pago de todos
+     *       modos se aprobó, así que los almuerzos NO se pierden — se
+     *       acreditan a AVAILABLE ({@link #creditAsRefundToAvailable}) en vez
+     *       de COMMITTED, que exigiría reabrir un pedido ya cerrado. El
+     *       pedido cancelado se deja exactamente como está, nunca se
+     *       reabre.</li>
+     * </ul>
+     */
+    private void creditApprovedPurchase(CreditPurchase purchase) {
+        if (purchase.getType() == PurchaseType.DIRECT && purchase.getOrder() != null
+            && purchase.getOrder().getEstado() == OrderEstado.CANCELADO) {
+            creditAsRefundToAvailable(purchase);
+            return;
+        }
+
+        creditPurchase(purchase);
+
+        if (purchase.getType() == PurchaseType.DIRECT && purchase.getOrder() != null
+            && purchase.getOrder().getEstado() == OrderEstado.PENDIENTE_PAGO) {
+            purchase.getOrder().setEstado(OrderEstado.PENDIENTE);
+        }
+    }
+
+    /**
+     * Reembolso en almuerzos (unidad B7) — mismo shape que {@link
+     * #creditPurchase} (marca {@code APPROVED}, sella {@code creditedAt},
+     * publica el mismo evento — su mail genérico "te acreditamos N
+     * almuerzos" es válido para los dos casos) pero con {@link
+     * MovementType#DIRECT_PURCHASE_REFUND} en vez de {@link
+     * MovementType#DIRECT_PURCHASE}: {@code +N AVAILABLE}, nunca {@code
+     * COMMITTED}, para no reabrir un pedido que ya está {@code CANCELADO}.
+     */
+    private void creditAsRefundToAvailable(CreditPurchase purchase) {
+        MovementRef ref = MovementRef.forPurchase(purchase.getId(),
+            "Reembolso en almuerzos — pedido #" + purchase.getOrder().getId() + " cancelado");
+        creditLedgerService.apply(purchase.getUser().getId(), MovementType.DIRECT_PURCHASE_REFUND,
+            purchase.getCreditAmount(), 0, ref);
+
+        purchase.setStatus(CreditPurchaseStatus.APPROVED);
+        purchase.setCreditedAt(clock.instant());
+
+        eventPublisher.publishEvent(new CreditPurchaseCreditedEvent(
+            purchase.getId(), purchase.getUser().getId(), purchase.getUser().getEmail(),
+            purchase.getType(), purchase.getCreditAmount()));
     }
 
     private void creditPurchase(CreditPurchase purchase) {
@@ -403,14 +544,16 @@ public class CreditPurchaseService {
 
     // ─── helpers ────────────────────────────────────────────────────────────
 
-    private long directAmountCentsFor(int creditAmount) {
-        CreditPack dayPack = packRepo.findByCodeAndDeletedAtIsNullAndEnabledTrue(DAY_PACK_CODE)
+    private CreditPack findEnabledDayPackOrThrow() {
+        return packRepo.findByCodeAndDeletedAtIsNullAndEnabledTrue(DAY_PACK_CODE)
             .orElseThrow(() -> new BusinessException(HttpStatus.SERVICE_UNAVAILABLE,
                 "direct-purchase-unavailable",
                 "La compra directa no está disponible — falta configurar el paquete DAY"));
-        // Redondeo hacia arriba: nunca cobrar de menos por truncamiento.
-        long unitPriceCents = -Math.floorDiv(-dayPack.getPriceCents(), dayPack.getCreditAmount());
-        return unitPriceCents * creditAmount;
+    }
+
+    /** Redondeo hacia arriba: nunca cobrar de menos por truncamiento. */
+    private long unitPriceCentsFor(CreditPack dayPack) {
+        return -Math.floorDiv(-dayPack.getPriceCents(), dayPack.getCreditAmount());
     }
 
     private String checkoutTitle(PurchaseType type, int creditAmount) {

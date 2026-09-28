@@ -76,6 +76,16 @@ public class CreditPurchase {
     @Column(name = "mp_payment_id", length = 50)
     private String mpPaymentId;
 
+    /**
+     * URL de checkout de Mercado Pago (unidad B7, migración V27) — persistida
+     * para poder devolverla de nuevo sin crear un segundo cobro cuando el
+     * cliente abandona Mercado Pago sin pagar y retoma el pago directo
+     * ({@code GET /api/v2/orders/{id}/direct-checkout}). {@code null} para
+     * compras que nunca necesitaron resumirse (p. ej. PACK).
+     */
+    @Column(name = "init_point", columnDefinition = "TEXT")
+    private String initPoint;
+
     @Column(name = "mp_status_detail", length = 100)
     private String mpStatusDetail;
 

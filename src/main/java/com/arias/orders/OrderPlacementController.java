@@ -1,6 +1,8 @@
 package com.arias.orders;
 
 import com.arias.common.security.JwtUser;
+import com.arias.payments.CreditPurchaseService;
+import com.arias.payments.DirectCheckoutDto;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -26,6 +28,7 @@ import java.util.List;
 public class OrderPlacementController {
 
     private final OrderPlacementService orderPlacementService;
+    private final CreditPurchaseService creditPurchaseService;
 
     /**
      * "Mis pedidos" (gap fix) — pedidos del cliente autenticado, siempre
@@ -44,6 +47,34 @@ public class OrderPlacementController {
         @Valid @RequestBody PlaceOrderV2Request req
     ) {
         return orderPlacementService.place(user.userId(), req);
+    }
+
+    /**
+     * "Pagá directo con Mercado Pago" (unidad B7) — mismo body que {@link
+     * #place}, pero crea el pedido esperando pago (sin comprometer saldo) y
+     * arranca el checkout de la compra DIRECT asociada. Ver {@link
+     * com.arias.payments.CreditPurchaseService#createDirectCheckout}.
+     */
+    @PostMapping("/direct-checkout")
+    public DirectCheckoutDto directCheckout(
+        @AuthenticationPrincipal JwtUser user,
+        @Valid @RequestBody PlaceOrderV2Request req
+    ) {
+        return creditPurchaseService.createDirectCheckout(user.userId(), req);
+    }
+
+    /**
+     * Retoma un pago directo abandonado (unidad B7, pedido del usuario: el
+     * cliente cerró Mercado Pago sin pagar y necesita un "Pagar ahora").
+     * NUNCA crea una compra ni un cobro nuevo. Ver {@link
+     * com.arias.payments.CreditPurchaseService#resumeDirectCheckout}.
+     */
+    @GetMapping("/{id}/direct-checkout")
+    public DirectCheckoutDto resumeDirectCheckout(
+        @AuthenticationPrincipal JwtUser user,
+        @PathVariable Long id
+    ) {
+        return creditPurchaseService.resumeDirectCheckout(user.userId(), id);
     }
 
     @DeleteMapping("/{id}")

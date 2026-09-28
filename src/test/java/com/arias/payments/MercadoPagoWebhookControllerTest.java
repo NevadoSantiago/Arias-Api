@@ -108,29 +108,6 @@ class MercadoPagoWebhookControllerTest {
             .build());
     }
 
-    private CreditPack persistDayPack(int creditAmount, long priceCents) {
-        return packRepo.save(CreditPack.builder()
-            .code("DAY")
-            .nombre("Día")
-            .creditAmount(creditAmount)
-            .priceCents(priceCents)
-            .discountPercent(0)
-            .ordenDisplay(0)
-            .enabled(true)
-            .build());
-    }
-
-    private Order persistOrder(User user, int creditTotal) {
-        Order order = Order.builder()
-            .user(user)
-            .fecha(LocalDate.now())
-            .pickupAt(Instant.now().plus(2, ChronoUnit.HOURS))
-            .estado(OrderEstado.PENDIENTE)
-            .creditTotal(creditTotal)
-            .build();
-        return orderRepo.save(order);
-    }
-
     private CreditPurchase createPackPurchase(User user, CreditPack pack) {
         when(paymentGateway.createCheckout(any()))
             .thenReturn(new CheckoutSession("pref-" + System.nanoTime(), "https://mp.test/init"));
@@ -139,12 +116,32 @@ class MercadoPagoWebhookControllerTest {
         return purchaseRepo.findById(dto.purchaseId()).orElseThrow();
     }
 
-    private CreditPurchase createDirectPurchase(User user, Order order) {
-        when(paymentGateway.createCheckout(any()))
-            .thenReturn(new CheckoutSession("pref-" + System.nanoTime(), "https://mp.test/init"));
-        CreditPurchaseCheckoutDto dto = purchaseService.createPurchase(user.getId(),
-            new CreatePurchaseRequest(PurchaseType.DIRECT, null, order.getId(), null));
-        return purchaseRepo.findById(dto.purchaseId()).orElseThrow();
+    /**
+     * Builds a {@code PENDING} DIRECT {@link CreditPurchase} tied to a
+     * {@code PENDIENTE_PAGO} order (unidad B7) — reproduces exactly the state
+     * {@code CreditPurchaseService#createDirectCheckout} would leave behind,
+     * built directly instead of going through it (which requires a valid
+     * pickup time against the real system clock — pickup validation and the
+     * full flow are covered by {@code DirectCheckoutServiceTest}).
+     */
+    private CreditPurchase persistDirectPurchase(User user, int creditTotal, long amountCents) {
+        Order order = Order.builder()
+            .user(user)
+            .fecha(LocalDate.now())
+            .pickupAt(Instant.now().plus(2, ChronoUnit.HOURS))
+            .estado(OrderEstado.PENDIENTE_PAGO)
+            .creditTotal(creditTotal)
+            .build();
+        order = orderRepo.save(order);
+        return purchaseRepo.save(CreditPurchase.builder()
+            .user(user)
+            .type(PurchaseType.DIRECT)
+            .order(order)
+            .creditAmount(creditTotal)
+            .amountCents(amountCents)
+            .currency("ARS")
+            .status(CreditPurchaseStatus.PENDING)
+            .build());
     }
 
     private PaymentSnapshot approvedSnapshot(CreditPurchase purchase, String paymentId) {
@@ -227,10 +224,7 @@ class MercadoPagoWebhookControllerTest {
     @Test
     void compraDirectaProduceUnUnicoMovimiento() {
         User user = persistUser("direct");
-        persistDayPack(10, 10_000L); // 1000 centavos por crédito
-        Order order = persistOrder(user, 5);
-        CreditPurchase purchase = createDirectPurchase(user, order);
-        assertThat(purchase.getAmountCents()).isEqualTo(5_000L);
+        CreditPurchase purchase = persistDirectPurchase(user, 5, 5_000L);
 
         String paymentId = "mp-payment-direct";
         when(paymentGateway.verifySignature(anyString(), anyString(), anyString())).thenReturn(true);

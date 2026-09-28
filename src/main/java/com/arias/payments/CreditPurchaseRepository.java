@@ -57,4 +57,13 @@ public interface CreditPurchaseRepository extends JpaRepository<CreditPurchase, 
      * método no necesita distinguir ese caso.
      */
     boolean existsByOrderIdAndType(Long orderId, PurchaseType type);
+
+    /**
+     * La compra DIRECT de un pedido dado (unidad B7, resumir un pago
+     * abandonado — {@code GET /api/v2/orders/{id}/direct-checkout}): a lo
+     * sumo una fila, porque {@code createDirectCheckout} es la única forma de
+     * crear una compra {@code DIRECT} y siempre nace atada a un pedido
+     * {@code PENDIENTE_PAGO} recién creado.
+     */
+    Optional<CreditPurchase> findByOrderIdAndType(Long orderId, PurchaseType type);
 }
