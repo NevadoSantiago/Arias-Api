@@ -28,7 +28,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.transaction.TestTransaction;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
@@ -234,8 +233,8 @@ class DirectCheckoutServiceTest {
     }
 
     @Test
-    @DisplayName("createDirectCheckout(): si Mercado Pago falla al crear el checkout, marca TODA la transacción para revertir — pedido, stock reservado y compra")
-    void createDirectCheckoutFallaDeMercadoPagoRevierteTodo() {
+    @DisplayName("createDirectCheckout(): si Mercado Pago falla al crear el checkout, compensa — pedido CANCELADO, stock restaurado y compra CANCELLED — y propaga el error")
+    void createDirectCheckoutFallaDeMercadoPagoCompensa() {
         User user = persistB2cUser();
         persistDayPack(2, 3_000L);
         Category category = persistCategory(2);
@@ -246,21 +245,22 @@ class DirectCheckoutServiceTest {
             .thenThrow(new BusinessException(
                 org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "mp-unreachable", "Mercado Pago no responde"));
 
-        // La orden y la compra SÍ llegan a insertarse dentro de esta MISMA
-        // transacción antes de llamar a Mercado Pago (visibles acá porque el
-        // test también es @Transactional y comparte la conexión/transacción
-        // física con createDirectCheckout — no hay aislamiento de una
-        // transacción respecto de sí misma). Lo que prueba que NADA de esto
-        // sobrevive es que la excepción marcó la transacción rollback-only:
-        // en producción (donde createDirectCheckout ES el límite transaccional
-        // de la request) eso dispara un ROLLBACK real, exactamente como
-        // ocurre hoy con createPurchase si el checkout de un PACK falla.
+        // Unidad B13.1: el pedido y la compra se commitean ANTES de llamar a
+        // Mercado Pago, así que ya no hay rollback que los borre — se
+        // compensan (la cobertura con commits reales, sin transacción de
+        // test, está en DirectCheckoutSplitTransactionTest).
         assertThatThrownBy(() -> purchaseService.createDirectCheckout(user.getId(),
             singleItemRequest(dish.getId(), defaultPickupAt())))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "mp-unreachable");
 
-        assertThat(TestTransaction.isFlaggedForRollback()).isTrue();
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(orderRepo.findAll()).allMatch(o -> o.getEstado() == OrderEstado.CANCELADO);
+        assertThat(purchaseRepo.findAll()).hasSize(1)
+            .allMatch(p -> p.getStatus() == CreditPurchaseStatus.CANCELLED && p.getInitPoint() == null);
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(5);
     }
 
     // ─── GET /api/v2/orders/{id}/direct-checkout (retomar un pago abandonado) ─

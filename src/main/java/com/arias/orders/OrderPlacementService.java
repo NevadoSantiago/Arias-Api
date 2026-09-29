@@ -127,13 +127,14 @@ public class OrderPlacementService {
      * 409 {@code balance-covers-order}. El pedido queda {@link
      * OrderEstado#PENDIENTE_PAGO} hasta que Mercado Pago apruebe el pago.
      *
-     * <p>Se invoca DENTRO de la misma transacción que crea esa compra DIRECT
-     * y el checkout de Mercado Pago ({@code
-     * CreditPurchaseService#createDirectCheckout}) — un fallo en cualquier
-     * paso posterior (incluida la llamada a Mercado Pago) revierte también
-     * este pedido y el stock reservado, exactamente como {@link
-     * com.arias.payments.CreditPurchaseService#createPurchase} revierte su
-     * compra si el checkout falla.
+     * <p>Se invoca DENTRO de la transacción corta (fase 1, unidad B13.1) que
+     * también inserta la compra DIRECT ({@code
+     * CreditPurchaseService#createDirectCheckout}); esa transacción se
+     * commitea ANTES de llamar a Mercado Pago para no retener locks de stock
+     * ni de billetera durante la red. Si el checkout falla después, el
+     * llamador cierra este pedido con {@link #closeForPaymentFailure}
+     * (restaura stock, libera lo reservado del saldo) en vez de depender de un
+     * rollback.
      */
     @Transactional
     public Order placeAwaitingPayment(Long userId, PlaceOrderV2Request req) {

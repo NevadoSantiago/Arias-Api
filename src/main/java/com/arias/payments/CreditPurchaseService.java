@@ -20,6 +20,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -61,13 +62,29 @@ public class CreditPurchaseService {
     private final PublicUrlProperties publicUrlProps;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
+    /**
+     * Fases transaccionales cortas de los checkouts (unidad B13.1). Se usa en
+     * vez de {@code @Transactional} porque la llamada a Mercado Pago tiene que
+     * quedar FUERA de toda transacción, y la auto-invocación de un método
+     * {@code @Transactional} de esta misma clase no pasa por el proxy (mismo
+     * motivo que documenta {@code PaymentReconciliationScheduler}).
+     */
+    private final TransactionTemplate txTemplate;
 
     /**
      * Crea la compra {@code PENDING} e inicia el checkout. El importe se
-     * calcula siempre acá, nunca lo manda el cliente (diseño §Seguridad). Si
-     * Mercado Pago no está configurado, {@link PaymentGateway#createCheckout}
-     * lanza 503 y esta transacción entera se revierte — no queda una compra
-     * huérfana en la base.
+     * calcula siempre acá, nunca lo manda el cliente (diseño §Seguridad).
+     *
+     * <p><b>Tres pasos, con la llamada de red fuera de toda transacción</b>
+     * (unidad B13.1; ver {@link #createDirectCheckout} para el razonamiento
+     * completo): (1) transacción corta que valida e inserta la compra
+     * {@code PENDING}; (2) {@link PaymentGateway#createCheckout} SIN
+     * transacción — no retiene ninguna conexión del pool mientras Mercado Pago
+     * responde; (3) transacción corta que guarda el {@code preferenceId}. Si
+     * el paso 2 falla (503 si no está configurado, 502 si Mercado Pago
+     * rechaza o no responde) la compra queda {@code CANCELLED} ("nunca llegó
+     * al proveedor"; ya no se revierte a la nada porque el insert está
+     * commiteado) y se relanza el MISMO error.
      *
      * <p><b>{@code type = DIRECT} ya NO se admite acá</b> (unidad B7, cierre
      * del camino viejo): antes exigía un pedido {@code PENDIENTE} ya creado,
@@ -77,12 +94,29 @@ public class CreditPurchaseService {
      * directo ahora nace ATADO a su propio pedido, sin comprometer saldo, en
      * {@link #createDirectCheckout}.
      */
-    @Transactional
     public CreditPurchaseCheckoutDto createPurchase(Long userId, CreatePurchaseRequest req) {
         if (req.type() == PurchaseType.DIRECT) {
             throw BusinessException.badRequest("direct-purchase-not-supported",
                 "La compra directa ya no se paga acá — pagá el pedido directamente desde su checkout.");
         }
+
+        // Paso 1 — transacción corta: valida e inserta la compra PENDING.
+        PendingPackPurchase pending = txTemplate.execute(status -> insertPendingPackPurchase(userId, req));
+
+        // Paso 2 — SIN transacción: llamada de red a Mercado Pago.
+        CheckoutSession session = createCheckoutOrCancel(pending.purchaseId(), pending.checkoutRequest());
+
+        // Paso 3 — transacción corta: guarda el preferenceId.
+        txTemplate.executeWithoutResult(status ->
+            attachCheckout(pending.purchaseId(), session, false));
+
+        return new CreditPurchaseCheckoutDto(pending.purchaseId(), session.initPoint());
+    }
+
+    /** Datos de la fase 1 de {@link #createPurchase}, ya sin entidades (viven fuera de la transacción). */
+    private record PendingPackPurchase(UUID purchaseId, CheckoutRequest checkoutRequest) {}
+
+    private PendingPackPurchase insertPendingPackPurchase(Long userId, CreatePurchaseRequest req) {
 
         User user = userRepo.findById(userId)
             .orElseThrow(() -> BusinessException.notFound("user-not-found", "Usuario no encontrado"));
@@ -145,38 +179,95 @@ public class CreditPurchaseService {
             returnUrl,
             publicUrlProps.backendUrl() + WEBHOOK_PATH
         );
-        CheckoutSession session = paymentGateway.createCheckout(checkoutReq);
-        purchase.setMpPreferenceId(session.preferenceId());
-
-        return new CreditPurchaseCheckoutDto(purchase.getId(), session.initPoint());
+        return new PendingPackPurchase(purchase.getId(), checkoutReq);
     }
 
     /**
      * "Pagá este pedido directo con Mercado Pago" (unidad B7, {@code POST
      * /api/v2/orders/direct-checkout}) — reemplaza al camino DIRECT viejo
-     * cerrado en {@link #createPurchase}. En UNA sola transacción: crea el
-     * pedido en {@link OrderEstado#PENDIENTE_PAGO} reservando stock (
-     * {@link OrderPlacementService#placeAwaitingPayment}, que reserva los
-     * almuerzos disponibles del cliente — pago parcial, unidad B13), calcula el
-     * importe con la MISMA lógica que la compra DIRECT vieja ({@link
-     * #findEnabledDayPackOrThrow}/{@link #unitPriceCentsFor} — precio del
-     * paquete {@code DAY} × créditos que NO cubrió el saldo, 503 si no hay
-     * paquete {@code DAY} habilitado),
-     * crea la compra {@code PENDING} y arranca el checkout de Mercado Pago.
+     * cerrado en {@link #createPurchase}.
      *
-     * <p>Si {@link PaymentGateway#createCheckout} falla (o cualquier paso
-     * anterior), Spring revierte TODA la transacción — pedido, ítems, stock
-     * reservado y compra — exactamente como {@link #createPurchase} revierte
-     * su compra {@code PACK} si el checkout falla. Nunca queda un pedido o
-     * una compra huérfanos.
+     * <p><b>Tres fases; la llamada de red va FUERA de toda transacción</b>
+     * (unidad B13.1). Antes todo esto era una sola transacción: mientras
+     * Mercado Pago respondía seguían tomados los locks de las filas de stock
+     * de los platos y de la billetera, y una conexión del pool (10, o 5 en un
+     * perfil) — un Mercado Pago lento bloqueaba a los demás clientes que
+     * pedían el mismo plato y podía agotar el pool. Ahora:
+     * <ol>
+     *   <li><b>Fase 1 (transacción corta, se commitea ANTES de la red):</b>
+     *       busca el paquete {@code DAY} (fail fast: 503 sin haber tocado
+     *       {@code orders}/stock), crea el pedido en {@link
+     *       OrderEstado#PENDIENTE_PAGO} reservando stock y los almuerzos
+     *       disponibles del saldo ({@link
+     *       OrderPlacementService#placeAwaitingPayment}, B13), calcula el
+     *       importe (precio del {@code DAY} × créditos que el saldo NO cubrió)
+     *       e inserta la compra {@code PENDING} sin preferencia. Al commitear
+     *       se sueltan todos los locks.</li>
+     *   <li><b>Fase 2 (SIN transacción):</b> {@link
+     *       PaymentGateway#createCheckout}.</li>
+     *   <li><b>Fase 3 (transacción corta):</b> relee la compra bajo lock y
+     *       guarda {@code mpPreferenceId} e {@code initPoint} ({@link
+     *       #attachCheckout}). Si la compra ya no está {@code PENDING} (otro
+     *       camino la cerró mientras Mercado Pago respondía: la reconciliación
+     *       la expiró, el corte canceló el pedido) NO se resucita: no se
+     *       guarda la preferencia, no se devuelve el {@code initPoint} al
+     *       cliente y se responde 409 {@code checkout-purchase-closed}. Como
+     *       el cliente nunca recibe esa URL, no puede pagar una preferencia
+     *       huérfana.</li>
+     * </ol>
      *
-     * <p>El paquete {@code DAY} se busca ANTES de crear el pedido/reservar
-     * stock a propósito (fail fast): si no hay uno habilitado, el 503 se
-     * lanza sin haber tocado {@code orders}/stock todavía, en vez de crearlos
-     * y confiar en el rollback para deshacerlos.
+     * <p><b>Compensación si la fase 2 falla</b> (Mercado Pago rechazó, 503 sin
+     * configurar, timeout del SDK; cualquier {@link RuntimeException}): en una
+     * transacción nueva ({@link #cancelUnreachedPurchase}) la compra pasa a
+     * {@link CreditPurchaseStatus#CANCELLED} ("cancelado antes de completarse,
+     * nunca se acreditó", el estado existente que mejor describe "nunca llegó
+     * al proveedor"; ni el webhook ni la reconciliación tratan distinto a las
+     * {@code CANCELLED}) y, como cualquier pago fallido, se cierra el pedido
+     * con {@link OrderPlacementService#closeForPaymentFailure} (restaura
+     * stock, libera {@code creditsFromBalance}; idempotente bajo el lock del
+     * pedido). Después se relanza la excepción ORIGINAL, así que el cliente
+     * recibe el mismo error que antes (p. ej. 502
+     * {@code mercadopago-checkout-failed}). Si la compensación misma falla se
+     * loguea y se relanza igualmente el error original: el pedido queda para
+     * la limpieza de abajo.
+     *
+     * <p><b>Ventana de caída entre las fases 1 y 3</b> (el proceso muere, o la
+     * fase 3 falla, con el pedido y la compra ya commiteados): queda un pedido
+     * {@code PENDIENTE_PAGO} con una compra {@code PENDING} sin {@code
+     * initPoint}. La limpieza existente lo cubre sin código nuevo: (a)
+     * {@code OrderConsumptionScheduler} cancela el pedido en el corte
+     * ({@code closeAtCutoff}: restaura stock, libera el saldo, avisa por mail)
+     * sin mirar la compra; (b) la reconciliación consulta a Mercado Pago por
+     * {@code external_reference} y, sin pago reportado, expira la compra a las
+     * 24 h ({@link #expirePendingPurchase}, no-op sobre el pedido que el corte
+     * ya cerró); (c) {@link #resumeDirectCheckout} exige {@code initPoint}, así
+     * que responde 409 {@code direct-checkout-not-resumable} en vez de romper.
+     * Si el cliente reintenta, crea un pedido nuevo.
+     *
+     * <p>Este método NO es {@code @Transactional}: cada fase usa un {@link
+     * TransactionTemplate}. Orden de locks donde se combinan (B7.1): compra →
+     * pedido → billetera.
      */
-    @Transactional
     public DirectCheckoutDto createDirectCheckout(Long userId, PlaceOrderV2Request req) {
+        // Fase 1 — transacción corta, commiteada antes de tocar la red.
+        PendingDirectPurchase pending = txTemplate.execute(status -> insertPendingDirectPurchase(userId, req));
+
+        // Fase 2 — SIN transacción. Si falla: compensa y relanza el error original.
+        CheckoutSession session = createCheckoutOrCancel(pending.purchaseId(), pending.checkoutRequest());
+
+        // Fase 3 — transacción corta: guarda preferencia e initPoint (persistido
+        // para poder devolverlo de nuevo sin crear un segundo cobro si el
+        // cliente abandona Mercado Pago sin pagar — ver #resumeDirectCheckout).
+        txTemplate.executeWithoutResult(status ->
+            attachCheckout(pending.purchaseId(), session, true));
+
+        return new DirectCheckoutDto(pending.orderId(), pending.purchaseId(), session.initPoint());
+    }
+
+    /** Datos de la fase 1 de {@link #createDirectCheckout}, ya sin entidades (viven fuera de la transacción). */
+    private record PendingDirectPurchase(Long orderId, UUID purchaseId, CheckoutRequest checkoutRequest) {}
+
+    private PendingDirectPurchase insertPendingDirectPurchase(Long userId, PlaceOrderV2Request req) {
         CreditPack dayPack = findEnabledDayPackOrThrow();
 
         Order order = orderPlacementService.placeAwaitingPayment(userId, req);
@@ -198,8 +289,7 @@ public class CreditPurchaseService {
             .build();
         purchase = purchaseRepo.save(purchase);
 
-        String frontendUrl = publicUrlProps.frontendUrl();
-        String returnUrl = frontendUrl + "/compras/" + purchase.getId() + "/procesando";
+        String returnUrl = publicUrlProps.frontendUrl() + "/compras/" + purchase.getId() + "/procesando";
         CheckoutRequest checkoutReq = new CheckoutRequest(
             purchase.getId().toString(),
             checkoutTitle(PurchaseType.DIRECT, creditAmount),
@@ -211,14 +301,61 @@ public class CreditPurchaseService {
             returnUrl,
             publicUrlProps.backendUrl() + WEBHOOK_PATH
         );
-        CheckoutSession session = paymentGateway.createCheckout(checkoutReq);
-        purchase.setMpPreferenceId(session.preferenceId());
-        // Persistido para poder devolverlo de nuevo sin crear un segundo
-        // cobro si el cliente abandona Mercado Pago sin pagar — ver
-        // #resumeDirectCheckout.
-        purchase.setInitPoint(session.initPoint());
+        return new PendingDirectPurchase(order.getId(), purchase.getId(), checkoutReq);
+    }
 
-        return new DirectCheckoutDto(order.getId(), purchase.getId(), session.initPoint());
+    /**
+     * Fase 2 compartida por PACK y DIRECT: llama al gateway SIN transacción y,
+     * si falla, cancela la compra (y el pedido si es DIRECT) en una
+     * transacción nueva antes de relanzar la excepción original.
+     */
+    private CheckoutSession createCheckoutOrCancel(UUID purchaseId, CheckoutRequest checkoutReq) {
+        try {
+            return paymentGateway.createCheckout(checkoutReq);
+        } catch (RuntimeException e) {
+            try {
+                txTemplate.executeWithoutResult(status -> cancelUnreachedPurchase(purchaseId));
+            } catch (RuntimeException compensationFailure) {
+                // El error del cliente sigue siendo el del gateway; el pedido
+                // (si lo hay) lo limpia el corte, la compra la reconciliación.
+                log.error("No se pudo compensar la compra {} tras fallar el checkout de Mercado Pago; "
+                    + "la limpieza por corte/reconciliación la resuelve", purchaseId, compensationFailure);
+                e.addSuppressed(compensationFailure);
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * Compensación de la fase 2: la compra nunca llegó a Mercado Pago. Bloquea
+     * la compra primero (orden compra → pedido → billetera de B7.1) y reutiliza
+     * {@link #closeWithoutCrediting}, que sólo actúa si sigue {@code PENDING} y
+     * cierra el pedido asociado por {@code closeForPaymentFailure}.
+     */
+    private void cancelUnreachedPurchase(UUID purchaseId) {
+        purchaseRepo.findByIdForUpdate(purchaseId).ifPresent(p -> {
+            closeWithoutCrediting(p, CreditPurchaseStatus.CANCELLED);
+            log.warn("Compra {} cancelada: Mercado Pago no creó el checkout", purchaseId);
+        });
+    }
+
+    /**
+     * Fase 3 compartida: guarda la preferencia bajo lock de la compra. Sólo si
+     * sigue {@code PENDING} — ver {@link #createDirectCheckout}.
+     */
+    private void attachCheckout(UUID purchaseId, CheckoutSession session, boolean persistInitPoint) {
+        CreditPurchase purchase = purchaseRepo.findByIdForUpdate(purchaseId)
+            .orElseThrow(() -> BusinessException.notFound("purchase-not-found", "Compra no encontrada"));
+        if (purchase.getStatus() != CreditPurchaseStatus.PENDING) {
+            log.warn("Compra {} ya no está PENDING ({}) al guardar su checkout; no se resucita",
+                purchaseId, purchase.getStatus());
+            throw BusinessException.conflict("checkout-purchase-closed",
+                "Este pago ya no está disponible — volvé a intentarlo");
+        }
+        purchase.setMpPreferenceId(session.preferenceId());
+        if (persistInitPoint) {
+            purchase.setInitPoint(session.initPoint());
+        }
     }
 
     /**
