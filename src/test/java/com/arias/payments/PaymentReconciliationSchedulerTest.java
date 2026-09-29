@@ -39,7 +39,7 @@ class PaymentReconciliationSchedulerTest {
             purchaseRepo,
             purchaseService,
             paymentGateway,
-            new MercadoPagoProperties("token", "secret", true),
+            new MercadoPagoProperties("token", "secret", true, 5_000, 5_000, 10_000),
             Clock.fixed(NOW, ZoneOffset.UTC));
     }
 

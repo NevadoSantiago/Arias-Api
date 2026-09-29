@@ -67,6 +67,13 @@ public class MercadoPagoAdapter implements PaymentGateway {
      */
     @PostConstruct
     void init() {
+        // Unidad B13.1: el SDK trae 20 s de default en los tres timeouts. Son
+        // estáticos globales y el SDK los lee en cada request (verificado en
+        // MPDefaultHttpClient de sdk-java 3.7.0), así que basta setearlos acá.
+        MercadoPagoConfig.setConnectionTimeout(props.connectTimeoutMs());
+        MercadoPagoConfig.setConnectionRequestTimeout(props.connectionRequestTimeoutMs());
+        MercadoPagoConfig.setSocketTimeout(props.socketTimeoutMs());
+
         if (props.isConfigured()) {
             MercadoPagoConfig.setAccessToken(props.accessToken());
             log.info("Mercado Pago configurado (checkout habilitado)");

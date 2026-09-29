@@ -21,7 +21,7 @@ class SignatureVerifierTest {
     private static final String SECRET = "test-webhook-secret";
     private static final String OTHER_SECRET = "a-completely-different-secret";
 
-    private final MercadoPagoProperties props = new MercadoPagoProperties("token", SECRET, true);
+    private final MercadoPagoProperties props = new MercadoPagoProperties("token", SECRET, true, 5_000, 5_000, 10_000);
     private final SignatureVerifier verifier = new SignatureVerifier(props);
 
     @Test

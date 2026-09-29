@@ -101,6 +101,11 @@ arias:
     access-token: ${MP_ACCESS_TOKEN:}
     webhook-secret: ${MP_WEBHOOK_SECRET:}
     enabled: ${MP_ENABLED:false}
+    # Timeouts del SDK (ms). El default del SDK es 20 s en los tres; una llamada
+    # colgada no debe retener un hilo de request tanto tiempo.
+    connect-timeout-ms: ${MP_CONNECT_TIMEOUT_MS:5000}
+    connection-request-timeout-ms: ${MP_CONNECTION_REQUEST_TIMEOUT_MS:5000}
+    socket-timeout-ms: ${MP_SOCKET_TIMEOUT_MS:10000}
 
   # URLs públicas de frontend/backend — se usan para construir back_urls y
   # notification_url de Mercado Pago. Mercado Pago exige HTTPS y rechaza
