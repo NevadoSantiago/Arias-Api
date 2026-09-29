@@ -550,8 +550,14 @@ public class CreditPurchaseService {
      *   <li>Aprobado y la compra <b>ya se acreditó</b>: el cliente pagó dos
      *       veces. NO se acredita otra vez; se loguea un WARN para reembolsar a
      *       mano el segundo pago en Mercado Pago.</li>
-     *   <li>Cualquier otro estado (rechazo de otro intento, pendiente, etc.):
-     *       no es el pago que respalda esta compra; se ignora.</li>
+     *   <li>Cualquier otro estado del pago (rechazo de otro intento, pendiente,
+     *       etc.): no es el pago que respalda esta compra; se ignora.</li>
+     *   <li>Aprobado, la compra nunca se acreditó pero <b>no está PENDING ni
+     *       cerrada</b> (en la práctica {@code IN_MEDIATION}: el pago guardado
+     *       está en disputa): no se adopta el otro pago ni se acredita; se
+     *       loguea un WARN para que alguien lo revise a mano en Mercado Pago.
+     *       Si la disputa se resuelve a favor del comprador, el id guardado
+     *       vuelve como {@code approved} y ese camino sí acredita.</li>
      * </ul>
      *
      * @return {@code true} si hay que seguir procesando el snapshot (id adoptado)
@@ -576,18 +582,22 @@ public class CreditPurchaseService {
             purchase.setMpPaymentId(snapshot.paymentId());
             return true;
         }
-        log.error("La compra {} ya está asociada a otro payment_id ({} vs {}) — se ignora",
-            purchase.getId(), knownPaymentId, snapshot.paymentId());
+        log.warn("El pago aprobado {} llegó para la compra {}, que sigue sin acreditar en estado {} con el pago "
+            + "{} (p. ej. en mediación) — NO se adopta ni se acredita; revisar a mano en Mercado Pago",
+            snapshot.paymentId(), purchase.getId(), purchase.getStatus(), knownPaymentId);
         return false;
     }
 
-    /** Cerrada sin pago (REJECTED, CANCELLED o EXPIRED) y nunca acreditada. */
+    /**
+     * Cerrada sin pago (REJECTED, CANCELLED o EXPIRED). No revisa {@code
+     * creditedAt}: acreditar una compra siempre la pasa a APPROVED, así que una
+     * compra en uno de estos tres estados nunca fue acreditada.
+     */
     private static boolean isClosedWithoutCredit(CreditPurchase purchase) {
         CreditPurchaseStatus status = purchase.getStatus();
-        return purchase.getCreditedAt() == null
-            && (status == CreditPurchaseStatus.REJECTED
-                || status == CreditPurchaseStatus.CANCELLED
-                || status == CreditPurchaseStatus.EXPIRED);
+        return status == CreditPurchaseStatus.REJECTED
+            || status == CreditPurchaseStatus.CANCELLED
+            || status == CreditPurchaseStatus.EXPIRED;
     }
 
     /**

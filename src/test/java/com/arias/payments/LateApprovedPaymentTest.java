@@ -425,4 +425,51 @@ class LateApprovedPaymentTest {
         assertThat(purchase(dto.purchaseId()).getStatus()).isEqualTo(CreditPurchaseStatus.REVERSED);
         assertThat(wallet().getAvailable()).isZero();
     }
+
+    // ─── B15.1 ──────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("DIRECT con el pedido en un tercer estado (PENDIENTE): el pago aprobado acredita a disponibles, no compromete créditos ni toca el pedido")
+    void directApprovalWithTheOrderInAThirdStateCreditsAvailableWithoutCommitting() {
+        givenCustomerWith(0);
+        DirectCheckoutDto dto = givenDirectCheckout();
+        // Estado que el flujo normal no produce (PENDIENTE_PAGO pasa a PENDIENTE sólo al acreditar),
+        // fijado a mano para blindar la rama "el pedido ya no espera este pago".
+        var order = orderRepo.findById(dto.orderId()).orElseThrow();
+        order.setEstado(OrderEstado.PENDIENTE);
+        orderRepo.saveAndFlush(order);
+        flushAndClear();
+
+        apply(dto.purchaseId(), "mp-third-state", PaymentStatus.APPROVED);
+
+        assertThat(purchase(dto.purchaseId()).getStatus()).isEqualTo(CreditPurchaseStatus.APPROVED);
+        assertThat(wallet().getAvailable()).isEqualTo(2);
+        assertThat(wallet().getCommitted()).isZero();
+        assertThat(movements(MovementType.DIRECT_PURCHASE_REFUND)).hasSize(1);
+        assertThat(movements(MovementType.DIRECT_PURCHASE)).isEmpty();
+        assertThat(orderRepo.findById(dto.orderId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.PENDIENTE);
+
+        // Idempotente: un segundo aviso del mismo pago no vuelve a acreditar.
+        apply(dto.purchaseId(), "mp-third-state", PaymentStatus.APPROVED);
+        assertThat(wallet().getAvailable()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Compra en mediación sin acreditar y un pago aprobado con OTRO payment_id: no se acredita, se loguea un WARN que lo explica")
+    void differentApprovedPaymentOnAnUncreditedMediationPurchaseIsNotAdopted() {
+        givenCustomerWith(0);
+        UUID id = givenPackPurchase(10, 10_000L);
+        apply(id, "mp-disputed", PaymentStatus.IN_MEDIATION);
+        assertThat(purchase(id).getStatus()).isEqualTo(CreditPurchaseStatus.IN_MEDIATION);
+
+        apply(id, "mp-other", PaymentStatus.APPROVED);
+
+        assertThat(purchase(id).getStatus()).isEqualTo(CreditPurchaseStatus.IN_MEDIATION);
+        assertThat(purchase(id).getMpPaymentId()).isEqualTo("mp-disputed");
+        assertThat(wallet().getAvailable()).isZero();
+        List<ILoggingEvent> warns = warnsContaining("mediación");
+        assertThat(warns).hasSize(1);
+        assertThat(warns.get(0).getFormattedMessage()).contains(id.toString(), "mp-other", "mp-disputed");
+        assertThat(logs.list.stream().filter(e -> e.getLevel() == Level.ERROR)).isEmpty();
+    }
 }

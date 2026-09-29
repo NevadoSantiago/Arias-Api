@@ -30,7 +30,6 @@ import java.math.RoundingMode;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * Adaptador de {@link PaymentGateway} sobre el SDK oficial de Mercado Pago —
@@ -154,21 +153,17 @@ public class MercadoPagoAdapter implements PaymentGateway {
      * {@code external_reference} cuando el webhook nunca llegó, así que
      * todavía no tenemos el {@code payment_id}. Puede haber más de un intento
      * de pago para la misma referencia (reintentos del usuario en Checkout
-     * Pro) — nos quedamos con el más reciente por {@code dateCreated}.
+     * Pro): se devuelven todos los de la página, del más reciente al más viejo
+     * por {@code dateCreated} (unidad B15.1), para que quien reconcilia pueda
+     * preferir el aprobado.
      */
     @Override
-    public Optional<PaymentSnapshot> findByExternalReference(String externalReference) {
+    public List<PaymentSnapshot> findAllByExternalReference(String externalReference) {
         requireConfigured();
         MPSearchRequest request = searchByExternalReference(externalReference);
         try {
             MPResultsResourcesPage<Payment> page = new PaymentClient().search(request);
-            if (page == null || page.getResults() == null || page.getResults().isEmpty()) {
-                return Optional.empty();
-            }
-            return page.getResults().stream()
-                .max(Comparator.comparing(Payment::getDateCreated,
-                    Comparator.nullsFirst(Comparator.naturalOrder())))
-                .map(this::toSnapshot);
+            return snapshotsNewestFirst(page == null ? null : page.getResults());
         } catch (MPApiException e) {
             log.error("Mercado Pago rechazó la búsqueda por external_reference {}: status={} body={}",
                 externalReference, e.getStatusCode(), apiResponseBody(e));
@@ -178,6 +173,18 @@ public class MercadoPagoAdapter implements PaymentGateway {
                 externalReference, e);
             throw paymentLookupFailed();
         }
+    }
+
+    /** No confía en el orden de Mercado Pago: ordena por {@code dateCreated} descendente (sin fecha, al final). */
+    List<PaymentSnapshot> snapshotsNewestFirst(List<Payment> payments) {
+        if (payments == null) {
+            return List.of();
+        }
+        return payments.stream()
+            .sorted(Comparator.comparing(Payment::getDateCreated,
+                Comparator.nullsFirst(Comparator.<java.time.OffsetDateTime>naturalOrder())).reversed())
+            .map(this::toSnapshot)
+            .toList();
     }
 
     private PaymentSnapshot toSnapshot(Payment payment) {
