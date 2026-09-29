@@ -7,6 +7,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -29,6 +30,16 @@ public class CreditPurchaseController {
         @Valid @RequestBody CreatePurchaseRequest req
     ) {
         return service.createPurchase(user.userId(), req);
+    }
+
+    /**
+     * Compras {@code PENDING} vivas (últimas 24 h) del usuario autenticado, más
+     * nuevas primero (unidad B14). El segmento literal {@code /pending} gana
+     * sobre {@code /{id}} — {@code PendingPurchasesTest} lo prueba por HTTP.
+     */
+    @GetMapping("/pending")
+    public List<CreditPurchaseDto> listPending(@AuthenticationPrincipal JwtUser user) {
+        return service.listPendingPurchases(user.userId());
     }
 
     @GetMapping("/{id}")

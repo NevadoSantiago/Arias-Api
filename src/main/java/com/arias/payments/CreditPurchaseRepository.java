@@ -78,4 +78,23 @@ public interface CreditPurchaseRepository extends JpaRepository<CreditPurchase, 
      * {@code PENDIENTE_PAGO} recién creado.
      */
     Optional<CreditPurchase> findByOrderIdAndType(Long orderId, PurchaseType type);
+
+    /**
+     * Compras {@code PENDING} vivas de un usuario (unidad B14, {@code GET
+     * /purchases/pending}): creadas en o después de {@code since}, la más
+     * nueva primero. El predicado (user_id + status + created_at) lo cubre
+     * {@code idx_credit_purchase_user_pending} (V29). {@code LEFT JOIN FETCH}
+     * del paquete y del pedido para que el DTO lea {@code packNombre} y
+     * {@code orderEstado} sin una consulta por fila.
+     */
+    @Query("""
+        SELECT p FROM CreditPurchase p
+        LEFT JOIN FETCH p.pack
+        LEFT JOIN FETCH p.order
+        WHERE p.user.id = :userId AND p.status = :status AND p.createdAt >= :since
+        ORDER BY p.createdAt DESC
+        """)
+    List<CreditPurchase> findAlivePendingByUser(@Param("userId") Long userId,
+                                                @Param("status") CreditPurchaseStatus status,
+                                                @Param("since") Instant since);
 }

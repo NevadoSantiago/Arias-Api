@@ -22,6 +22,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -251,6 +254,21 @@ public class CreditPurchaseService {
         CreditPurchase purchase = purchaseRepo.findByIdAndUserId(id, userId)
             .orElseThrow(() -> BusinessException.notFound("purchase-not-found", "Compra no encontrada"));
         return CreditPurchaseDto.from(purchase);
+    }
+
+    /**
+     * Compras {@code PENDING} del usuario que siguen vivas — creadas dentro de
+     * las últimas {@link PaymentReconciliationScheduler#PENDING_EXPIRE_HOURS}
+     * horas, la misma ventana tras la cual la reconciliación las expira —,
+     * la más nueva primero (unidad B14, aviso de pago pendiente en "Mis
+     * almuerzos"). Scope por {@code userId}: nunca devuelve compras ajenas.
+     */
+    @Transactional(readOnly = true)
+    public List<CreditPurchaseDto> listPendingPurchases(Long userId) {
+        Instant since = clock.instant().minus(PaymentReconciliationScheduler.PENDING_EXPIRE_HOURS, ChronoUnit.HOURS);
+        return purchaseRepo.findAlivePendingByUser(userId, CreditPurchaseStatus.PENDING, since).stream()
+            .map(CreditPurchaseDto::from)
+            .toList();
     }
 
     /**

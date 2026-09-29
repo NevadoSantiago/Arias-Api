@@ -32,7 +32,8 @@ import java.util.Optional;
 public class PaymentReconciliationScheduler {
 
     private static final int PENDING_RECONCILE_MINUTES = 30;
-    private static final int PENDING_EXPIRE_HOURS = 24;
+    /** Horas que una compra {@code PENDING} sigue viva antes de expirar; también la ventana de {@code GET /purchases/pending}. */
+    static final int PENDING_EXPIRE_HOURS = 24;
 
     private final CreditPurchaseRepository purchaseRepo;
     private final CreditPurchaseService purchaseService;

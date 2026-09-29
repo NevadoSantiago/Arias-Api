@@ -1,5 +1,7 @@
 package com.arias.payments;
 
+import com.arias.orders.OrderEstado;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -13,7 +15,9 @@ public record CreditPurchaseDto(
     Instant createdAt,
     Instant creditedAt,
     Instant reversedAt,
-    String packNombre
+    String packNombre,
+    Long orderId,
+    OrderEstado orderEstado
 ) {
     /**
      * {@code packNombre} es el {@code nombre} del paquete comprado (p. ej.
@@ -22,6 +26,17 @@ public record CreditPurchaseDto(
      * b2c-ordering-redesign, tarea B3). {@code p.getPack()} es {@code
      * LAZY}; esto solo es seguro porque {@code from()} se invoca siempre
      * dentro de la transacción de {@link CreditPurchaseService#getPurchase}.
+     *
+     * <p>{@code orderId} es el pedido de una compra {@code DIRECT} ({@code
+     * null} en {@code PACK}); leer solo el id de la relación {@code LAZY} no
+     * la inicializa (tarea B14). Nunca se expone {@code initPoint} ni ningún
+     * dato del proveedor de pago.
+     *
+     * <p>{@code orderEstado} es el estado de ese pedido (p. ej. {@code
+     * PENDIENTE_PAGO} o {@code CANCELADO}), {@code null} en {@code PACK}:
+     * el aviso de pago pendiente lo usa para distinguir un pedido ya
+     * cancelado. Lee el pedido {@code LAZY}, así que exige la transacción del
+     * servicio (y un {@code JOIN FETCH} en el listado, sin N+1).
      */
     public static CreditPurchaseDto from(CreditPurchase p) {
         return new CreditPurchaseDto(
@@ -34,7 +49,9 @@ public record CreditPurchaseDto(
             p.getCreatedAt(),
             p.getCreditedAt(),
             p.getReversedAt(),
-            p.getPack() != null ? p.getPack().getNombre() : null
+            p.getPack() != null ? p.getPack().getNombre() : null,
+            p.getOrder() != null ? p.getOrder().getId() : null,
+            p.getOrder() != null ? p.getOrder().getEstado() : null
         );
     }
 }
