@@ -32,7 +32,7 @@ import java.util.UUID;
  * hora, y como máximo {@code arias.payments.reconcile.closed-max-per-run}
  * compras por corrida (las más viejas primero, por ser las más cercanas al fin
  * de la ventana). Sin columna nueva: el calendario sale de {@code createdAt}.
- * Una compra diferida por el tope pierde sólo ese punto de control; quedan los
+ * Una compra diferida por el tope o fallida se reintenta en la corrida siguiente (tolerancia de dos corridas por punto de control); quedan además los
  * siguientes, y la diferida se reporta en el resumen.
  *
  * <p>Con varios pagos para una misma compra (uno rechazado y un reintento
@@ -66,9 +66,16 @@ public class PaymentReconciliationScheduler {
      * pronto o al vencer el checkout; el último punto queda antes del fin de
      * {@link #CLOSED_RECONCILE_HOURS}.
      */
-    static final List<Integer> CLOSED_CHECKPOINT_HOURS = List.of(1, 6, 24, 47);
-    /** La reconciliación corre cada hora: un punto de control cae en exactamente una corrida. */
-    private static final Duration RUN_INTERVAL = Duration.ofHours(1);
+    static final List<Integer> CLOSED_CHECKPOINT_HOURS = List.of(
+        1, 6, PENDING_EXPIRE_HOURS, CLOSED_RECONCILE_HOURS - 1);
+    /** Corre cada hora, en punto. */
+    static final String RECONCILE_CRON = "0 0 * * * *";
+    /**
+     * Unidad B15.2: un punto de control sigue vigente durante este plazo, o sea dos
+     * corridas de {@link #RECONCILE_CRON}: una corrida salteada, tardía o con fallo
+     * se reintenta en la siguiente. Consultar dos veces es idempotente.
+     */
+    static final Duration CHECKPOINT_TOLERANCE = Duration.ofHours(2);
     private static final Set<CreditPurchaseStatus> CLOSED_UNCREDITED = Set.of(
         CreditPurchaseStatus.REJECTED, CreditPurchaseStatus.CANCELLED, CreditPurchaseStatus.EXPIRED);
 
@@ -95,7 +102,7 @@ public class PaymentReconciliationScheduler {
         this.closedMaxPerRun = Math.max(1, closedMaxPerRun);
     }
 
-    @Scheduled(cron = "0 0 * * * *")
+    @Scheduled(cron = RECONCILE_CRON)
     public void reconcile() {
         if (!mercadoPagoProps.isConfigured()) {
             return;
@@ -182,15 +189,25 @@ public class PaymentReconciliationScheduler {
     }
 
     /**
-     * ¿Toca consultar esta compra cerrada en esta corrida? Sí si algún punto de
-     * control ({@link #CLOSED_CHECKPOINT_HOURS} desde la creación) cayó dentro de
-     * la última hora.
+     * ¿Toca consultar esta compra cerrada en esta corrida? Sin estado, sólo por
+     * su edad: sí si algún punto de control ({@link #CLOSED_CHECKPOINT_HOURS}
+     * desde la creación) cae en {@code (now - CHECKPOINT_TOLERANCE, now]}, así una
+     * corrida salteada, tardía, fallida o diferida por el tope se reintenta en la
+     * siguiente; y sí, en cada corrida, entre el último punto de control y el fin
+     * de la ventana ({@link #CLOSED_RECONCILE_HOURS}). Fuera de la ventana, no.
      */
     static boolean isClosedCheckDue(Instant createdAt, Instant now) {
         Duration age = Duration.between(createdAt, now);
+        if (age.isNegative() || age.compareTo(Duration.ofHours(CLOSED_RECONCILE_HOURS)) >= 0) {
+            return false;
+        }
+        int lastCheckpoint = CLOSED_CHECKPOINT_HOURS.get(CLOSED_CHECKPOINT_HOURS.size() - 1);
+        if (age.compareTo(Duration.ofHours(lastCheckpoint)) >= 0) {
+            return true;
+        }
         for (int hours : CLOSED_CHECKPOINT_HOURS) {
             Duration sinceCheckpoint = age.minusHours(hours);
-            if (!sinceCheckpoint.isNegative() && sinceCheckpoint.compareTo(RUN_INTERVAL) < 0) {
+            if (!sinceCheckpoint.isNegative() && sinceCheckpoint.compareTo(CHECKPOINT_TOLERANCE) < 0) {
                 return true;
             }
         }
@@ -219,7 +236,7 @@ public class PaymentReconciliationScheduler {
      * hay ningún pago.
      */
     private PaymentSnapshot lookupBestSnapshot(UUID purchaseId) {
-        List<PaymentSnapshot> snapshots = paymentGateway.findAllByExternalReference(purchaseId.toString());
+        List<PaymentSnapshot> snapshots = paymentGateway.findRecentByExternalReference(purchaseId.toString());
         if (snapshots == null || snapshots.isEmpty()) {
             return null;
         }

@@ -582,22 +582,22 @@ public class CreditPurchaseService {
             purchase.setMpPaymentId(snapshot.paymentId());
             return true;
         }
-        log.warn("El pago aprobado {} llegó para la compra {}, que sigue sin acreditar en estado {} con el pago "
+        log.error("El pago aprobado {} llegó para la compra {}, que sigue sin acreditar en estado {} con el pago "
             + "{} (p. ej. en mediación) — NO se adopta ni se acredita; revisar a mano en Mercado Pago",
             snapshot.paymentId(), purchase.getId(), purchase.getStatus(), knownPaymentId);
         return false;
     }
 
     /**
-     * Cerrada sin pago (REJECTED, CANCELLED o EXPIRED). No revisa {@code
-     * creditedAt}: acreditar una compra siempre la pasa a APPROVED, así que una
-     * compra en uno de estos tres estados nunca fue acreditada.
+     * Cerrada sin pago (REJECTED, CANCELLED o EXPIRED) y nunca acreditada. Revisa
+     * {@code creditedAt} aunque ningún camino del código deje una compra acreditada
+     * en estos estados: un cambio manual no debe permitir acreditarla dos veces.
      */
     private static boolean isClosedWithoutCredit(CreditPurchase purchase) {
         CreditPurchaseStatus status = purchase.getStatus();
-        return status == CreditPurchaseStatus.REJECTED
+        return purchase.getCreditedAt() == null && (status == CreditPurchaseStatus.REJECTED
             || status == CreditPurchaseStatus.CANCELLED
-            || status == CreditPurchaseStatus.EXPIRED;
+            || status == CreditPurchaseStatus.EXPIRED);
     }
 
     /**

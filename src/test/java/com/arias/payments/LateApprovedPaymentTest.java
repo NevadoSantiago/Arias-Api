@@ -467,9 +467,44 @@ class LateApprovedPaymentTest {
         assertThat(purchase(id).getStatus()).isEqualTo(CreditPurchaseStatus.IN_MEDIATION);
         assertThat(purchase(id).getMpPaymentId()).isEqualTo("mp-disputed");
         assertThat(wallet().getAvailable()).isZero();
-        List<ILoggingEvent> warns = warnsContaining("mediación");
-        assertThat(warns).hasSize(1);
-        assertThat(warns.get(0).getFormattedMessage()).contains(id.toString(), "mp-other", "mp-disputed");
-        assertThat(logs.list.stream().filter(e -> e.getLevel() == Level.ERROR)).isEmpty();
+        List<ILoggingEvent> errors = logs.list.stream()
+            .filter(e -> e.getLevel() == Level.ERROR && e.getFormattedMessage().contains("mediación")).toList();
+        assertThat(errors).as("alerting watches ERROR: an approved payment left uncredited needs a human").hasSize(1);
+        assertThat(warnsContaining("mediación")).isEmpty();
+        assertThat(errors.get(0).getFormattedMessage()).contains(id.toString(), "mp-other", "mp-disputed");
+    }
+
+    @Test
+    @DisplayName("PACK: una compra ya acreditada que quedó en REJECTED (cambio manual) y el MISMO pago aprobado otra vez NO acredita de nuevo")
+    void creditedPurchaseForcedToRejectedIsNotCreditedAgainBySamePayment() {
+        givenCustomerWith(0);
+        UUID id = givenPackPurchase(10, 10_000L);
+        apply(id, "mp-card-1", PaymentStatus.APPROVED);
+        forceStatus(id, CreditPurchaseStatus.REJECTED);
+
+        apply(id, "mp-card-1", PaymentStatus.APPROVED);
+
+        assertThat(wallet().getAvailable()).isEqualTo(10);
+        assertThat(movements(MovementType.PACK_PURCHASE)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("PACK: una compra ya acreditada que quedó en REJECTED y OTRO pago aprobado NO se adopta ni acredita de nuevo")
+    void creditedPurchaseForcedToRejectedIsNotCreditedAgainByAnotherPayment() {
+        givenCustomerWith(0);
+        UUID id = givenPackPurchase(10, 10_000L);
+        apply(id, "mp-card-1", PaymentStatus.APPROVED);
+        forceStatus(id, CreditPurchaseStatus.REJECTED);
+
+        apply(id, "mp-card-2", PaymentStatus.APPROVED);
+
+        assertThat(wallet().getAvailable()).isEqualTo(10);
+        assertThat(movements(MovementType.PACK_PURCHASE)).hasSize(1);
+        assertThat(purchase(id).getMpPaymentId()).isEqualTo("mp-card-1");
+    }
+
+    private void forceStatus(UUID id, CreditPurchaseStatus status) {
+        purchase(id).setStatus(status);
+        flushAndClear();
     }
 }

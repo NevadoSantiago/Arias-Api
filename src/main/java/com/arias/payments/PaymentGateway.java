@@ -43,7 +43,7 @@ public interface PaymentGateway {
     boolean verifySignature(String xSignature, String xRequestId, String dataId);
 
     /**
-     * Todos los pagos asociados a un {@code external_reference}
+     * Los pagos MÁS RECIENTES asociados a un {@code external_reference}
      * (unidad 11, {@code PaymentReconciliationScheduler}), del más reciente al
      * más viejo — cubre el webhook perdido: una compra sin notificación se
      * re-consulta acá en vez de necesitar el {@code payment_id}, que todavía
@@ -51,6 +51,11 @@ public interface PaymentGateway {
      * un reintento aprobado): devolver sólo uno podía dejar afuera el aprobado
      * (unidad B15.1), así que el llamador elige entre todos. Lista vacía si
      * Mercado Pago no tiene ningún pago para esa referencia.
+     *
+     * <p><b>Límite:</b> devuelve a lo sumo una página de resultados (los N más
+     * recientes, N fijado por la implementación; en Mercado Pago 30), no la
+     * historia completa. Un checkout rara vez tiene tantos intentos, y el pago
+     * aprobado es casi siempre de los últimos; no se pagina.
      */
-    java.util.List<PaymentSnapshot> findAllByExternalReference(String externalReference);
+    java.util.List<PaymentSnapshot> findRecentByExternalReference(String externalReference);
 }

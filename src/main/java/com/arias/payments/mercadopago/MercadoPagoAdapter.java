@@ -158,7 +158,7 @@ public class MercadoPagoAdapter implements PaymentGateway {
      * preferir el aprobado.
      */
     @Override
-    public List<PaymentSnapshot> findAllByExternalReference(String externalReference) {
+    public List<PaymentSnapshot> findRecentByExternalReference(String externalReference) {
         requireConfigured();
         MPSearchRequest request = searchByExternalReference(externalReference);
         try {

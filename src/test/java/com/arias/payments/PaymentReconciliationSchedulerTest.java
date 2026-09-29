@@ -69,10 +69,10 @@ class PaymentReconciliationSchedulerTest {
         CreditPurchase healthy = pendingCreatedMinutesAgo(45);
         when(purchaseRepo.findByStatusAndCreatedAtBefore(eq(CreditPurchaseStatus.PENDING), any()))
             .thenReturn(List.of(failing, healthy));
-        when(paymentGateway.findAllByExternalReference(failing.getId().toString()))
+        when(paymentGateway.findRecentByExternalReference(failing.getId().toString()))
             .thenThrow(new NullPointerException("unexpected SDK failure"));
         PaymentSnapshot approved = approvedSnapshotFor(healthy);
-        when(paymentGateway.findAllByExternalReference(healthy.getId().toString()))
+        when(paymentGateway.findRecentByExternalReference(healthy.getId().toString()))
             .thenReturn(List.of(approved));
 
         scheduler.reconcile();
@@ -101,7 +101,7 @@ class PaymentReconciliationSchedulerTest {
         CreditPurchase rejected = closedCreatedMinutesAgo(CreditPurchaseStatus.REJECTED, 6 * 60 + 10);
         givenClosed(rejected);
         PaymentSnapshot retryApproved = approvedSnapshotFor(rejected);
-        when(paymentGateway.findAllByExternalReference(rejected.getId().toString()))
+        when(paymentGateway.findRecentByExternalReference(rejected.getId().toString()))
             .thenReturn(List.of(retryApproved));
 
         scheduler.reconcile();
@@ -118,10 +118,10 @@ class PaymentReconciliationSchedulerTest {
         CreditPurchase failing = closedCreatedMinutesAgo(CreditPurchaseStatus.EXPIRED, 24 * 60 + 5);
         CreditPurchase healthy = closedCreatedMinutesAgo(CreditPurchaseStatus.REJECTED, 65);
         givenClosed(failing, healthy);
-        when(paymentGateway.findAllByExternalReference(failing.getId().toString()))
+        when(paymentGateway.findRecentByExternalReference(failing.getId().toString()))
             .thenThrow(new IllegalStateException("MP down"));
         PaymentSnapshot approved = approvedSnapshotFor(healthy);
-        when(paymentGateway.findAllByExternalReference(healthy.getId().toString()))
+        when(paymentGateway.findRecentByExternalReference(healthy.getId().toString()))
             .thenReturn(List.of(approved));
 
         scheduler.reconcile();
@@ -136,22 +136,65 @@ class PaymentReconciliationSchedulerTest {
     void closedPurchaseIsQueriedAtEachCheckpoint(long ageMinutes) {
         CreditPurchase rejected = closedCreatedMinutesAgo(CreditPurchaseStatus.REJECTED, ageMinutes);
         givenClosed(rejected);
-        when(paymentGateway.findAllByExternalReference(rejected.getId().toString())).thenReturn(List.of());
+        when(paymentGateway.findRecentByExternalReference(rejected.getId().toString())).thenReturn(List.of());
 
         scheduler.reconcile();
 
-        verify(paymentGateway).findAllByExternalReference(rejected.getId().toString());
+        verify(paymentGateway).findRecentByExternalReference(rejected.getId().toString());
     }
 
     @ParameterizedTest(name = "compra cerrada de {0} min: entre puntos de control no se consulta")
-    @ValueSource(longs = {10, 30, 2 * 60, 3 * 60 + 30, 12 * 60, 30 * 60, 47 * 60 + 90})
+    @ValueSource(longs = {10, 30, 3 * 60 + 5, 3 * 60 + 30, 12 * 60, 30 * 60, 47 * 60 + 90})
     void closedPurchaseIsNotQueriedBetweenCheckpoints(long ageMinutes) {
         CreditPurchase rejected = closedCreatedMinutesAgo(CreditPurchaseStatus.REJECTED, ageMinutes);
         givenClosed(rejected);
 
         scheduler.reconcile();
 
-        verify(paymentGateway, never()).findAllByExternalReference(any());
+        verify(paymentGateway, never()).findRecentByExternalReference(any());
+    }
+
+    @ParameterizedTest(name = "compra cerrada de {0} min: una corrida tarde (hasta 2 h tras el punto de control) igual la consulta")
+    @ValueSource(longs = {60 + 90, 6 * 60 + 110, 24 * 60 + 119})
+    void lateRunStillPicksUpAPurchaseThatMissedItsCheckpoint(long ageMinutes) {
+        CreditPurchase rejected = closedCreatedMinutesAgo(CreditPurchaseStatus.REJECTED, ageMinutes);
+        givenClosed(rejected);
+        when(paymentGateway.findRecentByExternalReference(any())).thenReturn(List.of());
+
+        scheduler.reconcile();
+
+        verify(paymentGateway).findRecentByExternalReference(rejected.getId().toString());
+    }
+
+    @Test
+    void closedLookupThatFailedIsRetriedOnTheNextRun() {
+        CreditPurchase rejected = closedCreatedMinutesAgo(CreditPurchaseStatus.REJECTED, 6 * 60 + 10);
+        givenClosed(rejected);
+        when(paymentGateway.findRecentByExternalReference(rejected.getId().toString()))
+            .thenThrow(new IllegalStateException("MP down"));
+
+        scheduler.reconcile();
+        verify(paymentGateway).findRecentByExternalReference(rejected.getId().toString());
+
+        // La corrida siguiente (una hora después) ve la misma compra 60 min más vieja.
+        Instant nextRun = NOW.plus(1, ChronoUnit.HOURS);
+        assertThat(PaymentReconciliationScheduler.isClosedCheckDue(rejected.getCreatedAt(), nextRun)).isTrue();
+    }
+
+    @ParameterizedTest(name = "compra cerrada de {0} min: tras el último punto de control se sigue consultando hasta el fin de la ventana")
+    @ValueSource(longs = {47 * 60, 47 * 60 + 30, 48 * 60 - 1})
+    void lastCheckpointCatchUpCoversTheRestOfTheWindow(long ageMinutes) {
+        Instant created = NOW.minus(ageMinutes, ChronoUnit.MINUTES);
+        assertThat(PaymentReconciliationScheduler.isClosedCheckDue(created, NOW)).isTrue();
+        assertThat(PaymentReconciliationScheduler.isClosedCheckDue(created.minus(2, ChronoUnit.HOURS), NOW))
+            .as("fuera de la ventana no se consulta").isFalse();
+    }
+
+    @Test
+    void checkpointsAreDerivedFromTheWindowConstants() {
+        assertThat(PaymentReconciliationScheduler.CLOSED_CHECKPOINT_HOURS).containsExactly(
+            1, 6, PaymentReconciliationScheduler.PENDING_EXPIRE_HOURS,
+            PaymentReconciliationScheduler.CLOSED_RECONCILE_HOURS - 1);
     }
 
     @Test
@@ -163,15 +206,15 @@ class PaymentReconciliationSchedulerTest {
         CreditPurchase p4 = closedCreatedMinutesAgo(CreditPurchaseStatus.CANCELLED, 6 * 60 + 20);
         CreditPurchase p5 = closedCreatedMinutesAgo(CreditPurchaseStatus.REJECTED, 65);
         givenClosed(p1, p2, p3, p4, p5);
-        when(paymentGateway.findAllByExternalReference(any())).thenReturn(List.of());
+        when(paymentGateway.findRecentByExternalReference(any())).thenReturn(List.of());
 
         scheduler.reconcile();
 
-        verify(paymentGateway).findAllByExternalReference(p3.getId().toString());
-        verify(paymentGateway).findAllByExternalReference(p2.getId().toString());
-        verify(paymentGateway).findAllByExternalReference(p4.getId().toString());
-        verify(paymentGateway, never()).findAllByExternalReference(p1.getId().toString());
-        verify(paymentGateway, never()).findAllByExternalReference(p5.getId().toString());
+        verify(paymentGateway).findRecentByExternalReference(p3.getId().toString());
+        verify(paymentGateway).findRecentByExternalReference(p2.getId().toString());
+        verify(paymentGateway).findRecentByExternalReference(p4.getId().toString());
+        verify(paymentGateway, never()).findRecentByExternalReference(p1.getId().toString());
+        verify(paymentGateway, never()).findRecentByExternalReference(p5.getId().toString());
         assertThat(closedSummaryLog()).contains("3 consultada(s)", "2 diferida(s)");
     }
 
@@ -180,9 +223,9 @@ class PaymentReconciliationSchedulerTest {
         CreditPurchase late = closedCreatedMinutesAgo(CreditPurchaseStatus.REJECTED, 6 * 60 + 5);
         CreditPurchase failing = closedCreatedMinutesAgo(CreditPurchaseStatus.EXPIRED, 24 * 60 + 5);
         givenClosed(late, failing);
-        when(paymentGateway.findAllByExternalReference(late.getId().toString()))
+        when(paymentGateway.findRecentByExternalReference(late.getId().toString()))
             .thenReturn(List.of(approvedSnapshotFor(late)));
-        when(paymentGateway.findAllByExternalReference(failing.getId().toString()))
+        when(paymentGateway.findRecentByExternalReference(failing.getId().toString()))
             .thenThrow(new IllegalStateException("MP down"));
 
         scheduler.reconcile();
@@ -200,7 +243,7 @@ class PaymentReconciliationSchedulerTest {
         givenClosed(rejected);
         PaymentSnapshot declined = snapshotFor(rejected, "pay-declined", PaymentStatus.REJECTED);
         PaymentSnapshot approved = snapshotFor(rejected, "pay-approved", PaymentStatus.APPROVED);
-        when(paymentGateway.findAllByExternalReference(rejected.getId().toString()))
+        when(paymentGateway.findRecentByExternalReference(rejected.getId().toString()))
             .thenReturn(approvedFirst ? List.of(approved, declined) : List.of(declined, approved));
 
         scheduler.reconcile();
@@ -216,7 +259,7 @@ class PaymentReconciliationSchedulerTest {
             .thenReturn(List.of(pending));
         PaymentSnapshot declined = snapshotFor(pending, "pay-declined", PaymentStatus.REJECTED);
         PaymentSnapshot approved = snapshotFor(pending, "pay-approved", PaymentStatus.APPROVED);
-        when(paymentGateway.findAllByExternalReference(pending.getId().toString()))
+        when(paymentGateway.findRecentByExternalReference(pending.getId().toString()))
             .thenReturn(List.of(declined, approved));
 
         scheduler.reconcile();
@@ -232,7 +275,7 @@ class PaymentReconciliationSchedulerTest {
             .thenReturn(List.of(pending));
         PaymentSnapshot latest = snapshotFor(pending, "pay-latest", PaymentStatus.IN_PROCESS);
         PaymentSnapshot older = snapshotFor(pending, "pay-older", PaymentStatus.REJECTED);
-        when(paymentGateway.findAllByExternalReference(pending.getId().toString()))
+        when(paymentGateway.findRecentByExternalReference(pending.getId().toString()))
             .thenReturn(List.of(latest, older));
 
         scheduler.reconcile();
