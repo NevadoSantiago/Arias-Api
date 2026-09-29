@@ -36,6 +36,15 @@ public interface CreditPurchaseRepository extends JpaRepository<CreditPurchase, 
     List<CreditPurchase> findByStatusAndCreatedAtBefore(CreditPurchaseStatus status, Instant cutoff);
 
     /**
+     * Compras ya cerradas sin pago acreditado (unidad B15) creadas en o después
+     * de {@code since}: la reconciliación las vuelve a consultar por si el
+     * cliente reintentó con otra tarjeta en el mismo checkout, o pagó tarde, y
+     * el webhook se perdió.
+     */
+    List<CreditPurchase> findByStatusInAndCreditedAtIsNullAndCreatedAtAfter(
+        Collection<CreditPurchaseStatus> statuses, Instant since);
+
+    /**
      * ¿Este pedido tiene una compra DIRECTA asociada? (unidad B6.1, hallazgo
      * de revisión). Usado por {@code OrderPlacementService#assertModifiable}
      * para rechazar {@code addItems}/{@code removeItem} sobre un pedido

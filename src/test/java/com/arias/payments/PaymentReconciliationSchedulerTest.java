@@ -74,6 +74,54 @@ class PaymentReconciliationSchedulerTest {
         verify(purchaseService).expirePendingPurchase(healthy.getId());
     }
 
+    // ─── B15: compras cerradas sin acreditar (reintento con otra tarjeta / pago tardío) ──
+
+    @Test
+    void closedUncreditedPurchasesCreatedInTheLast48HoursAreReconciledToo() {
+        CreditPurchase rejected = closedCreatedMinutesAgo(CreditPurchaseStatus.REJECTED, 3 * 60);
+        when(purchaseRepo.findByStatusAndCreatedAtBefore(eq(CreditPurchaseStatus.PENDING), any()))
+            .thenReturn(List.of());
+        when(purchaseRepo.findByStatusInAndCreditedAtIsNullAndCreatedAtAfter(any(), any()))
+            .thenReturn(List.of(rejected));
+        PaymentSnapshot retryApproved = approvedSnapshotFor(rejected);
+        when(paymentGateway.findByExternalReference(rejected.getId().toString()))
+            .thenReturn(Optional.of(retryApproved));
+
+        scheduler.reconcile();
+
+        verify(purchaseService).applySnapshot(retryApproved);
+        verify(purchaseRepo).findByStatusInAndCreditedAtIsNullAndCreatedAtAfter(
+            java.util.Set.of(CreditPurchaseStatus.REJECTED, CreditPurchaseStatus.CANCELLED,
+                CreditPurchaseStatus.EXPIRED),
+            NOW.minus(48, ChronoUnit.HOURS));
+    }
+
+    @Test
+    void lookupFailureOnAClosedPurchaseStillReconcilesTheNext() {
+        CreditPurchase failing = closedCreatedMinutesAgo(CreditPurchaseStatus.EXPIRED, 30 * 60);
+        CreditPurchase healthy = closedCreatedMinutesAgo(CreditPurchaseStatus.REJECTED, 60);
+        when(purchaseRepo.findByStatusAndCreatedAtBefore(eq(CreditPurchaseStatus.PENDING), any()))
+            .thenReturn(List.of());
+        when(purchaseRepo.findByStatusInAndCreditedAtIsNullAndCreatedAtAfter(any(), any()))
+            .thenReturn(List.of(failing, healthy));
+        when(paymentGateway.findByExternalReference(failing.getId().toString()))
+            .thenThrow(new IllegalStateException("MP down"));
+        PaymentSnapshot approved = approvedSnapshotFor(healthy);
+        when(paymentGateway.findByExternalReference(healthy.getId().toString()))
+            .thenReturn(Optional.of(approved));
+
+        scheduler.reconcile();
+
+        verify(purchaseService).applySnapshot(approved);
+    }
+
+    private CreditPurchase closedCreatedMinutesAgo(CreditPurchaseStatus status, long minutes) {
+        return CreditPurchase.builder()
+            .status(status)
+            .createdAt(NOW.minus(minutes, ChronoUnit.MINUTES))
+            .build();
+    }
+
     private CreditPurchase pendingCreatedMinutesAgo(long minutes) {
         return CreditPurchase.builder()
             .status(CreditPurchaseStatus.PENDING)

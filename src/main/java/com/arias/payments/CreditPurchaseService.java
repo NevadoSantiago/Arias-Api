@@ -513,9 +513,8 @@ public class CreditPurchaseService {
         // comprobación de aplicación previa a intentar el UPDATE/INSERT.
         if (purchase.getMpPaymentId() == null) {
             purchase.setMpPaymentId(snapshot.paymentId());
-        } else if (!purchase.getMpPaymentId().equals(snapshot.paymentId())) {
-            log.error("La compra {} ya está asociada a otro payment_id ({} vs {}) — se ignora",
-                purchase.getId(), purchase.getMpPaymentId(), snapshot.paymentId());
+        } else if (!purchase.getMpPaymentId().equals(snapshot.paymentId())
+            && !adoptDifferentPaymentId(purchase, snapshot)) {
             return;
         }
 
@@ -536,6 +535,61 @@ public class CreditPurchaseService {
             if (p.getStatus() == CreditPurchaseStatus.PENDING) {
                 p.setStatus(CreditPurchaseStatus.EXPIRED);
                 closeAssociatedOrderIfDirect(p);
+    /**
+     * Un checkout de Mercado Pago admite varios intentos de pago con la misma
+     * {@code external_reference} (una tarjeta rechazada y un reintento con otra
+     * en la misma preferencia): cada intento trae su propio {@code payment_id}
+     * (unidad B15). Decide qué hacer con un pago cuyo id difiere del guardado.
+     *
+     * <ul>
+     *   <li>Aprobado y la compra <b>nunca se acreditó</b> ({@code creditedAt ==
+     *       null}) y está {@code PENDING} o cerrada (REJECTED, CANCELLED,
+     *       EXPIRED): es EL pago que hay que acreditar — el id guardado era el
+     *       de un intento fallido. Se adopta el nuevo id (el anterior queda en
+     *       el log) y el procesamiento sigue.</li>
+     *   <li>Aprobado y la compra <b>ya se acreditó</b>: el cliente pagó dos
+     *       veces. NO se acredita otra vez; se loguea un WARN para reembolsar a
+     *       mano el segundo pago en Mercado Pago.</li>
+     *   <li>Cualquier otro estado (rechazo de otro intento, pendiente, etc.):
+     *       no es el pago que respalda esta compra; se ignora.</li>
+     * </ul>
+     *
+     * @return {@code true} si hay que seguir procesando el snapshot (id adoptado)
+     */
+    private boolean adoptDifferentPaymentId(CreditPurchase purchase, PaymentSnapshot snapshot) {
+        String knownPaymentId = purchase.getMpPaymentId();
+        if (snapshot.status() != PaymentStatus.APPROVED) {
+            log.info("Pago {} de otro intento sobre la compra {} (guardado: {}, estado {}) — se ignora",
+                snapshot.paymentId(), purchase.getId(), knownPaymentId, snapshot.status());
+            return false;
+        }
+        if (purchase.getCreditedAt() != null) {
+            log.warn("Pago doble: el pago aprobado {} llegó para la compra {}, que ya se acreditó con el "
+                + "pago {} — NO se acredita de nuevo; hay que gestionar el reembolso manual del pago {} "
+                + "en Mercado Pago", snapshot.paymentId(), purchase.getId(), knownPaymentId,
+                snapshot.paymentId());
+            return false;
+        }
+        if (purchase.getStatus() == CreditPurchaseStatus.PENDING || isClosedWithoutCredit(purchase)) {
+            log.info("La compra {} ({}) adopta el pago aprobado {} en lugar del pago {}",
+                purchase.getId(), purchase.getStatus(), snapshot.paymentId(), knownPaymentId);
+            purchase.setMpPaymentId(snapshot.paymentId());
+            return true;
+        }
+        log.error("La compra {} ya está asociada a otro payment_id ({} vs {}) — se ignora",
+            purchase.getId(), knownPaymentId, snapshot.paymentId());
+        return false;
+    }
+
+    /** Cerrada sin pago (REJECTED, CANCELLED o EXPIRED) y nunca acreditada. */
+    private static boolean isClosedWithoutCredit(CreditPurchase purchase) {
+        CreditPurchaseStatus status = purchase.getStatus();
+        return purchase.getCreditedAt() == null
+            && (status == CreditPurchaseStatus.REJECTED
+                || status == CreditPurchaseStatus.CANCELLED
+                || status == CreditPurchaseStatus.EXPIRED);
+    }
+
                 log.info("Compra {} expirada — 24 h sin pago reportado por Mercado Pago", purchaseId);
             }
         });
@@ -571,6 +625,13 @@ public class CreditPurchaseService {
             case REJECTED -> closeWithoutCrediting(purchase, CreditPurchaseStatus.REJECTED);
             case CANCELLED -> closeWithoutCrediting(purchase, CreditPurchaseStatus.CANCELLED);
             case REFUNDED, CHARGED_BACK -> maybeReverse(purchase, snapshot);
+                } else if (isClosedWithoutCredit(purchase)) {
+                    // Unidad B15: el pago se aprobó DESPUÉS de que la compra se
+                    // cerró (reintento con otra tarjeta tras un rechazo, pago
+                    // pasadas las 24 h, o compra cancelada por la compensación
+                    // del checkout con la preferencia todavía viva). Antes se
+                    // ignoraba y el cliente quedaba cobrado sin almuerzos.
+                    creditLateApprovedPurchase(purchase, snapshot);
             case IN_MEDIATION -> purchase.setStatus(CreditPurchaseStatus.IN_MEDIATION);
             case UNKNOWN -> log.warn("Estado de pago desconocido de Mercado Pago para la compra {}: detail={}",
                 purchase.getId(), snapshot.statusDetail());
@@ -590,6 +651,28 @@ public class CreditPurchaseService {
      *       OrderPlacementService.place()}, que la compra DIRECT ya no
      *       invoca — cierra el doble cobro verificado antes de esta unidad,
      *       ver el hallazgo de {@code b2c-ordering-redesign.md} sobre B7).</li>
+    /**
+     * Acredita un pago aprobado que llegó con la compra ya cerrada (unidad B15).
+     * Idempotencia: el llamador ({@link #applyStatusMapping}) sólo entra con
+     * {@code creditedAt == null}, bajo el lock de la compra; este método sella
+     * {@code creditedAt} y pasa la compra a {@code APPROVED} en la misma
+     * transacción, así que un webhook duplicado, la reconciliación o un segundo
+     * pago aprobado ({@link #adoptDifferentPaymentId}) ya ven la compra
+     * acreditada y no acreditan de nuevo. Un reembolso posterior se revierte
+     * por {@link #maybeReverse} igual que en una acreditación normal.
+     *
+     * <p>PACK acredita a disponibles ({@link #creditPurchase}). DIRECT reutiliza
+     * {@link #creditApprovedPurchase}, que con el pedido {@code CANCELADO} (lo
+     * habitual tras un rechazo, un vencimiento o la compensación) acredita a
+     * disponibles sin reabrirlo.
+     */
+    private void creditLateApprovedPurchase(CreditPurchase purchase, PaymentSnapshot snapshot) {
+        log.warn("Compra {}: pago aprobado sobre compra cerrada — se acreditan {} almuerzos en disponibles "
+            + "(estado previo {}, pago {})", purchase.getId(), purchase.getCreditAmount(),
+            purchase.getStatus(), snapshot.paymentId());
+        creditApprovedPurchase(purchase);
+    }
+
      *   <li>{@code CANCELADO} (el cliente lo canceló, o el corte automático
      *       lo canceló mientras el pago seguía en curso): el pago de todos
      *       modos se aprobó, así que los almuerzos NO se pierden — se
@@ -621,16 +704,16 @@ public class CreditPurchaseService {
         Order order = orderRepo.findByIdForUpdate(purchase.getOrder().getId())
             .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
 
-        if (order.getEstado() == OrderEstado.CANCELADO) {
+        if (order.getEstado() != OrderEstado.PENDIENTE_PAGO) {
+            // CANCELADO (el caso conocido) o cualquier otro estado que ya no
+            // espera este pago: nunca se comprometen créditos sobre un pedido
+            // que no lo está esperando (unidad B15: compra cerrada y pagada tarde).
             creditAsRefundToAvailable(purchase);
             return;
         }
 
         creditPurchase(purchase);
-
-        if (order.getEstado() == OrderEstado.PENDIENTE_PAGO) {
-            order.setEstado(OrderEstado.PENDIENTE);
-        }
+        order.setEstado(OrderEstado.PENDIENTE);
     }
 
     /**
