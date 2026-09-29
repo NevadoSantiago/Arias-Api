@@ -120,9 +120,12 @@ public class OrderPlacementService {
      * /api/v2/orders/direct-checkout}) — MISMA validación que {@link #place}
      * (gates de perfil, ítems, horario de retiro vía {@link
      * PickupSlotService#assertValidPickupTime}) y la MISMA reserva de stock
-     * por ítem ({@link #buildItemAndReserveStock}), pero SIN comprometer
-     * créditos: el pedido queda {@link OrderEstado#PENDIENTE_PAGO} hasta que
-     * Mercado Pago apruebe el pago de la compra DIRECT asociada.
+     * por ítem ({@link #buildItemAndReserveStock}), pero SIN comprometer el
+     * pedido entero: reserva (COMMITTED) solo los almuerzos disponibles del
+     * cliente (pago parcial, unidad B13, {@link Order#getCreditsFromBalance}) y
+     * el resto lo paga la compra DIRECT. Si el saldo cubre todo el pedido lanza
+     * 409 {@code balance-covers-order}. El pedido queda {@link
+     * OrderEstado#PENDIENTE_PAGO} hasta que Mercado Pago apruebe el pago.
      *
      * <p>Se invoca DENTRO de la misma transacción que crea esa compra DIRECT
      * y el checkout de Mercado Pago ({@code
@@ -136,9 +139,25 @@ public class OrderPlacementService {
     public Order placeAwaitingPayment(Long userId, PlaceOrderV2Request req) {
         User user = findUserAndAssertCanSpend(userId);
         Order order = buildValidatedOrder(user, req, OrderEstado.PENDIENTE_PAGO);
-        // Sin creditLedgerService.commit a propósito — el pago de Mercado
-        // Pago cubre el pedido entero, no el saldo de créditos del cliente.
-        return orderRepo.save(order);
+        Order saved = orderRepo.save(order);
+
+        // Pago parcial (unidad B13, pedido del usuario 2026-09-29): los
+        // almuerzos disponibles se usan primero y Mercado Pago cobra solo el
+        // resto. Se reservan (COMMITTED) bajo el lock de billetera del libro
+        // mayor; se liberan si el pago no se completa (applyCancellation).
+        int fromBalance = creditLedgerService.commitUpTo(userId, saved.getCreditTotal(),
+            MovementRef.forOrder(saved.getId(), "Almuerzos del saldo para el pedido #" + saved.getId()
+                + " (el resto se paga con Mercado Pago)"));
+
+        // El saldo cubre el pedido entero: no hay nada que cobrar. Nunca se
+        // crea una compra DIRECT de importe cero — el llamador debe usar el
+        // pedido normal (place). Lanzar revierte pedido, stock y reserva.
+        if (fromBalance >= saved.getCreditTotal()) {
+            throw BusinessException.conflict("balance-covers-order",
+                "Tus almuerzos disponibles alcanzan para este pedido — confirmalo sin pagar con Mercado Pago");
+        }
+        saved.setCreditsFromBalance(fromBalance);
+        return saved;
     }
 
     /**
@@ -176,8 +195,8 @@ public class OrderPlacementService {
     /**
      * Cancela el pedido — solo mientras esté PENDIENTE o {@code
      * PENDIENTE_PAGO} (unidad B7: un pedido esperando pago también se puede
-     * cancelar, sin liberar créditos porque nunca se comprometieron — ver
-     * {@link #applyCancellation}) y falte más de {@code lead} minutos para el
+     * cancelar; solo se liberan los almuerzos que se reservaron del saldo
+     * (unidad B13) — ver {@link #applyCancellation}) y falte más de {@code lead} minutos para el
      * retiro (misma re-validación perezosa del diseño §Decisión 4,
      * independiente de si el job de consumo corrió).
      */
@@ -351,9 +370,9 @@ public class OrderPlacementService {
      * OrderConsumptionScheduler}, nunca directamente desde un controller.
      *
      * <p>Reutiliza el MISMO cierre que {@link #cancel} — restaurar stock,
-     * marcar {@code CANCELADO} — vía {@link #applyCancellation}, que NUNCA
-     * libera créditos para un pedido {@code PENDIENTE_PAGO} porque {@link
-     * #placeAwaitingPayment} nunca los comprometió, y A PROPÓSITO sin la
+     * marcar {@code CANCELADO} — vía {@link #applyCancellation}, que para un pedido {@code PENDIENTE_PAGO}
+     * libera SOLO los almuerzos reservados del saldo (unidad B13; lo que iba a
+     * pagar Mercado Pago nunca se acreditó), y A PROPÓSITO sin la
      * ventana de cancelación del cliente ({@code now < pickupAt - lead}): esa
      * ventana existe para que un cliente no cancele "a último momento" un
      * pedido que SÍ iba a cocinarse, no para este caso — acá el pedido de
@@ -413,12 +432,13 @@ public class OrderPlacementService {
 
     /**
      * Núcleo compartido de {@link #cancel} y {@link #closeForPaymentFailure}:
-     * restaura stock, marca {@code CANCELADO} y, SOLO si el pedido tenía
-     * créditos comprometidos ({@code estado == PENDIENTE} — nunca para
-     * {@code PENDIENTE_PAGO}, unidad B7, cuyos créditos jamás se
-     * comprometieron), libera esos créditos COMMITTED y publica el evento de
-     * cancelación (su copy de cliente asume créditos liberados — para
-     * {@code PENDIENTE_PAGO} no aplica y no se publica). El llamador es
+     * restaura stock, marca {@code CANCELADO} y libera créditos COMMITTED:
+     * el total si el pedido estaba {@code PENDIENTE}, o solo {@code
+     * creditsFromBalance} si estaba {@code PENDIENTE_PAGO} (unidad B13; lo
+     * que iba a pagar Mercado Pago nunca se acreditó). Solo para {@code
+     * PENDIENTE} publica el evento de cancelación (su copy de cliente asume
+     * que todo el pedido vuelve al saldo — para {@code PENDIENTE_PAGO} no se
+     * publica). El llamador es
      * responsable de cualquier validación previa (ventana de cancelación,
      * ownership, idempotencia) — acá se asume que YA se decidió que el
      * pedido debe cerrarse.
@@ -426,6 +446,11 @@ public class OrderPlacementService {
     private void applyCancellation(Order order, Instant now) {
         Long userId = order.getUser().getId();
         boolean teniaCreditosComprometidos = order.getEstado() == OrderEstado.PENDIENTE;
+        // Pedido esperando pago con una parte reservada del saldo (unidad
+        // B13): esos almuerzos se devuelven a disponibles. Los que iba a
+        // pagar Mercado Pago nunca se acreditaron, no hay nada que liberar.
+        int reservadosDelSaldo = order.getEstado() == OrderEstado.PENDIENTE_PAGO
+            ? order.getCreditsFromBalance() : 0;
 
         for (OrderItem item : order.getItems()) {
             dishRepo.incrementStock(item.getDish().getId());
@@ -434,6 +459,10 @@ public class OrderPlacementService {
         if (teniaCreditosComprometidos) {
             creditLedgerService.release(userId, order.getCreditTotal(),
                 MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()));
+        } else if (reservadosDelSaldo > 0) {
+            creditLedgerService.release(userId, reservadosDelSaldo,
+                MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()
+                    + " sin pago — se devuelven los almuerzos del saldo"));
         }
 
         order.setEstado(OrderEstado.CANCELADO);

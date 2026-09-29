@@ -1347,7 +1347,10 @@ class OrderPlacementServiceTest {
         MenuSection section = persistMenuSection();
         Dish dish = persistDish(category, section, 9);
         User user = persistB2cUser();
-        seedWallet(user.getId(), 20);
+        // Justo lo que consumen los dos pedidos normales (2 + 2): los pedidos
+        // esperando pago de abajo ya no encuentran saldo (B13: si el saldo
+        // cubriera el pedido, placeAwaitingPayment lo rechaza).
+        seedWallet(user.getId(), 4);
 
         OrderDto normal = orderPlacementService.place(user.getId(),
             singleItemRequest(dish.getId(), defaultPickupAt()));

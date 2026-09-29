@@ -109,6 +109,35 @@ public class CreditLedgerService {
         return apply(userId, MovementType.COMMIT, -amount, amount, ref);
     }
 
+    /**
+     * Compromiso PARCIAL para el pago directo con uso de saldo (unidad B13):
+     * bajo el mismo lock de billetera que {@link #apply}, compromete
+     * {@code min(available, maxAmount)} almuerzos (AVAILABLE → COMMITTED) y
+     * devuelve cuántos fueron. Aplica el vencimiento perezoso ANTES de leer
+     * {@code available}, así que un saldo vencido cuenta como 0. Si no hay
+     * nada para comprometer no crea movimiento y devuelve 0. Leer y
+     * comprometer en el mismo lock evita que una compra concurrente gaste el
+     * saldo entre el cálculo y el movimiento.
+     *
+     * @return los almuerzos efectivamente comprometidos (0..maxAmount).
+     */
+    @Transactional
+    public int commitUpTo(Long userId, int maxAmount, MovementRef ref) {
+        requirePositive(maxAmount);
+        // Sin billetera no hay saldo: se devuelve 0 sin crear una billetera vacía.
+        CreditWallet wallet = walletRepo.findByIdForUpdate(userId).orElse(null);
+        if (wallet == null) {
+            return 0;
+        }
+        expireIfDue(wallet);
+        int amount = Math.min(wallet.getAvailable(), maxAmount);
+        if (amount <= 0) {
+            return 0;
+        }
+        commit(userId, amount, ref);
+        return amount;
+    }
+
     /** Devolución al cancelar a tiempo: COMMITTED → AVAILABLE (diseño §Decisión 7). */
     @Transactional
     public CreditMovement release(Long userId, int amount, MovementRef ref) {

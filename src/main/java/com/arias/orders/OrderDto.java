@@ -41,7 +41,13 @@ public record OrderDto(
      * PENDIENTE_PAGO} es "esperando el pago"; {@code PENDIENTE}/{@code
      * CONFIRMADO} con este flag es "pagado con Mercado Pago".
      */
-    boolean paidWithMercadoPago
+    boolean paidWithMercadoPago,
+    /**
+     * Almuerzos del pedido que se reservaron del saldo del cliente al pagar
+     * directo (unidad B13, pago parcial); {@code creditTotal - creditsFromBalance}
+     * es lo que paga Mercado Pago. 0 para pedidos sin pago parcial.
+     */
+    int creditsFromBalance
 ) {
     public static OrderDto from(Order order, boolean cancellable, boolean modifiable, boolean pickupTimeChangeable,
                                 boolean paidWithMercadoPago) {
@@ -56,7 +62,8 @@ public record OrderDto(
             cancellable,
             modifiable,
             pickupTimeChangeable,
-            paidWithMercadoPago
+            paidWithMercadoPago,
+            order.getCreditsFromBalance()
         );
     }
 }

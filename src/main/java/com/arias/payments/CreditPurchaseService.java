@@ -153,10 +153,11 @@ public class CreditPurchaseService {
      * /api/v2/orders/direct-checkout}) — reemplaza al camino DIRECT viejo
      * cerrado en {@link #createPurchase}. En UNA sola transacción: crea el
      * pedido en {@link OrderEstado#PENDIENTE_PAGO} reservando stock (
-     * {@link OrderPlacementService#placeAwaitingPayment}, SIN comprometer
-     * créditos), calcula el importe con la MISMA lógica que la compra DIRECT
-     * vieja ({@link #findEnabledDayPackOrThrow}/{@link #unitPriceCentsFor} —
-     * precio del paquete {@code DAY} × créditos del pedido, 503 si no hay
+     * {@link OrderPlacementService#placeAwaitingPayment}, que reserva los
+     * almuerzos disponibles del cliente — pago parcial, unidad B13), calcula el
+     * importe con la MISMA lógica que la compra DIRECT vieja ({@link
+     * #findEnabledDayPackOrThrow}/{@link #unitPriceCentsFor} — precio del
+     * paquete {@code DAY} × créditos que NO cubrió el saldo, 503 si no hay
      * paquete {@code DAY} habilitado),
      * crea la compra {@code PENDING} y arranca el checkout de Mercado Pago.
      *
@@ -178,7 +179,9 @@ public class CreditPurchaseService {
         Order order = orderPlacementService.placeAwaitingPayment(userId, req);
         User user = order.getUser();
 
-        int creditAmount = order.getCreditTotal();
+        // Pago parcial (unidad B13): Mercado Pago cobra SOLO lo que el saldo
+        // del cliente no cubrió; placeAwaitingPayment ya reservó el resto.
+        int creditAmount = order.getCreditTotal() - order.getCreditsFromBalance();
         long amountCents = unitPriceCentsFor(dayPack) * creditAmount;
 
         CreditPurchase purchase = CreditPurchase.builder()

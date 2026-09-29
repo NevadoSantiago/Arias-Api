@@ -70,6 +70,15 @@ public class Order {
     @Column(name = "credit_total", nullable = false)
     private Integer creditTotal;
 
+    /**
+     * Almuerzos de {@code creditTotal} que se reservaron (COMMITTED) del saldo
+     * al crear un pedido {@code PENDIENTE_PAGO} (unidad B13, pago parcial); el
+     * resto lo paga la compra DIRECT por Mercado Pago. 0 para todo otro pedido.
+     */
+    @Column(name = "credits_from_balance", nullable = false)
+    @Builder.Default
+    private Integer creditsFromBalance = 0;
+
     @Column(columnDefinition = "TEXT")
     private String notas;
 
