@@ -28,9 +28,11 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -50,6 +52,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -68,6 +73,8 @@ class DirectCheckoutSplitTransactionTest {
     static final Instant FIXED_NOW = Instant.parse("2026-03-10T13:40:00Z");
     static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
     private static final AtomicLong PHONE_SEQ = new AtomicLong();
+    /** credit_purchase.mp_preference_id es VARCHAR(100): guardarlo en la fase 3 falla en la base. */
+    private static final String TOO_LONG_PREFERENCE_ID = "p".repeat(101);
 
     @TestConfiguration
     static class FixedClockConfig {
@@ -79,7 +86,7 @@ class DirectCheckoutSplitTransactionTest {
     }
 
     @Autowired private CreditPurchaseService purchaseService;
-    @Autowired private OrderPlacementService orderPlacementService;
+    @MockitoSpyBean private OrderPlacementService orderPlacementService;
     @Autowired private CreditPurchaseRepository purchaseRepo;
     @Autowired private CreditPackRepository packRepo;
     @Autowired private OrderRepository orderRepo;
@@ -95,6 +102,9 @@ class DirectCheckoutSplitTransactionTest {
 
     private final List<Long> userIds = new ArrayList<>();
     private Long packId;
+    /** Solo se borra el pack DAY si lo creó este test; uno preexistente se reutiliza y no se toca. */
+    private boolean packCreatedByTest;
+    private long dayUnitPriceCents;
     private Long dishId;
     private Long categoryId;
     private Long sectionId;
@@ -112,7 +122,7 @@ class DirectCheckoutSplitTransactionTest {
         if (dishId != null) jdbc.update("DELETE FROM dish WHERE id = ?", dishId);
         if (categoryId != null) jdbc.update("DELETE FROM category WHERE id = ?", categoryId);
         if (sectionId != null) jdbc.update("DELETE FROM menu_section WHERE id = ?", sectionId);
-        if (packId != null) jdbc.update("DELETE FROM credit_pack WHERE id = ?", packId);
+        if (packId != null && packCreatedByTest) jdbc.update("DELETE FROM credit_pack WHERE id = ?", packId);
     }
 
     // ─── fixtures ───────────────────────────────────────────────────────────
@@ -139,9 +149,18 @@ class DirectCheckoutSplitTransactionTest {
         Dish dish = dishRepo.save(Dish.builder()
             .nombre("Plato-" + System.nanoTime()).category(category).menuSection(section)
             .enabled(true).especial(false).stockDiarioDefault(stock).stockActual(stock).build());
-        CreditPack pack = packRepo.save(CreditPack.builder()
-            .code("DAY").nombre("Día").creditAmount(2).priceCents(3_000L)
-            .discountPercent(0).ordenDisplay(0).enabled(true).build());
+        // La base de tests es compartida: nunca se asume que el pack DAY no exista. Se
+        // reutiliza el habilitado (el mismo que resuelve el servicio) y solo se crea
+        // —y luego se borra— si no había ninguno.
+        CreditPack pack = packRepo.findByCodeAndDeletedAtIsNullAndEnabledTrue("DAY").orElse(null);
+        packCreatedByTest = pack == null;
+        if (packCreatedByTest) {
+            pack = packRepo.save(CreditPack.builder()
+                .code("DAY").nombre("Día").creditAmount(2).priceCents(3_000L)
+                .discountPercent(0).ordenDisplay(0).enabled(true).build());
+        }
+        // Mismo redondeo hacia arriba que CreditPurchaseService.unitPriceCentsFor.
+        dayUnitPriceCents = -Math.floorDiv(-pack.getPriceCents(), (long) pack.getCreditAmount());
         categoryId = category.getId();
         sectionId = section.getId();
         dishId = dish.getId();
@@ -227,7 +246,7 @@ class DirectCheckoutSplitTransactionTest {
         assertThat(purchase.getStatus()).isEqualTo(CreditPurchaseStatus.PENDING);
         assertThat(purchase.getMpPreferenceId()).isEqualTo("pref-ok");
         assertThat(purchase.getInitPoint()).isEqualTo("https://mp.test/init-ok");
-        assertThat(purchase.getAmountCents()).isEqualTo(3_000L);
+        assertThat(purchase.getAmountCents()).isEqualTo(dayUnitPriceCents * 2); // el plato cuesta 2 créditos
         assertThat(orderRepo.findById(dto.orderId()).orElseThrow().getEstado())
             .isEqualTo(OrderEstado.PENDIENTE_PAGO);
         assertThat(stock()).isEqualTo(4);
@@ -331,6 +350,142 @@ class DirectCheckoutSplitTransactionTest {
         assertThatThrownBy(() -> purchaseService.resumeDirectCheckout(payer.getId(), order.getId()))
             .isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo("direct-checkout-not-resumable"));
+    }
+
+    // ─── Mercado Pago apagado: fail fast, sin tocar nada (B13.2) ────────────
+
+    private void mercadoPagoIsDisabled() {
+        doThrow(new BusinessException(HttpStatus.SERVICE_UNAVAILABLE, "mercadopago-disabled",
+            "La integración con Mercado Pago no está configurada."))
+            .when(paymentGateway).requireAvailable();
+    }
+
+    @Test
+    @DisplayName("createDirectCheckout(): con Mercado Pago apagado responde 503 sin crear pedido ni compra ni tocar stock ni saldo")
+    void directCheckoutWithMercadoPagoDisabledLeavesNoTrace() {
+        seedCatalog(5);
+        User payer = persistUser();
+        seedWallet(payer.getId(), 1);
+        mercadoPagoIsDisabled();
+
+        assertThatThrownBy(() -> purchaseService.createDirectCheckout(payer.getId(), request()))
+            .isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("mercadopago-disabled");
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+            });
+
+        assertThat(orderRepo.findAll().stream().filter(o -> o.getUser().getId().equals(payer.getId()))).isEmpty();
+        assertThat(purchaseRepo.findAll().stream().filter(p -> p.getUser().getId().equals(payer.getId()))).isEmpty();
+        assertThat(stock()).isEqualTo(5);
+        CreditWallet wallet = walletRepo.findById(payer.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(1);
+        assertThat(wallet.getCommitted()).isZero();
+        verify(paymentGateway, never()).createCheckout(any());
+    }
+
+    @Test
+    @DisplayName("createPurchase(PACK): con Mercado Pago apagado responde 503 sin crear ninguna compra")
+    void packPurchaseWithMercadoPagoDisabledLeavesNoTrace() {
+        seedCatalog(5);
+        User buyer = persistUser();
+        mercadoPagoIsDisabled();
+
+        assertThatThrownBy(() -> purchaseService.createPurchase(buyer.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, packId, null, null)))
+            .isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("mercadopago-disabled");
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+            });
+
+        assertThat(purchaseRepo.findAll().stream().filter(p -> p.getUser().getId().equals(buyer.getId()))).isEmpty();
+        verify(paymentGateway, never()).createCheckout(any());
+    }
+
+    // ─── falla la fase 3 (guardar la preferencia): compensa (B13.2) ─────────
+
+    @Test
+    @DisplayName("createDirectCheckout(): si falla la fase 3 (no una caída) tras responder Mercado Pago, compensa — pedido CANCELADO, stock y saldo restaurados, compra CANCELLED — y lanza un error claro")
+    void phase3FailureCompensatesAndThrowsAClearError() {
+        seedCatalog(5);
+        User payer = persistUser();
+        seedWallet(payer.getId(), 1);
+        // Falla REAL de la base en la fase 3: el preferenceId no entra en VARCHAR(100).
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession(TOO_LONG_PREFERENCE_ID, "https://mp.test/init-orphan"));
+
+        assertThatThrownBy(() -> purchaseService.createDirectCheckout(payer.getId(), request()))
+            .isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("checkout-save-failed");
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                assertThat(e.getCause()).isInstanceOf(org.springframework.dao.DataAccessException.class);
+            });
+
+        Order order = orderRepo.findAll().stream()
+            .filter(o -> o.getUser().getId().equals(payer.getId())).findFirst().orElseThrow();
+        assertThat(order.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(stock()).isEqualTo(5);
+        CreditWallet wallet = walletRepo.findById(payer.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(1);
+        assertThat(wallet.getCommitted()).isZero();
+        List<CreditPurchase> purchases = purchaseRepo.findAll().stream()
+            .filter(p -> p.getUser().getId().equals(payer.getId())).toList();
+        assertThat(purchases).hasSize(1);
+        assertThat(purchases.get(0).getStatus()).isEqualTo(CreditPurchaseStatus.CANCELLED);
+        assertThat(purchases.get(0).getInitPoint()).isNull();
+    }
+
+    @Test
+    @DisplayName("createPurchase(PACK): si falla la fase 3, la compra queda CANCELLED y se lanza un error claro")
+    void packPhase3FailureCancelsThePurchase() {
+        seedCatalog(5);
+        User buyer = persistUser();
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession(TOO_LONG_PREFERENCE_ID, "https://mp.test/init-orphan"));
+
+        assertThatThrownBy(() -> purchaseService.createPurchase(buyer.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, packId, null, null)))
+            .isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("checkout-save-failed"));
+
+        List<CreditPurchase> purchases = purchaseRepo.findAll().stream()
+            .filter(p -> p.getUser().getId().equals(buyer.getId())).toList();
+        assertThat(purchases).hasSize(1);
+        assertThat(purchases.get(0).getStatus()).isEqualTo(CreditPurchaseStatus.CANCELLED);
+    }
+
+    // ─── la compensación misma falla: se relanza el error ORIGINAL (B13.2) ──
+
+    @Test
+    @DisplayName("Si Mercado Pago falla y además falla la compensación, se relanza la excepción ORIGINAL con la de la compensación como suprimida")
+    void failingCompensationAfterGatewayFailureKeepsTheOriginalError() {
+        seedCatalog(5);
+        User payer = persistUser();
+        IllegalStateException gatewayFailure = new IllegalStateException("socket timeout");
+        when(paymentGateway.createCheckout(any())).thenThrow(gatewayFailure);
+        RuntimeException compensationFailure = new QueryTimeoutException("lock timeout");
+        doThrow(compensationFailure).when(orderPlacementService).closeForPaymentFailure(any());
+
+        assertThatThrownBy(() -> purchaseService.createDirectCheckout(payer.getId(), request()))
+            .isSameAs(gatewayFailure)
+            .hasSuppressedException(compensationFailure);
+    }
+
+    @Test
+    @DisplayName("Si falla la fase 3 y además falla la compensación, el error claro conserva la causa original y la de la compensación como suprimida")
+    void failingCompensationAfterPhase3FailureKeepsTheOriginalCause() {
+        seedCatalog(5);
+        User payer = persistUser();
+        when(paymentGateway.createCheckout(any()))
+            .thenReturn(new CheckoutSession(TOO_LONG_PREFERENCE_ID, "https://mp.test/init-orphan"));
+        RuntimeException compensationFailure = new QueryTimeoutException("lock timeout");
+        doThrow(compensationFailure).when(orderPlacementService).closeForPaymentFailure(any());
+
+        assertThatThrownBy(() -> purchaseService.createDirectCheckout(payer.getId(), request()))
+            .isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("checkout-save-failed");
+                assertThat(e.getCause()).isInstanceOf(org.springframework.dao.DataAccessException.class);
+                assertThat(e.getSuppressed()).containsExactly(compensationFailure);
+            });
     }
 
     // ─── PACK: mismo split ──────────────────────────────────────────────────

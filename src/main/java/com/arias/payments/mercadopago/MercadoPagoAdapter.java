@@ -235,6 +235,11 @@ public class MercadoPagoAdapter implements PaymentGateway {
         return e.getApiResponse() != null ? e.getApiResponse().getContent() : null;
     }
 
+    @Override
+    public void requireAvailable() {
+        requireConfigured();
+    }
+
     private void requireConfigured() {
         if (!props.isConfigured()) {
             throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE, "mercadopago-disabled",

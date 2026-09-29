@@ -1,7 +1,6 @@
 package com.arias.payments.mercadopago;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
  * Config de Mercado Pago — se mapea desde {@code arias.mercadopago.*} en
@@ -17,7 +16,10 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * MercadoPagoConfig.setConnectionTimeout/setConnectionRequestTimeout/
  * setSocketTimeout} (milisegundos) al arrancar el adaptador. Un valor no
  * positivo vuelve al default: en Apache HttpClient 0 significa "infinito", que
- * es justo lo que hay que evitar.
+ * es justo lo que hay que evitar. Los defaults viven SOLO acá ({@code DEFAULT_*_MS}
+ * y el constructor compacto): ni {@code @DefaultValue} ni {@code application.yml}
+ * repiten los números; el yml sólo expone las variables de entorno con {@code 0}
+ * ("sin definir"), que el constructor convierte en el default.
  *
  * @param accessToken               credencial privada del vendedor en Mercado Pago
  * @param webhookSecret             secreto usado para validar la firma HMAC del webhook
@@ -31,9 +33,9 @@ public record MercadoPagoProperties(
     String accessToken,
     String webhookSecret,
     boolean enabled,
-    @DefaultValue("5000") int connectTimeoutMs,
-    @DefaultValue("5000") int connectionRequestTimeoutMs,
-    @DefaultValue("10000") int socketTimeoutMs
+    int connectTimeoutMs,
+    int connectionRequestTimeoutMs,
+    int socketTimeoutMs
 ) {
 
     static final int DEFAULT_CONNECT_TIMEOUT_MS = 5_000;

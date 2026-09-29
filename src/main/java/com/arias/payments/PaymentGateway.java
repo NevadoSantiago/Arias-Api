@@ -22,6 +22,14 @@ package com.arias.payments;
  */
 public interface PaymentGateway {
 
+    /**
+     * Falla rápido (503 {@code mercadopago-disabled}) si la integración no está
+     * habilitada/configurada. Se llama ANTES de crear cualquier fila o reservar
+     * stock/saldo para un checkout (unidad B13.2): sin esto, con Mercado Pago
+     * apagado cada intento de pago directo commitearía un pedido y lo cancelaría.
+     */
+    void requireAvailable();
+
     /** Crea la preferencia de checkout y devuelve la URL a la que redirigir al cliente. */
     CheckoutSession createCheckout(CheckoutRequest request);
 

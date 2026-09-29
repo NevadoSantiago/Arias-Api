@@ -4,6 +4,7 @@ import com.mercadopago.MercadoPagoConfig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
@@ -65,6 +66,33 @@ class MercadoPagoTimeoutsTest {
                 assertThat(props.connectTimeoutMs()).isEqualTo(1_500);
                 assertThat(props.connectionRequestTimeoutMs()).isEqualTo(2_500);
                 assertThat(props.socketTimeoutMs()).isEqualTo(7_000);
+            });
+    }
+
+    @Test
+    void applicationYmlLeavesTheDefaultsToTheProperties() {
+        // The real application.yml (with its ${MP_*} placeholders unset) must yield the
+        // defaults declared once in MercadoPagoProperties, not repeat them.
+        runner.withInitializer(new ConfigDataApplicationContextInitializer())
+            .run(ctx -> {
+                MercadoPagoProperties props = ctx.getBean(MercadoPagoProperties.class);
+                assertThat(props.connectTimeoutMs()).isEqualTo(MercadoPagoProperties.DEFAULT_CONNECT_TIMEOUT_MS);
+                assertThat(props.connectionRequestTimeoutMs())
+                    .isEqualTo(MercadoPagoProperties.DEFAULT_CONNECTION_REQUEST_TIMEOUT_MS);
+                assertThat(props.socketTimeoutMs()).isEqualTo(MercadoPagoProperties.DEFAULT_SOCKET_TIMEOUT_MS);
+            });
+    }
+
+    @Test
+    void environmentVariablesStillOverrideTheDefaultsThroughApplicationYml() {
+        runner.withInitializer(new ConfigDataApplicationContextInitializer())
+            .withPropertyValues("MP_CONNECT_TIMEOUT_MS=1234", "MP_SOCKET_TIMEOUT_MS=4321")
+            .run(ctx -> {
+                MercadoPagoProperties props = ctx.getBean(MercadoPagoProperties.class);
+                assertThat(props.connectTimeoutMs()).isEqualTo(1_234);
+                assertThat(props.socketTimeoutMs()).isEqualTo(4_321);
+                assertThat(props.connectionRequestTimeoutMs())
+                    .isEqualTo(MercadoPagoProperties.DEFAULT_CONNECTION_REQUEST_TIMEOUT_MS);
             });
     }
 

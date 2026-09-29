@@ -257,7 +257,8 @@ class DirectCheckoutServiceTest {
         entityManager.flush();
         entityManager.clear();
 
-        assertThat(orderRepo.findAll()).allMatch(o -> o.getEstado() == OrderEstado.CANCELADO);
+        assertThat(orderRepo.findAll()).hasSize(1)
+            .allMatch(o -> o.getEstado() == OrderEstado.CANCELADO);
         assertThat(purchaseRepo.findAll()).hasSize(1)
             .allMatch(p -> p.getStatus() == CreditPurchaseStatus.CANCELLED && p.getInitPoint() == null);
         assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(5);
