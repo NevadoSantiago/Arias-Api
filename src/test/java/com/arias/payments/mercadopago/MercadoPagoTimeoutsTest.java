@@ -7,7 +7,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.ApplicationContextInitializer;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.StandardEnvironment;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -72,8 +75,10 @@ class MercadoPagoTimeoutsTest {
     @Test
     void applicationYmlLeavesTheDefaultsToTheProperties() {
         // The real application.yml (with its ${MP_*} placeholders unset) must yield the
-        // defaults declared once in MercadoPagoProperties, not repeat them.
-        runner.withInitializer(new ConfigDataApplicationContextInitializer())
+        // defaults declared once in MercadoPagoProperties, not repeat them. The host's
+        // real environment is hidden so a developer's MP_*_TIMEOUT_MS cannot leak in.
+        runner.withInitializer(withoutHostEnvironment())
+            .withInitializer(new ConfigDataApplicationContextInitializer())
             .run(ctx -> {
                 MercadoPagoProperties props = ctx.getBean(MercadoPagoProperties.class);
                 assertThat(props.connectTimeoutMs()).isEqualTo(MercadoPagoProperties.DEFAULT_CONNECT_TIMEOUT_MS);
@@ -83,9 +88,16 @@ class MercadoPagoTimeoutsTest {
             });
     }
 
+    /** Removes the JVM's real environment variables from the context under test. */
+    private static ApplicationContextInitializer<ConfigurableApplicationContext> withoutHostEnvironment() {
+        return ctx -> ctx.getEnvironment().getPropertySources()
+            .remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME);
+    }
+
     @Test
     void environmentVariablesStillOverrideTheDefaultsThroughApplicationYml() {
-        runner.withInitializer(new ConfigDataApplicationContextInitializer())
+        runner.withInitializer(withoutHostEnvironment())
+            .withInitializer(new ConfigDataApplicationContextInitializer())
             .withPropertyValues("MP_CONNECT_TIMEOUT_MS=1234", "MP_SOCKET_TIMEOUT_MS=4321")
             .run(ctx -> {
                 MercadoPagoProperties props = ctx.getBean(MercadoPagoProperties.class);

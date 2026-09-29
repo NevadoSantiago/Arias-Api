@@ -19,9 +19,15 @@ import com.arias.orders.PlaceOrderV2Request;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -109,8 +115,23 @@ class DirectCheckoutSplitTransactionTest {
     private Long categoryId;
     private Long sectionId;
 
+    private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
+    private Logger serviceLogger;
+
+    @BeforeEach
+    void captureServiceLogs() {
+        serviceLogger = (Logger) LoggerFactory.getLogger(CreditPurchaseService.class);
+        logs.start();
+        serviceLogger.addAppender(logs);
+    }
+
+    private List<String> logMessages(Level level) {
+        return logs.list.stream().filter(e -> e.getLevel() == level).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
     @AfterEach
     void cleanUp() {
+        serviceLogger.detachAppender(logs);
         for (Long userId : userIds) {
             jdbc.update("DELETE FROM credit_purchase WHERE user_id = ?", userId);
             jdbc.update("DELETE FROM order_item WHERE order_id IN (SELECT id FROM orders WHERE user_id = ?)", userId);
@@ -331,6 +352,60 @@ class DirectCheckoutSplitTransactionTest {
         assertThat(stock()).isEqualTo(5);
     }
 
+    @Test
+    @DisplayName("Fase 3: el 409 checkout-purchase-closed se relanza TAL CUAL (misma clase, sin causa ni suprimidas), la compra queda intacta y el log no dice que se canceló nada")
+    void closedPurchaseBusinessExceptionPassesThroughUnchanged() {
+        seedCatalog(5);
+        User buyer = persistUser();
+        when(paymentGateway.createCheckout(any())).thenAnswer(inv -> {
+            purchaseService.expirePendingPurchase(purchaseIdOf(inv.getArgument(0)));
+            return new CheckoutSession("pref-late-pack", "https://mp.test/init-late-pack");
+        });
+
+        assertThatThrownBy(() -> purchaseService.createPurchase(buyer.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, packId, null, null)))
+            .isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("checkout-purchase-closed");
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getCause()).isNull();
+                assertThat(e.getSuppressed()).isEmpty();
+            });
+
+        CreditPurchase purchase = purchaseRepo.findAll().stream()
+            .filter(p -> p.getUser().getId().equals(buyer.getId())).findFirst().orElseThrow();
+        assertThat(purchase.getStatus()).isEqualTo(CreditPurchaseStatus.EXPIRED);
+        assertThat(purchase.getMpPreferenceId()).isNull();
+        assertThat(logMessages(Level.ERROR)).isEmpty();
+        assertThat(logMessages(Level.WARN)).noneMatch(m -> m.contains("se cancela la compra"));
+    }
+
+    @Test
+    @DisplayName("Logs de la compensación: una falla del gateway y una falla al guardar la preferencia se describen distinto, y 'ya cerrada' no dice que se cancelara")
+    void compensationLogsDescribeWhatActuallyHappened() {
+        seedCatalog(5);
+        User buyer = persistUser();
+
+        when(paymentGateway.createCheckout(any())).thenThrow(new IllegalStateException("socket timeout"));
+        assertThatThrownBy(() -> purchaseService.createPurchase(buyer.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, packId, null, null)))
+            .isInstanceOf(IllegalStateException.class);
+        assertThat(logMessages(Level.WARN))
+            .anyMatch(m -> m.contains("Mercado Pago no creó el checkout"));
+        assertThat(logMessages(Level.WARN)).noneMatch(m -> m.contains("no llegó al cliente"));
+
+        logs.list.clear();
+        // doReturn: re-stubbing con when() invocaría el mock que todavía lanza.
+        org.mockito.Mockito.doReturn(new CheckoutSession(TOO_LONG_PREFERENCE_ID, "https://mp.test/init-orphan"))
+            .when(paymentGateway).createCheckout(any());
+        assertThatThrownBy(() -> purchaseService.createPurchase(buyer.getId(),
+            new CreatePurchaseRequest(PurchaseType.PACK, packId, null, null)))
+            .isInstanceOf(BusinessException.class);
+        assertThat(logMessages(Level.ERROR))
+            .anyMatch(m -> m.contains("no se pudo guardar la preferencia"));
+        assertThat(logMessages(Level.WARN))
+            .anyMatch(m -> m.contains("Mercado Pago sí creó la preferencia") && m.contains("cancelada"));
+    }
+
     // ─── ventana de caída entre fase 1 y fase 3 ─────────────────────────────
 
     @Test
@@ -418,6 +493,9 @@ class DirectCheckoutSplitTransactionTest {
                 assertThat(e.getErrorCode()).isEqualTo("checkout-save-failed");
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
                 assertThat(e.getCause()).isInstanceOf(org.springframework.dao.DataAccessException.class);
+                // Mercado Pago ya creó la preferencia: no se puede prometer que no se cobró nada.
+                assertThat(e.getMessage()).doesNotContain("no se te cobró nada")
+                    .contains("Si llegaste a pagar, te acreditamos los almuerzos en tu saldo");
             });
 
         Order order = orderRepo.findAll().stream()

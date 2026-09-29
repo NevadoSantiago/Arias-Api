@@ -220,7 +220,7 @@ public class CreditPurchaseService {
      *
      * <p><b>Compensación si la fase 2 falla</b> (Mercado Pago rechazó, 503 sin
      * configurar, timeout del SDK; cualquier {@link RuntimeException}): en una
-     * transacción nueva ({@link #cancelUnreachedPurchase}) la compra pasa a
+     * transacción nueva ({@code cancelUnreachedPurchase}) la compra pasa a
      * {@link CreditPurchaseStatus#CANCELLED} ("cancelado antes de completarse,
      * nunca se acreditó", el estado existente que mejor describe "nunca llegó
      * al proveedor"; ni el webhook ni la reconciliación tratan distinto a las
@@ -319,43 +319,46 @@ public class CreditPurchaseService {
         try {
             return paymentGateway.createCheckout(checkoutReq);
         } catch (RuntimeException e) {
-            compensateUnreachedPurchase(purchaseId, e);
+            compensateUnreachedPurchase(purchaseId, e, true);
             throw e;
         }
     }
 
     /**
      * Fase 3 compartida por PACK y DIRECT (unidad B13.2): guarda la preferencia
-     * en una transacción corta. Si falla por CUALQUIER motivo (error de base,
-     * lock, pool agotado, o {@code checkout-purchase-closed}) Mercado Pago ya
-     * creó una preferencia que el cliente nunca recibirá: se compensa igual que
-     * en la fase 2 (compra {@code CANCELLED} + cierre del pedido, idempotente,
-     * en una transacción nueva) y se relanza un error claro. Un {@link
-     * BusinessException} (p. ej. el 409 {@code checkout-purchase-closed}) ya es
-     * claro y se relanza tal cual; cualquier otra excepción se envuelve en 503
-     * {@code checkout-save-failed} conservando la original como causa.
+     * en una transacción corta. Si falla al guardar (error de base, lock, pool
+     * agotado) Mercado Pago ya creó una preferencia que el cliente nunca
+     * recibirá: se compensa igual que en la fase 2 (compra {@code CANCELLED} +
+     * cierre del pedido, idempotente, en una transacción nueva) y se lanza 503
+     * {@code checkout-save-failed} conservando la original como causa. Un
+     * {@link BusinessException} (p. ej. el 409 {@code checkout-purchase-closed},
+     * que {@link #attachCheckout} lanza sin cambiar nada porque la compra ya
+     * estaba cerrada) ya es claro y se relanza tal cual, sin compensar.
      *
-     * <p><b>Riesgo residual (abierto, no rediseñado acá):</b> si el cliente
-     * llegara a pagar esa preferencia huérfana (no tiene la URL, pero Mercado
-     * Pago la creó), el webhook / la reconciliación encontrarían una compra
-     * {@code CANCELLED}: {@link #applyStatusMapping} sólo acredita desde {@code
-     * PENDING} o {@code IN_MEDIATION}, así que el pago aprobado se IGNORARÍA
-     * — los almuerzos no se acreditan y el dinero quedaría cobrado sin
-     * contraparte.
+     * <p><b>Preferencia viva (unidad B15):</b> si el cliente llegara a pagar esa
+     * preferencia (no tiene la URL, pero Mercado Pago la creó), el webhook / la
+     * reconciliación encuentran una compra {@code CANCELLED} y
+     * {@link #applyStatusMapping} acredita el pago aprobado en disponibles
+     * ({@link #creditLateApprovedPurchase}). Por eso el mensaje no promete que
+     * "no se cobró nada".
      */
     private void attachCheckoutOrCancel(UUID purchaseId, CheckoutSession session, boolean persistInitPoint) {
         try {
             txTemplate.executeWithoutResult(status -> attachCheckout(purchaseId, session, persistInitPoint));
+        } catch (BusinessException e) {
+            // Ya es un error claro para el cliente (p. ej. 409 checkout-purchase-closed): la
+            // compra ya estaba cerrada y attachCheckout no cambió nada, así que no hay nada
+            // que compensar. Se relanza tal cual.
+            throw e;
         } catch (RuntimeException e) {
-            RuntimeException toThrow = e instanceof BusinessException ? e
-                : new BusinessException(HttpStatus.SERVICE_UNAVAILABLE, "checkout-save-failed",
-                    "No pudimos terminar de iniciar el pago — no se te cobró nada, volvé a intentarlo");
-            if (toThrow != e) {
-                toThrow.initCause(e);
-            }
-            log.error("No se pudo guardar el checkout de la compra {} tras responder Mercado Pago; "
-                + "se cancela la compra (la preferencia creada queda huérfana)", purchaseId, e);
-            compensateUnreachedPurchase(purchaseId, toThrow);
+            BusinessException toThrow = new BusinessException(HttpStatus.SERVICE_UNAVAILABLE,
+                "checkout-save-failed",
+                "No pudimos completar el pago. Si llegaste a pagar, te acreditamos los almuerzos en tu saldo.");
+            toThrow.initCause(e);
+            log.error("Mercado Pago creó la preferencia de la compra {} pero no se pudo guardar la "
+                + "preferencia en la base; se cancela la compra (la preferencia queda viva en Mercado Pago "
+                + "y, si se paga, el pago aprobado se acredita en disponibles)", purchaseId, e);
+            compensateUnreachedPurchase(purchaseId, toThrow, false);
             throw toThrow;
         }
     }
@@ -365,13 +368,18 @@ public class CreditPurchaseService {
      * cierra el pedido. Si la compensación misma falla se loguea y se agrega
      * como suprimida a {@code original}, que el llamador relanza igualmente: el
      * pedido queda para la limpieza por corte/reconciliación.
+     *
+     * @param gatewayFailed {@code true} si Mercado Pago no creó el checkout;
+     *                      {@code false} si lo creó pero no se pudo guardar
      */
-    private void compensateUnreachedPurchase(UUID purchaseId, RuntimeException original) {
+    private void compensateUnreachedPurchase(UUID purchaseId, RuntimeException original, boolean gatewayFailed) {
         try {
-            txTemplate.executeWithoutResult(status -> cancelUnreachedPurchase(purchaseId));
+            txTemplate.executeWithoutResult(status -> cancelUnreachedPurchase(purchaseId, gatewayFailed));
         } catch (RuntimeException compensationFailure) {
-            log.error("No se pudo compensar la compra {} tras fallar el checkout de Mercado Pago; "
-                + "la limpieza por corte/reconciliación la resuelve", purchaseId, compensationFailure);
+            log.error("No se pudo cancelar la compra {} ni cerrar su pedido tras {}; "
+                + "la limpieza por corte/reconciliación la resuelve", purchaseId,
+                gatewayFailed ? "fallar la creación del checkout en Mercado Pago"
+                    : "fallar el guardado de la preferencia", compensationFailure);
             original.addSuppressed(compensationFailure);
         }
     }
@@ -382,15 +390,20 @@ public class CreditPurchaseService {
      * {@link #closeWithoutCrediting}, que sólo actúa si sigue {@code PENDING} y
      * cierra el pedido asociado por {@code closeForPaymentFailure}.
      */
-    private void cancelUnreachedPurchase(UUID purchaseId) {
+    private void cancelUnreachedPurchase(UUID purchaseId, boolean gatewayFailed) {
         purchaseRepo.findByIdForUpdate(purchaseId).ifPresent(p -> {
             if (p.getStatus() != CreditPurchaseStatus.PENDING) {
-                log.info("Compra {} ya estaba {}; la compensación del checkout no cambia nada",
+                log.info("Compra {} ya estaba {}; la compensación del checkout no cambió nada",
                     purchaseId, p.getStatus());
                 return;
             }
             closeWithoutCrediting(p, CreditPurchaseStatus.CANCELLED);
-            log.warn("Compra {} cancelada: el checkout de Mercado Pago no llegó al cliente", purchaseId);
+            if (gatewayFailed) {
+                log.warn("Compra {} cancelada: Mercado Pago no creó el checkout", purchaseId);
+            } else {
+                log.warn("Compra {} cancelada: Mercado Pago sí creó la preferencia pero no se pudo guardar; "
+                    + "si el cliente llegara a pagarla, el pago aprobado se acredita en disponibles", purchaseId);
+            }
         });
     }
 
@@ -523,19 +536,6 @@ public class CreditPurchaseService {
     }
 
     /**
-     * Marca una compra {@code PENDING} sin pago reportado en 24 h como
-     * {@code EXPIRED} (11.6). Misma acción que un rechazo/cancelación
-     * explícito de Mercado Pago para el pedido asociado — ver {@link
-     * #closeAssociatedOrderIfDirect} — porque desde el punto de vista del
-     * pedido el resultado es idéntico: el pago nunca llegó.
-     */
-    @Transactional
-    public void expirePendingPurchase(UUID purchaseId) {
-        purchaseRepo.findByIdForUpdate(purchaseId).ifPresent(p -> {
-            if (p.getStatus() == CreditPurchaseStatus.PENDING) {
-                p.setStatus(CreditPurchaseStatus.EXPIRED);
-                closeAssociatedOrderIfDirect(p);
-    /**
      * Un checkout de Mercado Pago admite varios intentos de pago con la misma
      * {@code external_reference} (una tarjeta rechazada y un reintento con otra
      * en la misma preferencia): cada intento trae su propio {@code payment_id}
@@ -590,6 +590,19 @@ public class CreditPurchaseService {
                 || status == CreditPurchaseStatus.EXPIRED);
     }
 
+    /**
+     * Marca una compra {@code PENDING} sin pago reportado en 24 h como
+     * {@code EXPIRED} (11.6). Misma acción que un rechazo/cancelación
+     * explícito de Mercado Pago para el pedido asociado — ver {@link
+     * #closeAssociatedOrderIfDirect} — porque desde el punto de vista del
+     * pedido el resultado es idéntico: el pago nunca llegó.
+     */
+    @Transactional
+    public void expirePendingPurchase(UUID purchaseId) {
+        purchaseRepo.findByIdForUpdate(purchaseId).ifPresent(p -> {
+            if (p.getStatus() == CreditPurchaseStatus.PENDING) {
+                p.setStatus(CreditPurchaseStatus.EXPIRED);
+                closeAssociatedOrderIfDirect(p);
                 log.info("Compra {} expirada — 24 h sin pago reportado por Mercado Pago", purchaseId);
             }
         });
@@ -612,6 +625,13 @@ public class CreditPurchaseService {
                     // Ya se había acreditado antes de entrar en mediación —
                     // vuelve a APPROVED sin acreditar una segunda vez.
                     purchase.setStatus(CreditPurchaseStatus.APPROVED);
+                } else if (isClosedWithoutCredit(purchase)) {
+                    // Unidad B15: el pago se aprobó DESPUÉS de que la compra se
+                    // cerró (reintento con otra tarjeta tras un rechazo, pago
+                    // pasadas las 24 h, o compra cancelada por la compensación
+                    // del checkout con la preferencia todavía viva). Antes se
+                    // ignoraba y el cliente quedaba cobrado sin almuerzos.
+                    creditLateApprovedPurchase(purchase, snapshot);
                 }
                 // Un reembolso PARCIAL puede dejar el pago en `approved` con
                 // transaction_amount_refunded poblado (decisión del
@@ -625,32 +645,12 @@ public class CreditPurchaseService {
             case REJECTED -> closeWithoutCrediting(purchase, CreditPurchaseStatus.REJECTED);
             case CANCELLED -> closeWithoutCrediting(purchase, CreditPurchaseStatus.CANCELLED);
             case REFUNDED, CHARGED_BACK -> maybeReverse(purchase, snapshot);
-                } else if (isClosedWithoutCredit(purchase)) {
-                    // Unidad B15: el pago se aprobó DESPUÉS de que la compra se
-                    // cerró (reintento con otra tarjeta tras un rechazo, pago
-                    // pasadas las 24 h, o compra cancelada por la compensación
-                    // del checkout con la preferencia todavía viva). Antes se
-                    // ignoraba y el cliente quedaba cobrado sin almuerzos.
-                    creditLateApprovedPurchase(purchase, snapshot);
             case IN_MEDIATION -> purchase.setStatus(CreditPurchaseStatus.IN_MEDIATION);
             case UNKNOWN -> log.warn("Estado de pago desconocido de Mercado Pago para la compra {}: detail={}",
                 purchase.getId(), snapshot.statusDetail());
         }
     }
 
-    /**
-     * Acredita una compra recién aprobada (unidad B7, extiende el gap fix B4
-     * de arriba con un segundo caso). Una compra DIRECT puede aprobarse con
-     * su pedido en exactamente dos estados posibles — {@link
-     * OrderPlacementService#placeAwaitingPayment} nunca deja otro:
-     * <ul>
-     *   <li>{@code PENDIENTE_PAGO} (caso normal): se acredita COMMITTED como
-     *       siempre ({@link #creditPurchase}) y el pedido pasa a {@code
-     *       PENDIENTE} — un pedido programado común, con sus créditos ya
-     *       comprometidos por esta MISMA compra (nunca por {@code
-     *       OrderPlacementService.place()}, que la compra DIRECT ya no
-     *       invoca — cierra el doble cobro verificado antes de esta unidad,
-     *       ver el hallazgo de {@code b2c-ordering-redesign.md} sobre B7).</li>
     /**
      * Acredita un pago aprobado que llegó con la compra ya cerrada (unidad B15).
      * Idempotencia: el llamador ({@link #applyStatusMapping}) sólo entra con
@@ -673,6 +673,19 @@ public class CreditPurchaseService {
         creditApprovedPurchase(purchase);
     }
 
+    /**
+     * Acredita una compra recién aprobada (unidad B7, extiende el gap fix B4
+     * de arriba con un segundo caso). Una compra DIRECT puede aprobarse con
+     * su pedido en exactamente dos estados posibles — {@link
+     * OrderPlacementService#placeAwaitingPayment} nunca deja otro:
+     * <ul>
+     *   <li>{@code PENDIENTE_PAGO} (caso normal): se acredita COMMITTED como
+     *       siempre ({@link #creditPurchase}) y el pedido pasa a {@code
+     *       PENDIENTE} — un pedido programado común, con sus créditos ya
+     *       comprometidos por esta MISMA compra (nunca por {@code
+     *       OrderPlacementService.place()}, que la compra DIRECT ya no
+     *       invoca — cierra el doble cobro verificado antes de esta unidad,
+     *       ver el hallazgo de {@code b2c-ordering-redesign.md} sobre B7).</li>
      *   <li>{@code CANCELADO} (el cliente lo canceló, o el corte automático
      *       lo canceló mientras el pago seguía en curso): el pago de todos
      *       modos se aprobó, así que los almuerzos NO se pierden — se
