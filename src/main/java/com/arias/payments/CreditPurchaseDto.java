@@ -23,9 +23,7 @@ public record CreditPurchaseDto(
      * {@code packNombre} es el {@code nombre} del paquete comprado (p. ej.
      * "Paquete Semana") para compras {@code PACK}, {@code null} en {@code
      * DIRECT} — el frontend lo usa en vez de un texto genérico (feature
-     * b2c-ordering-redesign, tarea B3). {@code p.getPack()} es {@code
-     * LAZY}; esto solo es seguro porque {@code from()} se invoca siempre
-     * dentro de la transacción de {@link CreditPurchaseService#getPurchase}.
+     * b2c-ordering-redesign, tarea B3).
      *
      * <p>{@code orderId} es el pedido de una compra {@code DIRECT} ({@code
      * null} en {@code PACK}); leer solo el id de la relación {@code LAZY} no
@@ -35,8 +33,16 @@ public record CreditPurchaseDto(
      * <p>{@code orderEstado} es el estado de ese pedido (p. ej. {@code
      * PENDIENTE_PAGO} o {@code CANCELADO}), {@code null} en {@code PACK}:
      * el aviso de pago pendiente lo usa para distinguir un pedido ya
-     * cancelado. Lee el pedido {@code LAZY}, así que exige la transacción del
-     * servicio (y un {@code JOIN FETCH} en el listado, sin N+1).
+     * cancelado.
+     *
+     * <p>{@code getPack()} y {@code getOrder()} son {@code LAZY}: leer el nombre
+     * del paquete y el estado del pedido los inicializa. Por eso el llamador debe
+     * traer la compra con ambos ya cargados ({@code LEFT JOIN FETCH} en {@link
+     * CreditPurchaseRepository#findDetailByIdAndUserId} y {@link
+     * CreditPurchaseRepository#findAlivePendingByUser}) — una consulta en total,
+     * sin N+1 — y llamar a este método dentro de la transacción de lectura del
+     * servicio. Con una compra cargada por otro camino, leer estos dos campos
+     * dispara una consulta por cada uno (unidad B14.1).
      */
     public static CreditPurchaseDto from(CreditPurchase p) {
         return new CreditPurchaseDto(

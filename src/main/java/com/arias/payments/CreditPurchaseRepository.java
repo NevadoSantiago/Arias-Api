@@ -18,6 +18,21 @@ public interface CreditPurchaseRepository extends JpaRepository<CreditPurchase, 
     Optional<CreditPurchase> findByIdAndUserId(UUID id, Long userId);
 
     /**
+     * La compra de un usuario lista para armar un {@link CreditPurchaseDto} (unidad
+     * B14.1): trae el paquete y el pedido con {@code LEFT JOIN FETCH} para que el
+     * DTO lea {@code packNombre} y {@code orderEstado} sin consultas extra (el
+     * pedido es {@code LAZY}). {@code LEFT}: una compra PACK no tiene pedido y una
+     * DIRECT no tiene paquete.
+     */
+    @Query("""
+        SELECT p FROM CreditPurchase p
+        LEFT JOIN FETCH p.pack
+        LEFT JOIN FETCH p.order
+        WHERE p.id = :id AND p.user.id = :userId
+        """)
+    Optional<CreditPurchase> findDetailByIdAndUserId(@Param("id") UUID id, @Param("userId") Long userId);
+
+    /**
      * {@code SELECT ... FOR UPDATE} sobre la compra — mismo patrón que
      * {@code CreditWalletRepository#findByIdForUpdate}: el webhook y la
      * reconciliación bloquean esta fila antes de decidir si ya está
@@ -92,7 +107,11 @@ public interface CreditPurchaseRepository extends JpaRepository<CreditPurchase, 
      * Compras {@code PENDING} vivas de un usuario (unidad B14, {@code GET
      * /purchases/pending}): creadas en o después de {@code since}, la más
      * nueva primero. El predicado (user_id + status + created_at) lo cubre
-     * {@code idx_credit_purchase_user_pending} (V29). {@code LEFT JOIN FETCH}
+     * {@code idx_credit_purchase_user_pending} (V29), que es parcial ({@code WHERE
+     * status = 'PENDING'}): por eso el estado va como literal en la consulta y no
+     * como parámetro — con un plan genérico de una sentencia preparada, PostgreSQL
+     * no puede probar que un parámetro cumple el predicado del índice parcial y
+     * no lo usa (unidad B14.1). {@code LEFT JOIN FETCH}
      * del paquete y del pedido para que el DTO lea {@code packNombre} y
      * {@code orderEstado} sin una consulta por fila.
      */
@@ -100,10 +119,11 @@ public interface CreditPurchaseRepository extends JpaRepository<CreditPurchase, 
         SELECT p FROM CreditPurchase p
         LEFT JOIN FETCH p.pack
         LEFT JOIN FETCH p.order
-        WHERE p.user.id = :userId AND p.status = :status AND p.createdAt >= :since
+        WHERE p.user.id = :userId
+          AND p.status = com.arias.payments.CreditPurchaseStatus.PENDING
+          AND p.createdAt >= :since
         ORDER BY p.createdAt DESC
         """)
     List<CreditPurchase> findAlivePendingByUser(@Param("userId") Long userId,
-                                                @Param("status") CreditPurchaseStatus status,
                                                 @Param("since") Instant since);
 }

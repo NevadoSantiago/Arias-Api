@@ -33,8 +33,9 @@ public class CreditPurchaseController {
     }
 
     /**
-     * Compras {@code PENDING} vivas (últimas 24 h) del usuario autenticado, más
-     * nuevas primero (unidad B14). El segmento literal {@code /pending} gana
+     * Compras {@code PENDING} vivas del usuario autenticado (creadas dentro de las
+     * últimas {@link PaymentReconciliationScheduler#PENDING_EXPIRE_HOURS} horas, la
+     * ventana de vida antes de expirar), más nuevas primero (unidad B14). El segmento literal {@code /pending} gana
      * sobre {@code /{id}} — {@code PendingPurchasesTest} lo prueba por HTTP.
      */
     @GetMapping("/pending")

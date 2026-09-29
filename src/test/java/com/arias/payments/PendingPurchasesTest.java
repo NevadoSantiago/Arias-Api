@@ -17,6 +17,8 @@ import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
 import jakarta.persistence.EntityManager;
+import org.hibernate.SessionFactory;
+import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -27,10 +29,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.time.Instant;
@@ -39,6 +38,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
+
+import org.springframework.data.jpa.repository.Query;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
@@ -49,12 +50,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * {@code GET /api/v1/credits/purchases/pending} (feature b2c-ordering-redesign,
- * tarea B14): las compras {@code PENDING} vivas (creadas en las últimas 24 h,
- * misma ventana con la que {@link PaymentReconciliationScheduler} las expira)
- * del usuario autenticado, más nuevas primero. Alimenta el aviso de pago
- * pendiente de "Mis almuerzos".
+ * tarea B14): las compras {@code PENDING} vivas (creadas en las últimas
+ * {@link PaymentReconciliationScheduler#PENDING_EXPIRE_HOURS} horas, la misma
+ * ventana con la que {@link PaymentReconciliationScheduler} las expira) del
+ * usuario autenticado, más nuevas primero. Alimenta el aviso de pago pendiente
+ * de "Mis almuerzos". Unidad B14.1: además, ni el listado ni {@code GET /{id}}
+ * hacen una consulta por fila o por relación {@code LAZY}.
  */
-@SpringBootTest
+@SpringBootTest(properties = "spring.jpa.properties.hibernate.generate_statistics=true")
 @Transactional
 class PendingPurchasesTest {
 
@@ -69,7 +72,7 @@ class PendingPurchasesTest {
     @Autowired private MenuSectionRepository menuSectionRepo;
     @Autowired private DishRepository dishRepo;
     @Autowired private EntityManager entityManager;
-    @Autowired private PlatformTransactionManager txManager;
+    @Autowired private SessionFactory sessionFactory;
     @Autowired private WebApplicationContext webContext;
 
     @MockitoBean
@@ -83,7 +86,7 @@ class PendingPurchasesTest {
     }
 
     @Test
-    @DisplayName("returns only the caller's PENDING purchases within 24 h, newest first")
+    @DisplayName("returns only the caller's PENDING purchases within the pending window, newest first")
     void returnsOnlyCallersAlivePendingNewestFirst() {
         User me = persistUser("pending-me");
         User other = persistUser("pending-other");
@@ -102,7 +105,7 @@ class PendingPurchasesTest {
     }
 
     @Test
-    @DisplayName("excludes APPROVED, REJECTED and other terminal purchases, and PENDING ones older than 24 h")
+    @DisplayName("excludes APPROVED, REJECTED and other terminal purchases, and PENDING ones older than the pending window")
     void excludesNonPendingAndExpired() {
         User me = persistUser("pending-excl");
         CreditPack pack = persistPack();
@@ -111,7 +114,7 @@ class PendingPurchasesTest {
         persistPackPurchase(me, pack, CreditPurchaseStatus.APPROVED, hoursAgo(2));
         persistPackPurchase(me, pack, CreditPurchaseStatus.REJECTED, hoursAgo(2));
         persistPackPurchase(me, pack, CreditPurchaseStatus.EXPIRED, hoursAgo(2));
-        persistPackPurchase(me, pack, CreditPurchaseStatus.PENDING, hoursAgo(25));
+        persistPackPurchase(me, pack, CreditPurchaseStatus.PENDING, hoursAgo(PaymentReconciliationScheduler.PENDING_EXPIRE_HOURS + 1));
         settle();
 
         List<CreditPurchaseDto> result = purchaseService.listPendingPurchases(me.getId());
@@ -120,7 +123,7 @@ class PendingPurchasesTest {
     }
 
     @Test
-    @DisplayName("a PENDING purchase just inside the 24 h window is listed, one just past it is not")
+    @DisplayName("a PENDING purchase just inside the pending window is listed, one just past it is not")
     void windowBoundaryMatchesTheReconciliationScheduler() {
         User me = persistUser("pending-edge");
         CreditPack pack = persistPack();
@@ -234,44 +237,74 @@ class PendingPurchasesTest {
             .andExpect(status().is4xxClientError());
     }
 
-    /**
-     * Sin transacción de test alrededor: {@code packNombre} sale de una
-     * relación {@code LAZY}, así que si el servicio perdiera su
-     * {@code @Transactional} este test fallaría con
-     * {@code LazyInitializationException} (dentro de la transacción de clase
-     * de los demás tests quedaría oculto).
-     */
+    // ─── B14.1: sin consultas de más ────────────────────────────────────────
+
     @Test
-    @Transactional(propagation = Propagation.NOT_SUPPORTED)
-    @DisplayName("the pack name resolves through the service's own transaction (no test transaction)")
-    void packNameResolvesWithoutSurroundingTransaction() {
-        TransactionTemplate tx = new TransactionTemplate(txManager);
-        Long[] userId = new Long[1];
-        Long[] packId = new Long[1];
-        UUID[] purchaseId = new UUID[1];
-        try {
-            tx.executeWithoutResult(s -> {
-                User me = persistUser("pending-notx");
-                CreditPack pack = persistPack();
-                userId[0] = me.getId();
-                packId[0] = pack.getId();
-                purchaseId[0] = persistPackPurchase(me, pack, CreditPurchaseStatus.PENDING, hoursAgo(1)).getId();
-            });
+    @DisplayName("GET /{id} of a DIRECT purchase reads purchase and order in ONE statement")
+    void getPurchaseOfADirectPurchaseIsOneStatement() {
+        User me = persistUser("pending-one-direct");
+        Order order = persistOrderAwaitingPayment(me, persistDish(), 2);
+        CreditPurchase direct = persistDirectPurchase(me, order, hoursAgo(1));
+        settle();
+        Statistics stats = freshStatistics();
 
-            List<CreditPurchaseDto> result = purchaseService.listPendingPurchases(userId[0]);
+        CreditPurchaseDto dto = purchaseService.getPurchase(me.getId(), direct.getId());
 
-            assertThat(result).hasSize(1);
-            assertThat(result.get(0).packNombre()).isEqualTo("Paquete Semana");
-        } finally {
-            tx.executeWithoutResult(s -> {
-                if (purchaseId[0] != null) purchaseRepo.deleteById(purchaseId[0]);
-                if (packId[0] != null) packRepo.deleteById(packId[0]);
-                if (userId[0] != null) userRepo.deleteById(userId[0]);
-            });
+        assertThat(dto.orderId()).isEqualTo(order.getId());
+        assertThat(dto.orderEstado()).isEqualTo(OrderEstado.PENDIENTE_PAGO);
+        assertThat(stats.getPrepareStatementCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("GET /{id} of a PACK purchase reads purchase and pack in ONE statement")
+    void getPurchaseOfAPackPurchaseIsOneStatement() {
+        User me = persistUser("pending-one-pack");
+        CreditPurchase purchase = persistPackPurchase(me, persistPack(), CreditPurchaseStatus.PENDING, hoursAgo(1));
+        settle();
+        Statistics stats = freshStatistics();
+
+        CreditPurchaseDto dto = purchaseService.getPurchase(me.getId(), purchase.getId());
+
+        assertThat(dto.packNombre()).isEqualTo("Paquete Semana");
+        assertThat(dto.orderEstado()).isNull();
+        assertThat(stats.getPrepareStatementCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("the pending list is ONE statement whatever the number of purchases (no N+1)")
+    void pendingListIsOneStatement() {
+        User me = persistUser("pending-list-one");
+        CreditPack pack = persistPack();
+        for (int i = 0; i < 3; i++) {
+            persistDirectPurchase(me, persistOrderAwaitingPayment(me, persistDish(), 2), hoursAgo(1 + i));
         }
+        persistPackPurchase(me, pack, CreditPurchaseStatus.PENDING, hoursAgo(5));
+        settle();
+        Statistics stats = freshStatistics();
+
+        List<CreditPurchaseDto> result = purchaseService.listPendingPurchases(me.getId());
+
+        assertThat(result).hasSize(4);
+        assertThat(stats.getPrepareStatementCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("the pending query uses the PENDING literal (so the partial index applies), not a bound status")
+    void pendingQueryUsesTheLiteralStatus() throws Exception {
+        String jpql = CreditPurchaseRepository.class
+            .getMethod("findAlivePendingByUser", Long.class, Instant.class)
+            .getAnnotation(Query.class).value();
+
+        assertThat(jpql).contains("CreditPurchaseStatus.PENDING").doesNotContain(":status");
     }
 
     // ─── helpers ────────────────────────────────────────────────────────────
+
+    private Statistics freshStatistics() {
+        Statistics stats = sessionFactory.getStatistics();
+        stats.clear();
+        return stats;
+    }
 
     private static Instant hoursAgo(long hours) {
         return Instant.now().minus(hours, ChronoUnit.HOURS);

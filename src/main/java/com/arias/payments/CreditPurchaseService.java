@@ -456,7 +456,7 @@ public class CreditPurchaseService {
 
     @Transactional(readOnly = true)
     public CreditPurchaseDto getPurchase(Long userId, UUID id) {
-        CreditPurchase purchase = purchaseRepo.findByIdAndUserId(id, userId)
+        CreditPurchase purchase = purchaseRepo.findDetailByIdAndUserId(id, userId)
             .orElseThrow(() -> BusinessException.notFound("purchase-not-found", "Compra no encontrada"));
         return CreditPurchaseDto.from(purchase);
     }
@@ -471,7 +471,7 @@ public class CreditPurchaseService {
     @Transactional(readOnly = true)
     public List<CreditPurchaseDto> listPendingPurchases(Long userId) {
         Instant since = clock.instant().minus(PaymentReconciliationScheduler.PENDING_EXPIRE_HOURS, ChronoUnit.HOURS);
-        return purchaseRepo.findAlivePendingByUser(userId, CreditPurchaseStatus.PENDING, since).stream()
+        return purchaseRepo.findAlivePendingByUser(userId, since).stream()
             .map(CreditPurchaseDto::from)
             .toList();
     }
