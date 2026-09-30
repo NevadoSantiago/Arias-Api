@@ -1,6 +1,7 @@
 package com.arias.auth;
 
 import com.arias.auth.dto.*;
+import com.arias.common.exception.BusinessException;
 import com.arias.common.exception.InvalidCredentialsException;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -129,6 +130,36 @@ public class AuthService {
         User user = userRepo.findById(userId)
             .orElseThrow(InvalidCredentialsException::new);
 
+        return toMeResponse(user);
+    }
+
+    /**
+     * Completa teléfono y apodo — lo que Google no provee (diseño §Decisión
+     * 9, unidad 5). Requiere sesión ya válida (el caller es un endpoint
+     * autenticado); no reemite tokens, solo actualiza el perfil.
+     */
+    @Transactional
+    public MeResponse completeProfile(Long userId, CompleteProfileRequest req) {
+        User user = userRepo.findById(userId)
+            .orElseThrow(InvalidCredentialsException::new);
+
+        String phone = PhoneNumbers.normalizeArMobile(req.phone())
+            .orElseThrow(() -> BusinessException.badRequest(
+                "INVALID_PHONE", "Ingresá los 10 dígitos de tu celular"));
+
+        if (!phone.equals(user.getPhone()) && userRepo.existsActivePhone(phone)) {
+            throw BusinessException.conflict(
+                "PHONE_ALREADY_REGISTERED", "Ese teléfono ya está asociado a una cuenta");
+        }
+
+        user.setPhone(phone);
+        user.setNickname(req.nickname());
+        userRepo.save(user);
+
+        return toMeResponse(user);
+    }
+
+    private MeResponse toMeResponse(User user) {
         return new MeResponse(
             user.getId(),
             user.getEmail(),
@@ -137,14 +168,30 @@ public class AuthService {
             user.getRole(),
             user.getCompany() != null ? user.getCompany().getId() : null,
             user.getCompany() != null ? user.getCompany().getNombre() : null,
-            user.getCategory() != null ? user.getCategory().getId() : null
+            user.getCategory() != null ? user.getCategory().getId() : null,
+            user.getNickname(),
+            user.displayName(),
+            user.getEmailVerifiedAt() != null,
+            user.isProfileComplete()
         );
     }
 
-    private AuthResult issueTokens(User user) {
+    /** Emite tokens sin otorgamiento de almuerzo de bienvenida (login/first-login normales). */
+    AuthResult issueTokens(User user) {
+        return issueTokens(user, false);
+    }
+
+    /**
+     * Package-private: {@link RegistrationService#verifyEmail} y {@link
+     * GoogleAuthService#loginWithGoogle} la reutilizan para el auto-login,
+     * reportando en el mismo response si ESTA llamada otorgó el almuerzo de
+     * bienvenida (spec {@code self-registration}, "Otorgamiento único") —
+     * ver {@code CreditLedgerService#grantWelcomeLunch}.
+     */
+    AuthResult issueTokens(User user, boolean welcomeLunchGranted) {
         String accessToken = jwtService.issueAccessToken(user);
         String refreshTokenValue = refreshTokenService.issueFor(user);
-        return new AuthResult(accessToken, refreshTokenValue);
+        return new AuthResult(accessToken, refreshTokenValue, welcomeLunchGranted);
     }
 
     private String normalize(String email) {
@@ -154,6 +201,10 @@ public class AuthService {
     /**
      * Resultado interno: contiene el access token (para el body) y el refresh
      * token CRUDO (para meter en la cookie httpOnly). El controller los separa.
+     *
+     * <p>{@code welcomeLunchGranted} es {@code true} únicamente cuando ESTA
+     * llamada disparó el movimiento {@code WELCOME_GRANT} — nunca en un
+     * login posterior de la misma cuenta (spec "Sin doble otorgamiento").
      */
-    public record AuthResult(String accessToken, String refreshTokenValue) {}
+    public record AuthResult(String accessToken, String refreshTokenValue, boolean welcomeLunchGranted) {}
 }

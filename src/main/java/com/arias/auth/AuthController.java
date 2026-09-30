@@ -32,6 +32,8 @@ public class AuthController {
 
     private final AuthService authService;
     private final PasswordResetService passwordResetService;
+    private final RegistrationService registrationService;
+    private final GoogleAuthService googleAuthService;
     private final JwtProperties jwtProperties;
     private final boolean cookieSecure;
     private final String cookieSameSite;
@@ -39,12 +41,16 @@ public class AuthController {
     public AuthController(
         AuthService authService,
         PasswordResetService passwordResetService,
+        RegistrationService registrationService,
+        GoogleAuthService googleAuthService,
         JwtProperties jwtProperties,
         @Value("${arias.cookie.secure:false}") boolean cookieSecure,
         @Value("${arias.cookie.same-site:Lax}") String cookieSameSite
     ) {
         this.authService = authService;
         this.passwordResetService = passwordResetService;
+        this.registrationService = registrationService;
+        this.googleAuthService = googleAuthService;
         this.jwtProperties = jwtProperties;
         this.cookieSecure = cookieSecure;
         this.cookieSameSite = cookieSameSite;
@@ -101,6 +107,46 @@ public class AuthController {
         return Map.of("message", "Contraseña actualizada correctamente.");
     }
 
+    /**
+     * Autorregistro público (spec {@code self-registration}). Respuesta
+     * siempre genérica — no revela si el email ya existía (ver {@link
+     * RegistrationService#register}).
+     */
+    @PostMapping("/register")
+    public Map<String, String> register(@Valid @RequestBody RegisterRequest req) {
+        registrationService.register(req);
+        return Map.of("message", "Si los datos son válidos, revisá tu correo para verificar tu cuenta.");
+    }
+
+    /** Confirma el correo y emite sesión (auto-login) — spec "Verificación exitosa". */
+    @PostMapping("/verify-email")
+    public ResponseEntity<TokenResponse> verifyEmail(@Valid @RequestBody VerifyEmailRequest req) {
+        AuthResult result = registrationService.verifyEmail(req.token());
+        return withRefreshCookie(result);
+    }
+
+    @PostMapping("/resend-verification")
+    public Map<String, String> resendVerification(@Valid @RequestBody ResendVerificationRequest req) {
+        registrationService.resendVerification(req.email());
+        return Map.of("message", "Si la cuenta existe y no está verificada, te reenviamos el correo.");
+    }
+
+    /** Login/alta con Google (spec {@code self-registration}) — ID token validado en el backend. */
+    @PostMapping("/google")
+    public ResponseEntity<TokenResponse> google(@Valid @RequestBody GoogleLoginRequest req) {
+        AuthResult result = googleAuthService.loginWithGoogle(req.idToken());
+        return withRefreshCookie(result);
+    }
+
+    /** Completa teléfono/apodo tras un alta por Google (diseño §Decisión 9). Requiere sesión. */
+    @PostMapping("/complete-profile")
+    public MeResponse completeProfile(
+        @AuthenticationPrincipal JwtUser user,
+        @Valid @RequestBody CompleteProfileRequest req
+    ) {
+        return authService.completeProfile(user.userId(), req);
+    }
+
     @GetMapping("/me")
     public MeResponse me(@AuthenticationPrincipal JwtUser user) {
         return authService.me(user.userId());
@@ -113,7 +159,7 @@ public class AuthController {
 
         return ResponseEntity.ok()
             .header(HttpHeaders.SET_COOKIE, cookie.toString())
-            .body(new TokenResponse(result.accessToken()));
+            .body(new TokenResponse(result.accessToken(), result.welcomeLunchGranted()));
     }
 
     private ResponseCookie.ResponseCookieBuilder baseCookie(String value, Duration maxAge) {

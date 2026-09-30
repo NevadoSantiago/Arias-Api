@@ -1,0 +1,9 @@
+# Test-only overrides. Spring Boot gives classpath:/config/ precedence over
+# classpath:/, so these keys replace the ones in src/main/resources/application.yml
+# for every test without activating a profile (works in Maven and in the IDE).
+#
+# Tests get their own database so data created while testing the app by hand
+# in the dev database (packs, purchases, users) cannot break them.
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5433/arias_test

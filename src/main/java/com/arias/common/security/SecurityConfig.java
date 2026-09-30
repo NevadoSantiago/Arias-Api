@@ -75,12 +75,24 @@ public class SecurityConfig {
                     "/api/v1/auth/refresh",
                     "/api/v1/auth/logout",
                     "/api/v1/auth/forgot-password",
-                    "/api/v1/auth/reset-password"
+                    "/api/v1/auth/reset-password",
+                    // Autorregistro público (spec self-registration, unidad 4)
+                    "/api/v1/auth/register",
+                    "/api/v1/auth/verify-email",
+                    "/api/v1/auth/resend-verification",
+                    // Login/alta con Google (unidad 5) — el ID token se valida en el
+                    // backend, así que puede llegar sin sesión previa. complete-profile
+                    // NO es público: requiere los tokens que /google ya emitió.
+                    "/api/v1/auth/google"
                 ).permitAll()
                 // Unsubscribe del recordatorio — link público del mail
                 .requestMatchers(HttpMethod.POST, "/api/v1/me/unsubscribe-reminder").permitAll()
                 // Cotización desde la landing pública
                 .requestMatchers(HttpMethod.POST, "/api/v1/contact/quote").permitAll()
+                // Webhook de Mercado Pago (unidad 11) — público por necesidad;
+                // la autenticación real es la firma HMAC validada dentro del
+                // controller (diseño §Seguridad), no Spring Security.
+                .requestMatchers(HttpMethod.POST, "/api/webhooks/mercadopago").permitAll()
                 // Health check
                 .requestMatchers("/actuator/health/**").permitAll()
                 // Swagger UI / OpenAPI spec — documentación pública de la API

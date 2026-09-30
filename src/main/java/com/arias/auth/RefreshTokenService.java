@@ -74,7 +74,9 @@ public class RefreshTokenService {
         // Emitimos par nuevo
         String newAccess = jwtService.issueAccessToken(user);
         String newRefresh = issueFor(user);
-        return new AuthResult(newAccess, newRefresh);
+        // El refresh nunca otorga el almuerzo de bienvenida — solo lo hacen
+        // verify-email y el login con Google, en el instante exacto del alta.
+        return new AuthResult(newAccess, newRefresh, false);
     }
 
     @Transactional

@@ -87,6 +87,35 @@ arias:
     # URL base de la app del empleado, usado en los CTAs de los emails
     app-url: ${APP_URL:http://localhost:5173}
 
+  # Google Sign-In — client ID de OAuth 2.0, usado como audiencia esperada
+  # al validar el ID token que manda el frontend (diseño §Decisión 9).
+  # Debe ser EL MISMO valor que usa @react-oauth/google en el frontend.
+  google:
+    client-id: ${GOOGLE_CLIENT_ID:}
+
+  # Mercado Pago — Checkout Pro vía Preferences API (diseño §Configuración, unidad 10).
+  # Si enabled=false o access-token/webhook-secret están vacíos, la integración
+  # queda inerte: no falla el arranque, cada operación de pago responde con un
+  # error claro (mismo patrón que arias.r2 / UploadService).
+  mercadopago:
+    access-token: ${MP_ACCESS_TOKEN:}
+    webhook-secret: ${MP_WEBHOOK_SECRET:}
+    enabled: ${MP_ENABLED:false}
+    # Timeouts del SDK (ms). El default del SDK es 20 s en los tres; una llamada
+    # colgada no debe retener un hilo de request tanto tiempo. 0 = sin definir:
+    # MercadoPagoProperties aplica sus defaults (única fuente de verdad).
+    connect-timeout-ms: ${MP_CONNECT_TIMEOUT_MS:0}
+    connection-request-timeout-ms: ${MP_CONNECTION_REQUEST_TIMEOUT_MS:0}
+    socket-timeout-ms: ${MP_SOCKET_TIMEOUT_MS:0}
+
+  # URLs públicas de frontend/backend — se usan para construir back_urls y
+  # notification_url de Mercado Pago. Mercado Pago exige HTTPS y rechaza
+  # localhost; auto_return="approved" solo se activa si frontend-url es https
+  # (mismo criterio que CeroComa, diseño §Configuración).
+  public:
+    frontend-url: ${FRONTEND_URL:http://localhost:5173}
+    backend-url: ${BACKEND_URL:http://localhost:8080}
+
   # Contacto / leads de la landing pública
   contact:
     # Casilla donde llegan las solicitudes de cotización del formulario.

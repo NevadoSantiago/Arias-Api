@@ -1,0 +1,71 @@
+change: b2c-credits-pivot
+title: B2C Credits Pivot
+created: 2026-09-17
+artifact_store: openspec
+pace: interactive
+delivery_strategy: single-pr
+review_budget_lines: 400
+strict_tdd: false
+
+phases:
+  explore: done
+  research: done
+  propose: done
+  spec: done
+  design: done
+  tasks: done
+  apply: pending
+  verify: pending
+  archive: pending
+
+artifacts:
+  proposal: openspec/changes/b2c-credits-pivot/proposal.md
+
+external_context:
+  # Explore and research ran before the store switched to openspec; they live in Engram.
+  explore: "engram:sdd/b2c-credits-pivot/explore"
+  research: "engram:sdd/b2c-credits-pivot/research"
+  research_cerocoma: "engram:sdd/b2c-credits-pivot/research-cerocoma"
+  project_init: "engram:sdd-init/arias"
+  testing_capabilities: "engram:sdd/arias/testing-capabilities"
+  client_meeting: "engram:sdd/b2c-credits-pivot/client-meeting"
+  corrections: "engram:sdd/b2c-credits-pivot/corrections"
+
+next_recommended:
+  - sdd-apply
+
+notes: |
+  Comandos de test: `./mvnw test` (Windows `mvnw.cmd test`).
+
+  2026-09-21: este change es la mitad BACKEND de un cambio SDD originalmente
+  planificado como uno solo en C:\Arias\openspec\changes\b2c-credits-pivot,
+  que quedó bloqueado (blocked(cross_common_dir_runtime_target)) porque la
+  planificación y el runtime viven en directorios comunes de Git distintos
+  (C:\Arias, sin commits, vs. C:\Arias\backend y C:\Arias\frontend, dos
+  repositorios independientes). Se dividió en dos changes autocontenidos, uno
+  por repositorio, manteniendo el mismo nombre `b2c-credits-pivot`:
+
+    - backend (este archivo): C:\Arias\backend\openspec\changes\b2c-credits-pivot\
+    - frontend (mitad hermana): C:\Arias\frontend\openspec\changes\b2c-credits-pivot\
+
+  La copia combinada original en C:\Arias\openspec\changes\b2c-credits-pivot
+  se conserva intacta como referencia de las dos mitades juntas; no se
+  modificó ni se borró nada de ese directorio.
+
+  Dependencia cruzada: la mitad frontend consume la API que este backend
+  expone (autorregistro, libro mayor de créditos, pedidos, checkout de
+  Mercado Pago, notificaciones, administración). Este backend debe
+  implementarse, testearse (./mvnw test en verde) y quedar desplegado ANTES
+  de iniciar la unidad de trabajo 1 de la mitad frontend. No hay forma
+  automática de expresar esta dependencia entre dos repositorios/changes de
+  SDD independientes; queda documentada aquí y en proposal.md/design.md de
+  ambas mitades.
+
+  Proposal, specs, design y tasks fueron reescritos para este repositorio a
+  partir del contenido original (units 1-13 de tasks.md, capacidades
+  catalog-credit-pricing/order-placement/pickup-scheduling/credit-ledger/
+  credit-pack-purchase/order-notifications/admin-order-fulfillment completas,
+  y la mitad de dominio/API/verificación/welcome-grant de self-registration).
+  Ningún requisito de negocio fue alterado en la división, solo redistribuido
+  por repositorio. Ver engram `sdd/b2c-credits-pivot/corrections` y
+  `.../client-meeting` para el historial previo al split.

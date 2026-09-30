@@ -46,6 +46,16 @@ public class Category {
     @Column(nullable = false)
     private Boolean enabled = true;
 
+    /**
+     * Costo en créditos ("almuerzos") de un plato de esta categoría. Entero
+     * positivo y fijo — moneda única del pivote B2C, sin tokens diferenciados
+     * por categoría. Reemplaza a {@code CompanyCategoryPrice} como fuente de
+     * costo para el consumo de pedidos nuevos (ver spec catalog-credit-pricing).
+     */
+    @Column(name = "credit_cost", nullable = false)
+    @Builder.Default
+    private Integer creditCost = 1;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

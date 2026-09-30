@@ -1,0 +1,156 @@
+package com.arias.orders;
+
+import com.arias.common.exception.BusinessException;
+import com.arias.restaurantconfig.FechaDeshabilitadaRepository;
+import com.arias.restaurantconfig.PickupSchedule;
+import com.arias.restaurantconfig.PickupScheduleRepository;
+import com.arias.restaurantconfig.RestaurantConfig;
+import com.arias.restaurantconfig.RestaurantConfigRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+
+import java.time.Clock;
+import java.time.DayOfWeek;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalAdjusters;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Programación de retiro — spec {@code pickup-scheduling} (unidad 8). Deriva
+ * los horarios de retiro ofrecidos a partir de {@code pickup_schedule}
+ * (migración V24, decisión de usuario 2026-09-26 — B5/F14): una franja
+ * (apertura-cierre) por día ISO de la semana, o el día cerrado. Dentro de la
+ * franja del día: slots cada {@code pickup_slot_minutes} (config global),
+ * filtrando los previos a {@code now + pickup_lead_minutes}, solo semana
+ * actual y la siguiente, excluyendo fechas deshabilitadas. Sin límite de
+ * capacidad por horario: esta clase nunca consulta {@code orders}, así que el
+ * resultado es el mismo sin importar cuántos pedidos ya existan para ese
+ * horario.
+ *
+ * <p>{@code pickup_lead_minutes} es un solo valor con dos usos (diseño
+ * §"pickup_lead_minutes: un solo valor, dos usos"): acá define el retiro más
+ * temprano ofrecido; {@link OrderConsumptionScheduler} usa el mismo valor
+ * para el punto de consumo automático.
+ */
+@Service
+@RequiredArgsConstructor
+public class PickupSlotService {
+
+    private static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
+
+    private final RestaurantConfigRepository configRepo;
+    private final PickupScheduleRepository pickupScheduleRepo;
+    private final FechaDeshabilitadaRepository fechaDeshabilitadaRepo;
+    private final Clock clock;
+
+    /**
+     * Horarios de retiro válidos para {@code fecha}. Lista vacía si la fecha
+     * está fuera de la ventana de semana actual/siguiente, si está
+     * deshabilitada, o si el local está cerrado ese día de la semana — nunca
+     * lanza, porque es una consulta de disponibilidad, no una validación de
+     * un horario puntual (ver {@link #assertValidPickupTime}).
+     */
+    public List<Instant> slotsFor(LocalDate fecha) {
+        LocalDate today = LocalDate.now(clock);
+        if (!isWithinSchedulableWeeks(fecha, today) || fechaDeshabilitadaRepo.existsByFecha(fecha)) {
+            return List.of();
+        }
+
+        PickupSchedule schedule = scheduleFor(fecha);
+        if (!schedule.isOpen()) {
+            return List.of();
+        }
+
+        RestaurantConfig config = configRepo.getSingleton();
+        Instant earliest = clock.instant().plus(config.getPickupLeadMinutes(), ChronoUnit.MINUTES);
+
+        LocalTime start = schedule.getWindowStart();
+        LocalTime end = schedule.getWindowEnd();
+        int stepMinutes = config.getPickupSlotMinutes();
+
+        List<Instant> slots = new ArrayList<>();
+        for (LocalTime t = start; t.isBefore(end); t = t.plusMinutes(stepMinutes)) {
+            Instant candidate = fecha.atTime(t).atZone(ZONE).toInstant();
+            if (!candidate.isBefore(earliest)) {
+                slots.add(candidate);
+            }
+        }
+        return slots;
+    }
+
+    /**
+     * Valida un horario de retiro puntual elegido por el cliente — usado por
+     * {@code OrderPlacementService.place()} para rechazar con un error de
+     * negocio claro en vez de aceptar cualquier instante. A diferencia de
+     * {@link #slotsFor}, NO chequea fechas deshabilitadas: esa exclusión solo
+     * afecta qué horarios se OFRECEN, no es un requisito de la spec {@code
+     * pickup-scheduling} para el pedido puntual.
+     */
+    public void assertValidPickupTime(Instant pickupAt) {
+        LocalDate today = LocalDate.now(clock);
+        LocalDate fecha = LocalDate.ofInstant(pickupAt, ZONE);
+
+        if (!isWithinSchedulableWeeks(fecha, today)) {
+            throw BusinessException.badRequest("pickup-out-of-range",
+                "La fecha de retiro debe estar dentro de la semana actual o la siguiente");
+        }
+
+        // Los días deshabilitados no se listan en slotsFor, pero la validación
+        // no puede depender de eso: un pedido llega por API, no por la UI.
+        if (fechaDeshabilitadaRepo.existsByFecha(fecha)) {
+            throw BusinessException.badRequest("pickup-date-disabled",
+                "El restaurante no recibe pedidos para esa fecha");
+        }
+
+        PickupSchedule schedule = scheduleFor(fecha);
+        if (!schedule.isOpen()) {
+            throw BusinessException.badRequest("pickup-day-closed", "El local no abre ese día.");
+        }
+
+        RestaurantConfig config = configRepo.getSingleton();
+        LocalTime timeOfDay = pickupAt.atZone(ZONE).toLocalTime();
+        LocalTime windowStart = schedule.getWindowStart();
+        LocalTime windowEnd = schedule.getWindowEnd();
+        if (timeOfDay.isBefore(windowStart) || !timeOfDay.isBefore(windowEnd)) {
+            throw BusinessException.badRequest("pickup-outside-service-window",
+                "El horario de retiro debe estar entre " + windowStart + " y " + windowEnd);
+        }
+
+        // El horario debe caer justo en uno de los slots que ofrece slotsFor():
+        // alineado al paso configurado contando desde el inicio de la ventana
+        // propia de ese día de la semana, sin segundos ni nanosegundos sueltos.
+        int stepMinutes = config.getPickupSlotMinutes();
+        int minuteOfDay = timeOfDay.getHour() * 60 + timeOfDay.getMinute();
+        int windowStartMinute = windowStart.getHour() * 60 + windowStart.getMinute();
+        boolean alineado = (minuteOfDay - windowStartMinute) % stepMinutes == 0
+            && timeOfDay.getSecond() == 0 && timeOfDay.getNano() == 0;
+        if (!alineado) {
+            throw BusinessException.badRequest("pickup-time-not-aligned",
+                "El horario de retiro debe estar alineado a intervalos de " + stepMinutes + " minutos");
+        }
+
+        Instant earliest = clock.instant().plus(config.getPickupLeadMinutes(), ChronoUnit.MINUTES);
+        if (pickupAt.isBefore(earliest)) {
+            throw BusinessException.badRequest("pickup-too-soon",
+                "El horario de retiro debe ser al menos " + config.getPickupLeadMinutes()
+                    + " minutos desde ahora");
+        }
+    }
+
+    /** Franja del día ISO de la semana de {@code fecha} (1=lunes..7=domingo) — sembrada por V24. */
+    private PickupSchedule scheduleFor(LocalDate fecha) {
+        return pickupScheduleRepo.getByDayOfWeek(fecha.getDayOfWeek().getValue());
+    }
+
+    /** Semana calendario actual (lunes a domingo) más la siguiente — ambas inclusive. */
+    private boolean isWithinSchedulableWeeks(LocalDate fecha, LocalDate today) {
+        LocalDate mondayThisWeek = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        LocalDate sundayNextWeek = mondayThisWeek.plusDays(13);
+        return !fecha.isBefore(mondayThisWeek) && !fecha.isAfter(sundayNextWeek);
+    }
+}

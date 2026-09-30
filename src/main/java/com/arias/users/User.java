@@ -89,6 +89,27 @@ public class User {
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 
+    /** Celular normalizado a E.164 (ej. {@code +5491159876547}: {@code +549} + 10 dígitos). Solo lo tienen los B2C. */
+    @Column(length = 30)
+    private String phone;
+
+    /** Apodo para mostrar en el ticket de cocina. Solo lo tienen los B2C. */
+    @Column(length = 50)
+    private String nickname;
+
+    /**
+     * NULL hasta que el correo se verifica (autorregistro) o hasta que Google
+     * confirma la identidad (login con Google, unidad 5). Se rellena con
+     * {@code created_at} para todos los usuarios preexistentes al alta de esta
+     * columna (V16) — ningún empleado de empresa queda bloqueado.
+     */
+    @Column(name = "email_verified_at")
+    private Instant emailVerifiedAt;
+
+    /** Subject id de Google — solo presente si la cuenta se vinculó con Google (unidad 5). */
+    @Column(name = "google_sub", length = 64)
+    private String googleSub;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -96,4 +117,64 @@ public class User {
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    /**
+     * {@code true} cuando tiene los datos que Google no provee (diseño
+     * §Decisión 9): teléfono y apodo. Hasta entonces, pedir/comprar responde
+     * {@code 409 profile-incomplete} (unidades 7/11, todavía no
+     * implementadas) — este flag es la fuente de verdad que consumen.
+     */
+    @Transient
+    public boolean isProfileComplete() {
+        return phone != null && !phone.isBlank() && nickname != null && !nickname.isBlank();
+    }
+
+    /**
+     * Nombre con el que el mostrador llama al cliente: el apodo, y si no
+     * tiene (caso del empleado de empresa, que no pasa por el autorregistro
+     * B2C) nombre y apellido, y en última instancia el correo. Único punto de
+     * verdad: lo usan la etiqueta de cocina y {@code /auth/me}, así cliente y
+     * mostrador ven siempre el mismo nombre.
+     */
+    public String displayName() {
+        if (nickname != null && !nickname.isBlank()) {
+            return nickname;
+        }
+        String name = "";
+        if (firstName != null) name += firstName;
+        if (lastName != null) name += (name.isEmpty() ? "" : " ") + lastName;
+        return name.isBlank() ? email : name.trim();
+    }
+
+    /**
+     * {@code true} cuando el usuario debe verificar su correo antes de poder
+     * pedir o comprar créditos ({@code 409 email-not-verified}, diseño
+     * §Seguridad, "Cuentas sin verificar"). Los usuarios con empresa quedan
+     * SIEMPRE exentos, aunque {@code emailVerifiedAt} sea {@code NULL}: V16
+     * solo rellenó esa columna para las filas que existían al correr la
+     * migración, así que un empleado dado de alta por lista blanca DESPUÉS
+     * de V16 puede tener {@code emailVerifiedAt = NULL} sin culpa propia — el
+     * alta por un {@code COMPANY_ADMIN} ya es la verificación de ese canal
+     * (diseño §Decisión 10). Solo un B2C autorregistrado ({@code company ==
+     * NULL}) puede quedar bloqueado por este gate.
+     */
+    @Transient
+    public boolean mustVerifyEmailToSpend() {
+        return company == null && emailVerifiedAt == null;
+    }
+
+    /**
+     * {@code true} cuando el usuario debe completar teléfono y apodo antes de
+     * poder pedir o comprar créditos ({@code 409 profile-incomplete}, diseño
+     * §Decisión 9). Existe para cubrir el login con Google, que nunca provee
+     * esos dos datos. Los usuarios con empresa quedan SIEMPRE exentos, igual
+     * que en {@link #mustVerifyEmailToSpend()}: el alta por lista blanca no
+     * captura teléfono ni apodo y nunca lo hará — bloquearlos sería un
+     * requisito imposible de cumplir, no una protección real. Solo un B2C
+     * ({@code company == NULL}) puede quedar bloqueado por este gate.
+     */
+    @Transient
+    public boolean mustCompleteProfileToSpend() {
+        return company == null && !isProfileComplete();
+    }
 }

@@ -1,0 +1,393 @@
+package com.arias.auth;
+
+import com.arias.catalog.categories.Category;
+import com.arias.catalog.categories.CategoryRepository;
+import com.arias.common.exception.BusinessException;
+import com.arias.common.exception.InvalidCredentialsException;
+import com.arias.companies.Company;
+import com.arias.companies.CompanyRepository;
+import com.arias.credits.CreditLedgerService;
+import com.arias.credits.CreditMovementRepository;
+import com.arias.credits.CreditWallet;
+import com.arias.credits.CreditWalletRepository;
+import com.arias.credits.MovementType;
+import com.arias.users.Role;
+import com.arias.users.User;
+import com.arias.users.UserRepository;
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
+import com.google.api.client.json.webtoken.JsonWebSignature;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.security.GeneralSecurityException;
+import java.time.Instant;
+import java.time.LocalTime;
+import java.util.concurrent.atomic.AtomicLong;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
+
+/**
+ * Login/alta con Google — spec {@code self-registration} (dominio/API,
+ * unidad 5). {@link GoogleIdTokenVerifier} queda mockeado (harness de la
+ * tabla de unidades de trabajo) para no depender de la red de Google ni de
+ * un client id real; cada test construye su propio {@code GoogleIdToken}
+ * "válido" a mano.
+ *
+ * <p>{@code GoogleIdToken} declara {@code getPayload()} tres veces con tipos
+ * de retorno covariantes (bridge methods) — mockearlo directo con Mockito
+ * confunde el registro de stubbing ("Unfinished stubbing"). Por eso los
+ * tokens de prueba son instancias REALES de {@code GoogleIdToken} (su
+ * constructor público no valida nada — la validación de firma vive en
+ * {@code GoogleIdTokenVerifier.verify}, que es lo que este test mockea).
+ */
+@SpringBootTest
+@Transactional
+class GoogleAuthServiceTest {
+
+    private static final AtomicLong PHONE_SEQ = new AtomicLong();
+
+    @Autowired
+    private GoogleAuthService googleAuthService;
+
+    @Autowired
+    private CreditLedgerService creditLedgerService;
+
+    @Autowired
+    private UserRepository userRepo;
+
+    @Autowired
+    private CreditWalletRepository walletRepo;
+
+    @Autowired
+    private CreditMovementRepository movementRepo;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private CompanyRepository companyRepo;
+
+    @Autowired
+    private CategoryRepository categoryRepo;
+
+    @MockitoBean
+    private GoogleIdTokenVerifier verifier;
+
+    private GoogleIdToken validToken(String sub, String email, boolean emailVerified,
+                                      String givenName, String familyName) {
+        GoogleIdToken.Payload payload = new GoogleIdToken.Payload();
+        payload.setSubject(sub);
+        payload.setEmail(email);
+        payload.setEmailVerified(emailVerified);
+        if (givenName != null) payload.set("given_name", givenName);
+        if (familyName != null) payload.set("family_name", familyName);
+
+        // Instancia real — no un mock — ver el javadoc de la clase.
+        return new GoogleIdToken(new JsonWebSignature.Header(), payload, new byte[0], new byte[0]);
+    }
+
+    private long welcomeGrantCount(Long userId) {
+        return movementRepo.findByUserIdOrderByCreatedAtDesc(userId).stream()
+            .filter(m -> m.getType() == MovementType.WELCOME_GRANT)
+            .count();
+    }
+
+    @Test
+    void altaConGoogleCreaCuentaVerificadaYOtorgaElAlmuerzoDeBienvenida() throws Exception {
+        String email = "google-alta-" + System.nanoTime() + "@test.arias.com";
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), email, true, "Ana", "Gómez"));
+
+        AuthService.AuthResult result = googleAuthService.loginWithGoogle(idTokenValue);
+
+        assertThat(result.accessToken()).isNotBlank();
+        assertThat(result.refreshTokenValue()).isNotBlank();
+        assertThat(result.welcomeLunchGranted()).isTrue();
+
+        User created = userRepo.findByEmail(email).orElseThrow();
+        assertThat(created.getRole()).isEqualTo(Role.EMPLOYEE);
+        assertThat(created.getGoogleSub()).isNotBlank();
+        assertThat(created.getEmailVerifiedAt()).isNotNull();
+        assertThat(created.getPasswordHash()).isNull();
+        assertThat(created.getFirstName()).isEqualTo("Ana");
+        assertThat(created.getLastName()).isEqualTo("Gómez");
+
+        CreditWallet wallet = walletRepo.findById(created.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(1);
+        assertThat(welcomeGrantCount(created.getId())).isEqualTo(1);
+    }
+
+    @Test
+    void loginConGoogleVinculaCuentaExistenteSinVerificarYOtorgaElAlmuerzo() throws Exception {
+        // Cuenta autorregistrada (unidad 4) que nunca verificó el correo —
+        // llega a Google login sin google_sub y sin email_verified_at.
+        String email = "google-vincula-sin-verificar-" + System.nanoTime() + "@test.arias.com";
+        User unverified = userRepo.save(User.builder()
+            .email(email)
+            .firstName("Bruno")
+            .phone("+549" + (1122330100L + PHONE_SEQ.incrementAndGet()))
+            .nickname("Bru")
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .build());
+        assertThat(unverified.getGoogleSub()).isNull();
+        assertThat(unverified.getEmailVerifiedAt()).isNull();
+
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), email, true, "Bruno", null));
+
+        googleAuthService.loginWithGoogle(idTokenValue);
+
+        User linked = userRepo.findByEmail(email).orElseThrow();
+        assertThat(linked.getGoogleSub()).isNotBlank();
+        assertThat(linked.getEmailVerifiedAt()).isNotNull(); // primera validación — vía Google
+
+        assertThat(welcomeGrantCount(linked.getId())).isEqualTo(1);
+    }
+
+    @Test
+    void loginConGoogleVinculaB2cExistenteYaVerificadoSinOtorgarSegundoAlmuerzo() throws Exception {
+        // B2C con password y correo ya verificado: Google login lo vincula
+        // pero NO re-otorga el almuerzo, spec "Sin doble otorgamiento".
+        String email = "google-b2c-verificado-" + System.nanoTime() + "@test.arias.com";
+        User employee = userRepo.save(User.builder()
+            .email(email)
+            .firstName("Carla")
+            .lastName("Diaz")
+            .passwordHash(passwordEncoder.encode("password123"))
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .emailVerifiedAt(Instant.now())
+            .build());
+
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), email, true, "Carla", "Diaz"));
+
+        googleAuthService.loginWithGoogle(idTokenValue);
+
+        User linked = userRepo.findByEmail(email).orElseThrow();
+        assertThat(linked.getGoogleSub()).isNotBlank();
+        assertThat(linked.getPasswordHash()).isNotBlank(); // password existente sigue funcionando
+
+        assertThat(welcomeGrantCount(linked.getId())).isEqualTo(0);
+        assertThat(walletRepo.findById(employee.getId())).isEmpty();
+    }
+
+    @Test
+    void loginConGoogleRechazaEmpleadoDeEmpresaSinVincularNada() throws Exception {
+        User employee = persistNonB2c("google-empleado-empresa", Role.EMPLOYEE, persistCompany());
+
+        assertRechazoPorCuentaNoB2c(employee);
+    }
+
+    @Test
+    void loginConGoogleRechazaAdminDeEmpresaSinVincularNada() throws Exception {
+        User admin = persistNonB2c("google-admin-empresa", Role.COMPANY_ADMIN, persistCompany());
+
+        assertRechazoPorCuentaNoB2c(admin);
+    }
+
+    @Test
+    void loginConGoogleRechazaSuperAdminSinVincularNada() throws Exception {
+        User superAdmin = persistNonB2c("google-super-admin", Role.SUPER_ADMIN, null);
+
+        assertRechazoPorCuentaNoB2c(superAdmin);
+    }
+
+    @Test
+    void loginConGoogleRechazaB2cInactivoConErrorGenerico() throws Exception {
+        String email = "google-inactivo-" + System.nanoTime() + "@test.arias.com";
+        User inactive = userRepo.save(User.builder()
+            .email(email)
+            .firstName("Hugo")
+            .role(Role.EMPLOYEE)
+            .active(false)
+            .build());
+
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), email, true, "Hugo", null));
+
+        assertThatThrownBy(() -> googleAuthService.loginWithGoogle(idTokenValue))
+            .isInstanceOf(InvalidCredentialsException.class);
+
+        User unchanged = userRepo.findByEmail(email).orElseThrow();
+        assertThat(unchanged.getGoogleSub()).isNull();
+        assertThat(unchanged.getEmailVerifiedAt()).isNull();
+        assertThat(welcomeGrantCount(inactive.getId())).isEqualTo(0);
+    }
+
+    @Test
+    void loginConGoogleRechazaAdminInactivoConErrorGenericoYNoConElEspecifico() throws Exception {
+        // El chequeo de inactivo va antes que el de B2C: no revela que la
+        // cuenta existe ni de qué tipo es.
+        User inactiveAdmin = persistNonB2c("google-admin-inactivo", Role.SUPER_ADMIN, null);
+        inactiveAdmin.setActive(false);
+        userRepo.save(inactiveAdmin);
+
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), inactiveAdmin.getEmail(), true, "Root", null));
+
+        assertThatThrownBy(() -> googleAuthService.loginWithGoogle(idTokenValue))
+            .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    private Company persistCompany() {
+        Category category = categoryRepo.save(Category.builder()
+            .nombre("Categoria-" + System.nanoTime())
+            .ordenDisplay(0)
+            .enabled(true)
+            .creditCost(1)
+            .build());
+        return companyRepo.save(Company.builder()
+            .nombre("Empresa-" + System.nanoTime())
+            .cuit(String.valueOf(20000000000L + (System.nanoTime() % 9000000000L)))
+            .calle("Calle Falsa")
+            .altura("123")
+            .horaEntrega(LocalTime.of(13, 0))
+            .categoriaDefault(category)
+            .enabled(true)
+            .build());
+    }
+
+    private User persistNonB2c(String prefix, Role role, Company company) {
+        return userRepo.save(User.builder()
+            .email(prefix + "-" + System.nanoTime() + "@test.arias.com")
+            .firstName("Nombre")
+            .passwordHash(passwordEncoder.encode("password123"))
+            .role(role)
+            .company(company)
+            .active(true)
+            .emailVerifiedAt(Instant.now())
+            .build());
+    }
+
+    private void assertRechazoPorCuentaNoB2c(User existing) throws Exception {
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), existing.getEmail(), true, "Nombre", null));
+
+        assertThatThrownBy(() -> googleAuthService.loginWithGoogle(idTokenValue))
+            .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                assertThat(ex.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getErrorCode()).isEqualTo("GOOGLE_ACCOUNT_NOT_ALLOWED");
+                assertThat(ex.getMessage()).isEqualTo("Tu cuenta es de empresa. Ingresá con tu email");
+            });
+
+        User unchanged = userRepo.findByEmail(existing.getEmail()).orElseThrow();
+        assertThat(unchanged.getGoogleSub()).isNull();
+        assertThat(unchanged.getEmailVerifiedAt()).isEqualTo(existing.getEmailVerifiedAt());
+        assertThat(welcomeGrantCount(existing.getId())).isEqualTo(0);
+        assertThat(walletRepo.findById(existing.getId())).isEmpty();
+    }
+
+    @Test
+    void loginConGoogleRepetidoConMismoGoogleSubNoOtorgaSegundoAlmuerzo() throws Exception {
+        String email = "google-repetido-" + System.nanoTime() + "@test.arias.com";
+        String sub = "sub-" + System.nanoTime();
+
+        when(verifier.verify("primer-token"))
+            .thenReturn(validToken(sub, email, true, "Dana", null));
+        AuthService.AuthResult firstLogin = googleAuthService.loginWithGoogle("primer-token");
+
+        assertThat(firstLogin.welcomeLunchGranted()).isTrue();
+        User user = userRepo.findByEmail(email).orElseThrow();
+        assertThat(welcomeGrantCount(user.getId())).isEqualTo(1);
+
+        when(verifier.verify("segundo-token"))
+            .thenReturn(validToken(sub, email, true, "Dana", null));
+        AuthService.AuthResult secondLogin = googleAuthService.loginWithGoogle("segundo-token");
+
+        assertThat(secondLogin.accessToken()).isNotBlank();
+        assertThat(secondLogin.welcomeLunchGranted()).isFalse();
+        assertThat(welcomeGrantCount(user.getId())).isEqualTo(1); // sigue siendo 1, no 2
+    }
+
+    @Test
+    void loginConGoogleRechazaSiElGoogleSubYaEstaVinculadoAOtraCuenta() throws Exception {
+        String email = "google-sub-distinto-" + System.nanoTime() + "@test.arias.com";
+        User existing = userRepo.save(User.builder()
+            .email(email)
+            .firstName("Elena")
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .googleSub("sub-original-" + System.nanoTime())
+            .emailVerifiedAt(Instant.now())
+            .build());
+
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-impostor-" + System.nanoTime(), email, true, "Elena", null));
+
+        assertThatThrownBy(() -> googleAuthService.loginWithGoogle(idTokenValue))
+            .isInstanceOf(InvalidCredentialsException.class);
+
+        User unchanged = userRepo.findByEmail(email).orElseThrow();
+        assertThat(unchanged.getGoogleSub()).isEqualTo(existing.getGoogleSub());
+        assertThat(welcomeGrantCount(unchanged.getId())).isEqualTo(0);
+    }
+
+    @Test
+    void loginConGoogleRechazaEmailNoVerificadoPorGoogle() throws Exception {
+        String email = "google-sin-verificar-" + System.nanoTime() + "@test.arias.com";
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), email, false, "Fede", null));
+
+        assertThatThrownBy(() -> googleAuthService.loginWithGoogle(idTokenValue))
+            .isInstanceOf(InvalidCredentialsException.class);
+
+        assertThat(userRepo.findByEmail(email)).isEmpty();
+    }
+
+    @Test
+    void loginConGoogleRechazaTokenInvalido() throws Exception {
+        when(verifier.verify(anyString())).thenReturn(null);
+
+        assertThatThrownBy(() -> googleAuthService.loginWithGoogle("token-invalido"))
+            .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    @Test
+    void loginConGoogleRechazaTokenExpiradoOAudienciaIncorrecta() throws Exception {
+        when(verifier.verify(eq("token-expirado")))
+            .thenThrow(new GeneralSecurityException("token expirado o audiencia inválida"));
+
+        assertThatThrownBy(() -> googleAuthService.loginWithGoogle("token-expirado"))
+            .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    @Test
+    void grantWelcomeLunchEsIdempotenteAnteUnSegundoIntentoDirectoYNoRompeLaRequest() {
+        String email = "grant-directo-" + System.nanoTime() + "@test.arias.com";
+        User user = userRepo.save(User.builder()
+            .email(email)
+            .firstName("Gina")
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .emailVerifiedAt(Instant.now())
+            .build());
+
+        creditLedgerService.grantWelcomeLunch(user.getId());
+        // Segundo intento: no debe tirar ni crear un segundo movimiento —
+        // el pre-check de existsByUserIdAndType evita tocar el índice único.
+        creditLedgerService.grantWelcomeLunch(user.getId());
+
+        assertThat(welcomeGrantCount(user.getId())).isEqualTo(1);
+        assertThat(walletRepo.findById(user.getId()).orElseThrow().getAvailable()).isEqualTo(1);
+    }
+}

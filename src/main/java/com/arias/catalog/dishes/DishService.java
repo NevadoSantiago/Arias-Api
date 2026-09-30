@@ -67,6 +67,31 @@ public class DishService {
             .toList();
     }
 
+    // ─── B2C: lista completa para usuarios sin claim categoryId ───────────
+
+    /**
+     * Todos los platos habilitados, sin filtro de categoría — camino B2C
+     * (unidad 7, diseño §Decisión 5). Un usuario autorregistrado sin empresa
+     * tiene {@code category = NULL}, así que no puede pasar por {@link
+     * CategoryHierarchyService}; el camino con claim ({@link
+     * #listAvailableFor}) sigue exactamente igual para empleados de empresa.
+     */
+    @Transactional(readOnly = true)
+    public List<DishDto> listAllAvailable(LocalDate fecha) {
+        LocalDate targetDate = fecha != null ? fecha : LocalDate.now();
+        boolean isFuture = targetDate.isAfter(LocalDate.now());
+
+        List<Dish> dishes = isFuture
+            ? dishRepo.findAllAvailableNoStock(targetDate)
+            : dishRepo.findAllAvailable(targetDate);
+
+        return dishes.stream()
+            .sorted(Comparator.comparingInt((Dish d) -> d.getMenuSection().getOrdenDisplay())
+                    .thenComparing(Dish::getNombre))
+            .map(DishDto::from)
+            .toList();
+    }
+
     // ─── Admin: CRUD completo ────────────────────────────────────────────
 
     @Transactional(readOnly = true)
