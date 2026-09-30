@@ -1,5 +1,6 @@
 package com.arias.auth;
 
+import com.arias.common.exception.BusinessException;
 import com.arias.common.exception.InvalidCredentialsException;
 import com.arias.credits.CreditLedgerService;
 import com.arias.users.Role;
@@ -31,6 +32,9 @@ import java.util.Optional;
  *       {@code email_verified_at} seteados.</li>
  *   <li>Existe con {@code google_sub = NULL} → se vincula; la contraseña
  *       existente (si la hay) sigue funcionando.</li>
+ *   <li>Existe pero está inactivo → error genérico; existe y NO es B2C
+ *       ({@code SUPER_ADMIN}, {@code COMPANY_ADMIN} o con empresa) →
+ *       403 {@code GOOGLE_ACCOUNT_NOT_ALLOWED}, sin vincular nada.</li>
  *   <li>Existe con OTRO {@code google_sub} → error genérico de credenciales,
  *       igual que login/first-login (no revela de quién es la cuenta).</li>
  * </ul>
@@ -80,6 +84,17 @@ public class GoogleAuthService {
             firstValidation = true;
         } else {
             user = existing.get();
+            // Mismo trato que AuthService.login: inactivo → genérico, sin
+            // revelar que la cuenta existe (findByEmail ya excluye soft-deleted).
+            if (!Boolean.TRUE.equals(user.getActive())) {
+                throw new InvalidCredentialsException();
+            }
+            // Solo clientes B2C entran con Google. Va ANTES de cualquier
+            // vínculo: una cuenta de empresa/admin no se toca.
+            if (!isB2c(user)) {
+                throw BusinessException.forbidden(
+                    "GOOGLE_ACCOUNT_NOT_ALLOWED", "Tu cuenta es de empresa. Ingresá con tu email");
+            }
             if (user.getGoogleSub() == null) {
                 firstValidation = user.getEmailVerifiedAt() == null;
                 user.setGoogleSub(googleSub);
@@ -99,6 +114,11 @@ public class GoogleAuthService {
         boolean welcomeLunchGranted = firstValidation && creditLedgerService.grantWelcomeLunch(user.getId());
 
         return authService.issueTokens(user, welcomeLunchGranted);
+    }
+
+    /** B2C = autorregistrado: rol {@code EMPLOYEE} y sin empresa. */
+    private static boolean isB2c(User user) {
+        return user.getRole() == Role.EMPLOYEE && user.getCompany() == null;
     }
 
     private GoogleIdToken.Payload verifyToken(String idTokenValue) {

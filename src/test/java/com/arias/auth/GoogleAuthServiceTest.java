@@ -1,6 +1,11 @@
 package com.arias.auth;
 
+import com.arias.catalog.categories.Category;
+import com.arias.catalog.categories.CategoryRepository;
+import com.arias.common.exception.BusinessException;
 import com.arias.common.exception.InvalidCredentialsException;
+import com.arias.companies.Company;
+import com.arias.companies.CompanyRepository;
 import com.arias.credits.CreditLedgerService;
 import com.arias.credits.CreditMovementRepository;
 import com.arias.credits.CreditWallet;
@@ -15,12 +20,14 @@ import com.google.api.client.json.webtoken.JsonWebSignature;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.GeneralSecurityException;
 import java.time.Instant;
+import java.time.LocalTime;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -66,6 +73,12 @@ class GoogleAuthServiceTest {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private CompanyRepository companyRepo;
+
+    @Autowired
+    private CategoryRepository categoryRepo;
 
     @MockitoBean
     private GoogleIdTokenVerifier verifier;
@@ -145,11 +158,10 @@ class GoogleAuthServiceTest {
     }
 
     @Test
-    void loginConGoogleVinculaEmpleadoDeEmpresaYaVerificadoSinOtorgarSegundoAlmuerzo() throws Exception {
-        // Empleado de empresa: first-login ya hecho (tiene password_hash),
-        // email_verified_at ya seteado por la migración V16 — Google login
-        // NO debe re-otorgar el almuerzo, spec "Sin doble otorgamiento".
-        String email = "google-empleado-" + System.nanoTime() + "@test.arias.com";
+    void loginConGoogleVinculaB2cExistenteYaVerificadoSinOtorgarSegundoAlmuerzo() throws Exception {
+        // B2C con password y correo ya verificado: Google login lo vincula
+        // pero NO re-otorga el almuerzo, spec "Sin doble otorgamiento".
+        String email = "google-b2c-verificado-" + System.nanoTime() + "@test.arias.com";
         User employee = userRepo.save(User.builder()
             .email(email)
             .firstName("Carla")
@@ -172,6 +184,115 @@ class GoogleAuthServiceTest {
 
         assertThat(welcomeGrantCount(linked.getId())).isEqualTo(0);
         assertThat(walletRepo.findById(employee.getId())).isEmpty();
+    }
+
+    @Test
+    void loginConGoogleRechazaEmpleadoDeEmpresaSinVincularNada() throws Exception {
+        User employee = persistNonB2c("google-empleado-empresa", Role.EMPLOYEE, persistCompany());
+
+        assertRechazoPorCuentaNoB2c(employee);
+    }
+
+    @Test
+    void loginConGoogleRechazaAdminDeEmpresaSinVincularNada() throws Exception {
+        User admin = persistNonB2c("google-admin-empresa", Role.COMPANY_ADMIN, persistCompany());
+
+        assertRechazoPorCuentaNoB2c(admin);
+    }
+
+    @Test
+    void loginConGoogleRechazaSuperAdminSinVincularNada() throws Exception {
+        User superAdmin = persistNonB2c("google-super-admin", Role.SUPER_ADMIN, null);
+
+        assertRechazoPorCuentaNoB2c(superAdmin);
+    }
+
+    @Test
+    void loginConGoogleRechazaB2cInactivoConErrorGenerico() throws Exception {
+        String email = "google-inactivo-" + System.nanoTime() + "@test.arias.com";
+        User inactive = userRepo.save(User.builder()
+            .email(email)
+            .firstName("Hugo")
+            .role(Role.EMPLOYEE)
+            .active(false)
+            .build());
+
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), email, true, "Hugo", null));
+
+        assertThatThrownBy(() -> googleAuthService.loginWithGoogle(idTokenValue))
+            .isInstanceOf(InvalidCredentialsException.class);
+
+        User unchanged = userRepo.findByEmail(email).orElseThrow();
+        assertThat(unchanged.getGoogleSub()).isNull();
+        assertThat(unchanged.getEmailVerifiedAt()).isNull();
+        assertThat(welcomeGrantCount(inactive.getId())).isEqualTo(0);
+    }
+
+    @Test
+    void loginConGoogleRechazaAdminInactivoConErrorGenericoYNoConElEspecifico() throws Exception {
+        // El chequeo de inactivo va antes que el de B2C: no revela que la
+        // cuenta existe ni de qué tipo es.
+        User inactiveAdmin = persistNonB2c("google-admin-inactivo", Role.SUPER_ADMIN, null);
+        inactiveAdmin.setActive(false);
+        userRepo.save(inactiveAdmin);
+
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), inactiveAdmin.getEmail(), true, "Root", null));
+
+        assertThatThrownBy(() -> googleAuthService.loginWithGoogle(idTokenValue))
+            .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    private Company persistCompany() {
+        Category category = categoryRepo.save(Category.builder()
+            .nombre("Categoria-" + System.nanoTime())
+            .ordenDisplay(0)
+            .enabled(true)
+            .creditCost(1)
+            .build());
+        return companyRepo.save(Company.builder()
+            .nombre("Empresa-" + System.nanoTime())
+            .cuit(String.valueOf(20000000000L + (System.nanoTime() % 9000000000L)))
+            .calle("Calle Falsa")
+            .altura("123")
+            .horaEntrega(LocalTime.of(13, 0))
+            .categoriaDefault(category)
+            .enabled(true)
+            .build());
+    }
+
+    private User persistNonB2c(String prefix, Role role, Company company) {
+        return userRepo.save(User.builder()
+            .email(prefix + "-" + System.nanoTime() + "@test.arias.com")
+            .firstName("Nombre")
+            .passwordHash(passwordEncoder.encode("password123"))
+            .role(role)
+            .company(company)
+            .active(true)
+            .emailVerifiedAt(Instant.now())
+            .build());
+    }
+
+    private void assertRechazoPorCuentaNoB2c(User existing) throws Exception {
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), existing.getEmail(), true, "Nombre", null));
+
+        assertThatThrownBy(() -> googleAuthService.loginWithGoogle(idTokenValue))
+            .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                assertThat(ex.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getErrorCode()).isEqualTo("GOOGLE_ACCOUNT_NOT_ALLOWED");
+                assertThat(ex.getMessage()).isEqualTo("Tu cuenta es de empresa. Ingresá con tu email");
+            });
+
+        User unchanged = userRepo.findByEmail(existing.getEmail()).orElseThrow();
+        assertThat(unchanged.getGoogleSub()).isNull();
+        assertThat(unchanged.getEmailVerifiedAt()).isEqualTo(existing.getEmailVerifiedAt());
+        assertThat(welcomeGrantCount(existing.getId())).isEqualTo(0);
+        assertThat(walletRepo.findById(existing.getId())).isEmpty();
     }
 
     @Test
