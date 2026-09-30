@@ -127,6 +127,7 @@ Variables de entorno relevantes (todas con default de desarrollo, ver
 |---|---|---|
 | `JWT_SECRET` | Firma de los tokens | valor de desarrollo (no usar en prod) |
 | `CORS_ALLOWED_ORIGINS` | Orígenes permitidos | `http://localhost:5173` |
+| `GOOGLE_CLIENT_ID` | Client ID OAuth (propiedad `arias.google.client-id`) con el que se valida el ID token de "Ingresar con Google". Tiene que ser el mismo valor que `VITE_GOOGLE_CLIENT_ID` del frontend. Si está vacío, todo token de Google se rechaza | vacío |
 | `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` | Credenciales del primer SUPER_ADMIN (solo se crea si no existe ninguno) | `admin@arias.com` / `admin123` |
 | `RESEND_API_KEY` | Envío real de emails (si está vacío, se loguean pero no se envían) | vacío |
 | `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_PUBLIC_URL` | Storage de fotos (si están vacíos, el upload responde 503) | vacío |
