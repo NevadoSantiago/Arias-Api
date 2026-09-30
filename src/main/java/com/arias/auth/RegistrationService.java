@@ -61,9 +61,9 @@ public class RegistrationService {
      */
     @Transactional
     public void register(RegisterRequest req) {
-        String phone = PhoneNumbers.normalizeE164(req.phone())
+        String phone = PhoneNumbers.normalizeArMobile(req.phone())
             .orElseThrow(() -> BusinessException.badRequest(
-                "INVALID_PHONE", "El teléfono no tiene un formato válido"));
+                "INVALID_PHONE", "Ingresá los 10 dígitos de tu celular"));
 
         if (userRepo.existsActivePhone(phone)) {
             throw BusinessException.conflict(

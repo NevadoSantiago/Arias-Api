@@ -89,7 +89,7 @@ public class User {
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 
-    /** Teléfono normalizado a E.164 (ej. {@code +5491122334455}). Solo lo tienen los B2C. */
+    /** Celular normalizado a E.164 (ej. {@code +5491159876547}: {@code +549} + 10 dígitos). Solo lo tienen los B2C. */
     @Column(length = 30)
     private String phone;
 

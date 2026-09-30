@@ -76,7 +76,7 @@ class RegistrationServiceTest {
     void registroExitosoCreaCuentaSinVerificarYEnviaElCorreo() {
         String email = "registro-ok-" + System.nanoTime() + "@test.arias.com";
 
-        registrationService.register(validRequest(email, "+5491122330001"));
+        registrationService.register(validRequest(email, "1122330001"));
 
         User created = userRepo.findByEmail(email).orElseThrow();
         assertThat(created.getRole()).isEqualTo(Role.EMPLOYEE);
@@ -97,7 +97,19 @@ class RegistrationServiceTest {
 
         assertThatThrownBy(() -> registrationService.register(validRequest(email, "no-es-un-telefono")))
             .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("teléfono");
+            .hasMessageContaining("10 dígitos");
+
+        assertThat(userRepo.findByEmail(email)).isEmpty();
+        verifyNoInteractions(emailService);
+    }
+
+    @Test
+    void registroRechazaTelefonoEnFormatoInternacional() {
+        String email = "registro-tel-e164-" + System.nanoTime() + "@test.arias.com";
+
+        assertThatThrownBy(() -> registrationService.register(validRequest(email, "+5491122330012")))
+            .isInstanceOfSatisfying(BusinessException.class,
+                ex -> assertThat(ex.getErrorCode()).isEqualTo("INVALID_PHONE"));
 
         assertThat(userRepo.findByEmail(email)).isEmpty();
         verifyNoInteractions(emailService);
@@ -105,7 +117,7 @@ class RegistrationServiceTest {
 
     @Test
     void registroRechazaTelefonoYaRegistradoPorOtraCuenta() {
-        String phone = "+5491122330002";
+        String phone = "1122330002";
         registrationService.register(validRequest("registro-tel-dup-1-" + System.nanoTime() + "@test.arias.com", phone));
 
         String secondEmail = "registro-tel-dup-2-" + System.nanoTime() + "@test.arias.com";
@@ -120,11 +132,11 @@ class RegistrationServiceTest {
     @Test
     void registroConEmailYaExistenteNoCreaSegundaCuentaYNoRevelaLaDiferencia() {
         String email = "registro-email-dup-" + System.nanoTime() + "@test.arias.com";
-        registrationService.register(validRequest(email, "+5491122330003"));
+        registrationService.register(validRequest(email, "1122330003"));
 
         // No lanza excepción — misma respuesta "genérica" que un alta exitosa,
         // igual que decide el diseño §Seguridad ("no revela cuentas").
-        registrationService.register(validRequest(email, "+5491122330004"));
+        registrationService.register(validRequest(email, "1122330004"));
 
         assertThat(userRepo.findAll().stream().filter(u -> email.equals(u.getEmail())).count()).isEqualTo(1);
         // El segundo teléfono nunca quedó asociado a nadie — la cuenta no se tocó.
@@ -134,7 +146,7 @@ class RegistrationServiceTest {
     @Test
     void cuentaQuedaBloqueadaHastaVerificarYLaVerificacionExitosaLaHabilita() {
         String email = "registro-verifica-" + System.nanoTime() + "@test.arias.com";
-        String phone = "+5491122330005";
+        String phone = "1122330005";
         registrationService.register(validRequest(email, phone));
 
         User unverified = userRepo.findByEmail(email).orElseThrow();
@@ -168,7 +180,7 @@ class RegistrationServiceTest {
     @Test
     void verificacionRechazaTokenExpirado() {
         String email = "registro-expirado-" + System.nanoTime() + "@test.arias.com";
-        registrationService.register(validRequest(email, "+5491122330006"));
+        registrationService.register(validRequest(email, "1122330006"));
         User user = userRepo.findByEmail(email).orElseThrow();
 
         String rawToken = jwtService.generateRefreshTokenValue();
@@ -188,7 +200,7 @@ class RegistrationServiceTest {
     @Test
     void verificacionRechazaTokenYaUsado() {
         String email = "registro-usado-" + System.nanoTime() + "@test.arias.com";
-        registrationService.register(validRequest(email, "+5491122330007"));
+        registrationService.register(validRequest(email, "1122330007"));
         User user = userRepo.findByEmail(email).orElseThrow();
 
         String rawToken = jwtService.generateRefreshTokenValue();
@@ -207,7 +219,7 @@ class RegistrationServiceTest {
     @Test
     void reenvioDeVerificacionInvalidaElTokenAnteriorYEmiteUnoNuevo() {
         String email = "registro-reenvio-" + System.nanoTime() + "@test.arias.com";
-        registrationService.register(validRequest(email, "+5491122330008"));
+        registrationService.register(validRequest(email, "1122330008"));
         User user = userRepo.findByEmail(email).orElseThrow();
 
         EmailVerificationToken firstToken = tokenRepo.findAll().stream()
@@ -246,7 +258,7 @@ class RegistrationServiceTest {
     @Test
     void usuarioAutorregistradoYVerificadoPuedeAutenticarseConLoginNormal() {
         String email = "registro-login-" + System.nanoTime() + "@test.arias.com";
-        registrationService.register(validRequest(email, "+5491122330009"));
+        registrationService.register(validRequest(email, "1122330009"));
 
         User unverified = userRepo.findByEmail(email).orElseThrow();
         EmailVerificationToken token = tokenRepo.findAll().stream()
@@ -271,11 +283,11 @@ class RegistrationServiceTest {
     void registroRechazaContraseñaDemasiadoCortaOEnBlancoPorValidacionBean() {
         String email = "registro-pass-corta-" + System.nanoTime() + "@test.arias.com";
 
-        RegisterRequest tooShort = new RegisterRequest("Ana", "Gómez", email, "+5491122330010", "Anita", "1234567");
+        RegisterRequest tooShort = new RegisterRequest("Ana", "Gómez", email, "1122330010", "Anita", "1234567");
         Set<ConstraintViolation<RegisterRequest>> tooShortViolations = validator.validate(tooShort);
         assertThat(tooShortViolations).isNotEmpty();
 
-        RegisterRequest blank = new RegisterRequest("Ana", "Gómez", email, "+5491122330010", "Anita", "");
+        RegisterRequest blank = new RegisterRequest("Ana", "Gómez", email, "1122330010", "Anita", "");
         Set<ConstraintViolation<RegisterRequest>> blankViolations = validator.validate(blank);
         assertThat(blankViolations).isNotEmpty();
     }

@@ -1,7 +1,9 @@
 package com.arias.auth;
 
+import com.arias.auth.dto.CompleteProfileRequest;
 import com.arias.auth.dto.FirstLoginRequest;
 import com.arias.auth.dto.MeResponse;
+import com.arias.common.exception.BusinessException;
 import com.arias.common.exception.InvalidCredentialsException;
 import com.arias.users.Role;
 import com.arias.users.User;
@@ -70,6 +72,41 @@ class AuthServiceTest {
 
         MeResponse c = authService.me(sinNombre.getId());
         assertThat(c.displayName()).isEqualTo(sinNombre.getEmail());
+    }
+
+    @Test
+    void completeProfileGuardaElCelularDeDiezDigitosConPrefijo549() {
+        User user = saveUser(null, "Ana", "Perez");
+
+        authService.completeProfile(user.getId(), new CompleteProfileRequest("11 5987-6547", "Coty"));
+
+        User updated = userRepo.findById(user.getId()).orElseThrow();
+        assertThat(updated.getPhone()).isEqualTo("+5491159876547");
+        assertThat(updated.getNickname()).isEqualTo("Coty");
+    }
+
+    @Test
+    void completeProfileRechazaUnCelularQueNoTieneDiezDigitos() {
+        User user = saveUser(null, "Ana", "Perez");
+
+        assertThatThrownBy(() -> authService.completeProfile(
+                user.getId(), new CompleteProfileRequest("+5491159876547", "Coty")))
+            .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                assertThat(ex.getErrorCode()).isEqualTo("INVALID_PHONE");
+                assertThat(ex.getMessage()).isEqualTo("Ingresá los 10 dígitos de tu celular");
+            });
+    }
+
+    @Test
+    void completeProfileRechazaUnCelularYaAsociadoAOtraCuenta() {
+        User first = saveUser(null, "Ana", "Perez");
+        User second = saveUser(null, "Beto", "Gomez");
+        authService.completeProfile(first.getId(), new CompleteProfileRequest("1159876547", "Ana"));
+
+        assertThatThrownBy(() -> authService.completeProfile(
+                second.getId(), new CompleteProfileRequest("1159876547", "Beto")))
+            .isInstanceOfSatisfying(BusinessException.class,
+                ex -> assertThat(ex.getErrorCode()).isEqualTo("PHONE_ALREADY_REGISTERED"));
     }
 
     private User saveUser(String nickname, String firstName, String lastName) {
