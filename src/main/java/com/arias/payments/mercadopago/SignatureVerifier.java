@@ -33,6 +33,7 @@ import java.util.Map;
 public class SignatureVerifier {
 
     private static final String HMAC_ALGORITHM = "HmacSHA256";
+    private static final int MAX_LOG_LENGTH = 100;
 
     private final MercadoPagoProperties props;
 
@@ -55,8 +56,15 @@ public class SignatureVerifier {
             return false;
         }
 
+        // Se recorta el secreto porque los valores de entorno suelen pegarse con
+        // un CR/LF o espacios al final, que no forman parte del secreto real.
+        String secret = props.webhookSecret() == null ? "" : props.webhookSecret().strip();
+        if (secret.isEmpty()) {
+            log.warn("Webhook de Mercado Pago no verificable: el secreto configurado está vacío");
+            return false;
+        }
+
         String manifest = buildManifest(dataId, xRequestId, ts);
-        String secret = props.webhookSecret().strip();
         String expectedHex;
         try {
             expectedHex = hmacHex(manifest, secret);
@@ -67,13 +75,25 @@ public class SignatureVerifier {
 
         boolean valid = constantTimeEquals(expectedHex, v1);
         if (!valid) {
-            // Diagnóstico para poder distinguir secreto/manifiesto erróneos. NUNCA
-            // se loguea el secreto (ni parte de él), solo su longitud.
+            // Diagnóstico para distinguir secreto/manifiesto erróneos. Se omite el
+            // HMAC calculado (serviría de oráculo para falsificar firmas) y solo se
+            // muestra el largo del secreto. Todo valor controlado por quien llama
+            // se sanea antes de loguear.
             log.warn("Firma de webhook de Mercado Pago no coincide: ts={}, requestIdPresente={}, dataId={}, "
-                    + "manifest=[{}], v1Recibido={}, v1Calculado={}, largoSecreto={}",
-                ts, xRequestId != null && !xRequestId.isBlank(), dataId, manifest, v1, expectedHex, secret.length());
+                    + "manifest=[{}], v1Recibido={}, largoSecreto={}",
+                sanitize(ts), xRequestId != null && !xRequestId.isBlank(), sanitize(dataId),
+                sanitize(manifest), sanitize(v1), secret.length());
         }
         return valid;
+    }
+
+    /** Sin CR/LF ni caracteres de control y acotado, para no inyectar líneas en el log. */
+    private static String sanitize(String value) {
+        if (value == null) {
+            return null;
+        }
+        String clean = value.replaceAll("\\p{Cntrl}", "?");
+        return clean.length() > MAX_LOG_LENGTH ? clean.substring(0, MAX_LOG_LENGTH) + "..." : clean;
     }
 
     private Map<String, String> parseHeader(String xSignature) {

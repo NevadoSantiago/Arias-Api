@@ -51,14 +51,23 @@ public class MercadoPagoWebhookController {
     ) {
         String bodyDataId = payload != null && payload.data() != null ? payload.data().id() : null;
         boolean hasQueryId = queryDataId != null && !queryDataId.isBlank();
+        boolean hasBodyId = bodyDataId != null && !bodyDataId.isBlank();
+
+        // El id que se firma es el MISMO que se procesa: si query y cuerpo difieren,
+        // alguien podría reutilizar una firma válida para acreditar otro pago.
+        if (hasQueryId && hasBodyId && !queryDataId.equals(bodyDataId)) {
+            log.warn("Webhook de Mercado Pago con data.id distinto en query ({}) y cuerpo ({}) — rechazado",
+                sanitize(queryDataId), sanitize(bodyDataId));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
         // Mercado Pago firma con el data.id de la QUERY de la URL de notificación
         // (no el del cuerpo); el cuerpo queda como respaldo si la query no viene.
-        String signatureDataId = hasQueryId ? queryDataId : bodyDataId;
-        String dataId = bodyDataId != null && !bodyDataId.isBlank() ? bodyDataId : (hasQueryId ? queryDataId : null);
+        String dataId = hasQueryId ? queryDataId : bodyDataId;
 
         // Paso 1: validar la firma ANTES de cualquier otro trabajo — firma
         // inválida rechaza sin acreditar (diseño §Seguridad).
-        if (!paymentGateway.verifySignature(xSignature, xRequestId, signatureDataId)) {
+        if (!paymentGateway.verifySignature(xSignature, xRequestId, dataId)) {
             log.warn("Webhook de Mercado Pago con firma inválida — rechazado sin acreditar");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
@@ -76,5 +85,11 @@ public class MercadoPagoWebhookController {
 
         purchaseService.processPaymentNotification(dataId);
         return ResponseEntity.ok().build();
+    }
+
+    /** Sin CR/LF ni caracteres de control y acotado, para no inyectar líneas en el log. */
+    private static String sanitize(String value) {
+        String clean = value.replaceAll("\\p{Cntrl}", "?");
+        return clean.length() > 100 ? clean.substring(0, 100) + "..." : clean;
     }
 }

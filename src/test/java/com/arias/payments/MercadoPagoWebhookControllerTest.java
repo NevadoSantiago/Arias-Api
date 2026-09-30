@@ -189,11 +189,10 @@ class MercadoPagoWebhookControllerTest {
         when(paymentGateway.verifySignature(VALID_SIG, REQ_ID, "QUERY-ID-1")).thenReturn(true);
 
         ResponseEntity<Void> response = webhookController.receive(
-            VALID_SIG, REQ_ID, nonPaymentPayload("body-id-1"), "QUERY-ID-1");
+            VALID_SIG, REQ_ID, nonPaymentPayload(null), "QUERY-ID-1");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         verify(paymentGateway).verifySignature(VALID_SIG, REQ_ID, "QUERY-ID-1");
-        verify(paymentGateway, never()).verifySignature(VALID_SIG, REQ_ID, "body-id-1");
     }
 
     @Test
@@ -204,6 +203,76 @@ class MercadoPagoWebhookControllerTest {
         webhookController.receive(VALID_SIG, REQ_ID, nonPaymentPayload("body-id-2"), "  ");
 
         verify(paymentGateway, times(2)).verifySignature(VALID_SIG, REQ_ID, "body-id-2");
+    }
+
+    // ─── El id firmado es el id procesado ───────────────────────────────────
+
+    @Test
+    void queryYCuerpoIgualesProcesanEseId() {
+        User user = persistUser("same-ids");
+        CreditPack pack = persistPack("PACK", 10, 10_000L);
+        CreditPurchase purchase = createPackPurchase(user, pack);
+
+        String paymentId = "mp-payment-same";
+        when(paymentGateway.verifySignature(VALID_SIG, REQ_ID, paymentId)).thenReturn(true);
+        when(paymentGateway.getPayment(paymentId)).thenReturn(approvedSnapshot(purchase, paymentId));
+
+        ResponseEntity<Void> response = webhookController.receive(
+            VALID_SIG, REQ_ID, paymentPayload(paymentId), paymentId);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        verify(paymentGateway).verifySignature(VALID_SIG, REQ_ID, paymentId);
+        verify(paymentGateway).getPayment(paymentId);
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).hasSize(1);
+    }
+
+    @Test
+    void queryYCuerpoDistintosRechazaSinVerificarNiProcesar() {
+        User user = persistUser("different-ids");
+        CreditPack pack = persistPack("PACK", 10, 10_000L);
+        CreditPurchase purchase = createPackPurchase(user, pack);
+
+        when(paymentGateway.verifySignature(any(), any(), any())).thenReturn(true);
+        when(paymentGateway.getPayment("body-victim")).thenReturn(approvedSnapshot(purchase, "body-victim"));
+
+        ResponseEntity<Void> response = webhookController.receive(
+            VALID_SIG, REQ_ID, paymentPayload("body-victim"), "query-signed");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verify(paymentGateway, never()).verifySignature(any(), any(), any());
+        verify(paymentGateway, never()).getPayment(any());
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
+    }
+
+    @Test
+    void soloIdDelCuerpoVerificaYProcesaEseId() {
+        User user = persistUser("body-only");
+        CreditPack pack = persistPack("PACK", 10, 10_000L);
+        CreditPurchase purchase = createPackPurchase(user, pack);
+
+        String paymentId = "mp-payment-body-only";
+        when(paymentGateway.verifySignature(VALID_SIG, REQ_ID, paymentId)).thenReturn(true);
+        when(paymentGateway.getPayment(paymentId)).thenReturn(approvedSnapshot(purchase, paymentId));
+
+        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId), null);
+
+        verify(paymentGateway).verifySignature(VALID_SIG, REQ_ID, paymentId);
+        verify(paymentGateway).getPayment(paymentId);
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).hasSize(1);
+    }
+
+    @Test
+    void sinNingunIdVerificaConNullYNoProcesa() {
+        when(paymentGateway.verifySignature(any(), any(), any())).thenReturn(true);
+
+        ResponseEntity<Void> response = webhookController.receive(
+            VALID_SIG, REQ_ID, new MercadoPagoWebhookController.WebhookPayload("payment", "payment.created", null), null);
+
+        // Comportamiento actual: la firma se verifica con id null (el manifiesto omite `id:`)
+        // y, al no haber id, la notificación se ignora con 200.
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        verify(paymentGateway).verifySignature(VALID_SIG, REQ_ID, null);
+        verify(paymentGateway, never()).getPayment(any());
     }
 
     // ─── Redirección sola (sin webhook) ─────────────────────────────────────
