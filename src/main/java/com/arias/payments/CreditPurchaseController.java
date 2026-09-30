@@ -23,6 +23,7 @@ import java.util.UUID;
 public class CreditPurchaseController {
 
     private final CreditPurchaseService service;
+    private final PurchaseConfirmationService confirmationService;
 
     @PostMapping
     public CreditPurchaseCheckoutDto create(
@@ -46,5 +47,15 @@ public class CreditPurchaseController {
     @GetMapping("/{id}")
     public CreditPurchaseDto get(@AuthenticationPrincipal JwtUser user, @PathVariable UUID id) {
         return service.getPurchase(user.userId(), id);
+    }
+
+    /**
+     * Confirma con Mercado Pago una compra {@code PENDING} cuando el cliente
+     * vuelve del checkout. Con throttle; un error de Mercado Pago no falla el
+     * request, devuelve el estado actual.
+     */
+    @PostMapping("/{id}/confirm")
+    public CreditPurchaseDto confirm(@AuthenticationPrincipal JwtUser user, @PathVariable UUID id) {
+        return confirmationService.confirm(user.userId(), id);
     }
 }

@@ -228,21 +228,7 @@ public class PaymentReconciliationScheduler {
         return true;
     }
 
-    /**
-     * Unidad B15.1: entre todos los pagos de la compra prefiere uno aprobado
-     * (el reintento con otra tarjeta puede venir detrás de un rechazo, en
-     * cualquier orden); si no hay ninguno aprobado, el más reciente. La
-     * pasarela los devuelve del más reciente al más viejo. {@code null} si no
-     * hay ningún pago.
-     */
     private PaymentSnapshot lookupBestSnapshot(UUID purchaseId) {
-        List<PaymentSnapshot> snapshots = paymentGateway.findRecentByExternalReference(purchaseId.toString());
-        if (snapshots == null || snapshots.isEmpty()) {
-            return null;
-        }
-        return snapshots.stream()
-            .filter(s -> s.status() == PaymentStatus.APPROVED)
-            .findFirst()
-            .orElse(snapshots.get(0));
+        return PaymentSnapshotSelector.best(paymentGateway.findRecentByExternalReference(purchaseId.toString()));
     }
 }
