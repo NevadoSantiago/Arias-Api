@@ -75,6 +75,27 @@ class AuthServiceTest {
     }
 
     @Test
+    @DisplayName("me(): an admin without phone or nickname is not sent to complete-profile")
+    void meNoPideCompletarPerfilAUnAdmin() {
+        User admin = userRepo.save(User.builder()
+            .email("admin-" + System.nanoTime() + "@test.arias.com")
+            .passwordHash(passwordEncoder.encode("clave-segura-123"))
+            .role(Role.SUPER_ADMIN)
+            .active(true)
+            .build());
+
+        assertThat(authService.me(admin.getId()).profileComplete()).isTrue();
+    }
+
+    @Test
+    @DisplayName("me(): a B2C customer without phone or nickname must complete the profile")
+    void mePideCompletarPerfilAUnB2cIncompleto() {
+        User b2c = saveUser(null, "Ana", "Perez");
+
+        assertThat(authService.me(b2c.getId()).profileComplete()).isFalse();
+    }
+
+    @Test
     void completeProfileGuardaElCelularDeDiezDigitosConPrefijo549() {
         User user = saveUser(null, "Ana", "Perez");
 

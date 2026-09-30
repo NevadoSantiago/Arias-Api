@@ -175,6 +175,16 @@ public class User {
      */
     @Transient
     public boolean mustCompleteProfileToSpend() {
-        return company == null && !isProfileComplete();
+        return isSelfRegisteredCustomer() && !isProfileComplete();
+    }
+
+    /**
+     * B2C autorregistrado: rol {@code EMPLOYEE} y sin empresa. Los admins
+     * (también sin empresa) y los usuarios de empresa nunca pasan por el
+     * autorregistro, así que jamás se les exige completar el perfil.
+     */
+    @Transient
+    public boolean isSelfRegisteredCustomer() {
+        return role == Role.EMPLOYEE && company == null;
     }
 }
