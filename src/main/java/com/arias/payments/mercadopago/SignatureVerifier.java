@@ -56,15 +56,24 @@ public class SignatureVerifier {
         }
 
         String manifest = buildManifest(dataId, xRequestId, ts);
+        String secret = props.webhookSecret().strip();
         String expectedHex;
         try {
-            expectedHex = hmacHex(manifest);
+            expectedHex = hmacHex(manifest, secret);
         } catch (NoSuchAlgorithmException | InvalidKeyException e) {
             log.error("No se pudo calcular el HMAC del webhook de Mercado Pago", e);
             return false;
         }
 
-        return constantTimeEquals(expectedHex, v1);
+        boolean valid = constantTimeEquals(expectedHex, v1);
+        if (!valid) {
+            // Diagnóstico para poder distinguir secreto/manifiesto erróneos. NUNCA
+            // se loguea el secreto (ni parte de él), solo su longitud.
+            log.warn("Firma de webhook de Mercado Pago no coincide: ts={}, requestIdPresente={}, dataId={}, "
+                    + "manifest=[{}], v1Recibido={}, v1Calculado={}, largoSecreto={}",
+                ts, xRequestId != null && !xRequestId.isBlank(), dataId, manifest, v1, expectedHex, secret.length());
+        }
+        return valid;
     }
 
     private Map<String, String> parseHeader(String xSignature) {
@@ -95,9 +104,9 @@ public class SignatureVerifier {
         return manifest.toString();
     }
 
-    private String hmacHex(String manifest) throws NoSuchAlgorithmException, InvalidKeyException {
+    private String hmacHex(String manifest, String secret) throws NoSuchAlgorithmException, InvalidKeyException {
         Mac mac = Mac.getInstance(HMAC_ALGORITHM);
-        mac.init(new SecretKeySpec(props.webhookSecret().getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM));
+        mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM));
         byte[] hash = mac.doFinal(manifest.getBytes(StandardCharsets.UTF_8));
         return HexFormat.of().formatHex(hash);
     }

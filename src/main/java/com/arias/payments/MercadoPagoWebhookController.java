@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -45,13 +46,19 @@ public class MercadoPagoWebhookController {
     public ResponseEntity<Void> receive(
         @RequestHeader(value = "x-signature", required = false) String xSignature,
         @RequestHeader(value = "x-request-id", required = false) String xRequestId,
-        @RequestBody(required = false) WebhookPayload payload
+        @RequestBody(required = false) WebhookPayload payload,
+        @RequestParam(value = "data.id", required = false) String queryDataId
     ) {
-        String dataId = payload != null && payload.data() != null ? payload.data().id() : null;
+        String bodyDataId = payload != null && payload.data() != null ? payload.data().id() : null;
+        boolean hasQueryId = queryDataId != null && !queryDataId.isBlank();
+        // Mercado Pago firma con el data.id de la QUERY de la URL de notificación
+        // (no el del cuerpo); el cuerpo queda como respaldo si la query no viene.
+        String signatureDataId = hasQueryId ? queryDataId : bodyDataId;
+        String dataId = bodyDataId != null && !bodyDataId.isBlank() ? bodyDataId : (hasQueryId ? queryDataId : null);
 
         // Paso 1: validar la firma ANTES de cualquier otro trabajo — firma
         // inválida rechaza sin acreditar (diseño §Seguridad).
-        if (!paymentGateway.verifySignature(xSignature, xRequestId, dataId)) {
+        if (!paymentGateway.verifySignature(xSignature, xRequestId, signatureDataId)) {
             log.warn("Webhook de Mercado Pago con firma inválida — rechazado sin acreditar");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }

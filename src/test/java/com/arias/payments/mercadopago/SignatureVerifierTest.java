@@ -68,6 +68,18 @@ class SignatureVerifierTest {
     }
 
     @Test
+    void secretWithSurroundingWhitespaceStillVerifies() {
+        String dataId = "123456789";
+        String requestId = "req-abc-123";
+        String ts = "1700000000000";
+        String header = signedHeader(dataId, requestId, ts, SECRET);
+        SignatureVerifier padded = new SignatureVerifier(
+            new MercadoPagoProperties("token", "  " + SECRET + "\r\n", true, 5_000, 5_000, 10_000));
+
+        assertThat(padded.verify(header, requestId, dataId)).isTrue();
+    }
+
+    @Test
     void malformedHeaderIsRejected() {
         assertThat(verifier.verify("not-a-valid-signature-header", "req-1", "123")).isFalse();
         assertThat(verifier.verify("ts=1700000000000", "req-1", "123")).isFalse(); // falta v1

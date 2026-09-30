@@ -31,6 +31,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -149,6 +152,12 @@ class MercadoPagoWebhookControllerTest {
             purchase.getAmountCents(), "ARS", purchase.getId().toString(), 0L);
     }
 
+    // Tipo distinto de "payment": el webhook responde 200 tras validar la firma, sin procesar la compra.
+    private MercadoPagoWebhookController.WebhookPayload nonPaymentPayload(String dataId) {
+        return new MercadoPagoWebhookController.WebhookPayload(
+            "merchant_order", "merchant_order.updated", new MercadoPagoWebhookController.WebhookPayload.Data(dataId));
+    }
+
     private MercadoPagoWebhookController.WebhookPayload paymentPayload(String paymentId) {
         return new MercadoPagoWebhookController.WebhookPayload(
             "payment", "payment.updated", new MercadoPagoWebhookController.WebhookPayload.Data(paymentId));
@@ -165,12 +174,36 @@ class MercadoPagoWebhookControllerTest {
         when(paymentGateway.verifySignature(anyString(), anyString(), anyString())).thenReturn(false);
 
         ResponseEntity<Void> response = webhookController.receive(
-            "bad-signature", REQ_ID, paymentPayload("mp-payment-1"));
+            "bad-signature", REQ_ID, paymentPayload("mp-payment-1"), null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(purchaseRepo.findById(purchase.getId()).orElseThrow().getStatus())
             .isEqualTo(CreditPurchaseStatus.PENDING);
         assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
+    }
+
+    // ─── data.id de la query para la firma ──────────────────────────────────
+
+    @Test
+    void verificaFirmaConElDataIdDeLaQueryCuandoEstaPresente() {
+        when(paymentGateway.verifySignature(VALID_SIG, REQ_ID, "QUERY-ID-1")).thenReturn(true);
+
+        ResponseEntity<Void> response = webhookController.receive(
+            VALID_SIG, REQ_ID, nonPaymentPayload("body-id-1"), "QUERY-ID-1");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        verify(paymentGateway).verifySignature(VALID_SIG, REQ_ID, "QUERY-ID-1");
+        verify(paymentGateway, never()).verifySignature(VALID_SIG, REQ_ID, "body-id-1");
+    }
+
+    @Test
+    void verificaFirmaConElDataIdDelCuerpoCuandoNoHayQuery() {
+        when(paymentGateway.verifySignature(VALID_SIG, REQ_ID, "body-id-2")).thenReturn(true);
+
+        webhookController.receive(VALID_SIG, REQ_ID, nonPaymentPayload("body-id-2"), null);
+        webhookController.receive(VALID_SIG, REQ_ID, nonPaymentPayload("body-id-2"), "  ");
+
+        verify(paymentGateway, times(2)).verifySignature(VALID_SIG, REQ_ID, "body-id-2");
     }
 
     // ─── Redirección sola (sin webhook) ─────────────────────────────────────
@@ -201,8 +234,8 @@ class MercadoPagoWebhookControllerTest {
         when(paymentGateway.verifySignature(anyString(), anyString(), anyString())).thenReturn(true);
         when(paymentGateway.getPayment(paymentId)).thenReturn(approvedSnapshot(purchase, paymentId));
 
-        ResponseEntity<Void> first = webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId));
-        ResponseEntity<Void> second = webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId));
+        ResponseEntity<Void> first = webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId), null);
+        ResponseEntity<Void> second = webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId), null);
 
         assertThat(first.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(second.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -230,7 +263,7 @@ class MercadoPagoWebhookControllerTest {
         when(paymentGateway.verifySignature(anyString(), anyString(), anyString())).thenReturn(true);
         when(paymentGateway.getPayment(paymentId)).thenReturn(approvedSnapshot(purchase, paymentId));
 
-        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId));
+        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId), null);
 
         List<CreditMovement> movements = movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId());
         assertThat(movements).hasSize(1);
@@ -257,7 +290,7 @@ class MercadoPagoWebhookControllerTest {
             paymentId, PaymentStatus.APPROVED, "accredited",
             purchase.getAmountCents() - 1, "ARS", purchase.getId().toString(), 0L));
 
-        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId));
+        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId), null);
 
         assertThat(purchaseRepo.findById(purchase.getId()).orElseThrow().getStatus())
             .isEqualTo(CreditPurchaseStatus.PENDING);
@@ -277,7 +310,7 @@ class MercadoPagoWebhookControllerTest {
 
         // 1) aprobado — acredita 10 créditos.
         when(paymentGateway.getPayment(paymentId)).thenReturn(approvedSnapshot(purchase, paymentId));
-        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId));
+        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId), null);
 
         CreditWallet walletAfterCredit = walletRepo.findById(user.getId()).orElseThrow();
         assertThat(walletAfterCredit.getAvailable()).isEqualTo(10);
@@ -287,7 +320,7 @@ class MercadoPagoWebhookControllerTest {
         when(paymentGateway.getPayment(paymentId)).thenReturn(new PaymentSnapshot(
             paymentId, PaymentStatus.APPROVED, "accredited",
             purchase.getAmountCents(), "ARS", purchase.getId().toString(), 5_000L));
-        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId));
+        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId), null);
 
         List<CreditMovement> movements = movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId());
         assertThat(movements).hasSize(2);
@@ -304,7 +337,7 @@ class MercadoPagoWebhookControllerTest {
 
         // 3) un segundo webhook con el MISMO reembolso acumulado (retry de Mercado
         // Pago) no debe revertir una segunda vez — el delta ya es 0.
-        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId));
+        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId), null);
         assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).hasSize(2);
 
         // 4) el reembolso avanza al 100% — revierte el delta restante (5 más), nunca
@@ -312,7 +345,7 @@ class MercadoPagoWebhookControllerTest {
         when(paymentGateway.getPayment(paymentId)).thenReturn(new PaymentSnapshot(
             paymentId, PaymentStatus.REFUNDED, "refunded",
             purchase.getAmountCents(), "ARS", purchase.getId().toString(), 10_000L));
-        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId));
+        webhookController.receive(VALID_SIG, REQ_ID, paymentPayload(paymentId), null);
 
         List<CreditMovement> finalMovements = movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId());
         assertThat(finalMovements).hasSize(3);
