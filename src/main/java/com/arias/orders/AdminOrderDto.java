@@ -1,6 +1,7 @@
 package com.arias.orders;
 
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -81,16 +82,32 @@ public record AdminOrderDto(
      * usuario no tiene apodo (caso del empleado de empresa, que no pasa por
      * el autorregistro B2C).
      */
-    public record PickupOrderDto(Long id, String customerNickname, List<PickupOrderItemDto> items, String notas) {
+    public record PickupOrderDto(
+        Long id,
+        String customerNickname,
+        List<PickupOrderItemDto> items,
+        String notas,
+        OrderEstado estado,
+        Instant pickupAt,
+        Instant comandadoAt,
+        Instant deliveredAt
+    ) {
         public static PickupOrderDto from(Order order) {
             return new PickupOrderDto(
                 order.getId(),
                 order.getUser().displayName(),
                 order.getItems().stream().map(PickupOrderItemDto::from).toList(),
-                order.getNotas()
+                order.getNotas(),
+                order.getEstado(),
+                order.getPickupAt(),
+                order.getComandadoAt(),
+                order.getDeliveredAt()
             );
         }
     }
+
+    /** Body of the batch kitchen-state endpoints. */
+    public record KitchenBatchRequest(List<Long> orderIds) {}
 
     /** Un horario de retiro con todos los pedidos que caen en él, ordenados por horario ascendente. */
     public record PickupGroupDto(LocalTime pickupTime, List<PickupOrderDto> orders) {

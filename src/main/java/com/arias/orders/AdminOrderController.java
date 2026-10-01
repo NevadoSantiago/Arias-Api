@@ -50,6 +50,7 @@ public class AdminOrderController {
     private final CompanyRepository companyRepo;
     private final OrderService orderService;
     private final OrderExportService orderExportService;
+    private final OrderKitchenService orderKitchenService;
     private final Clock clock;
 
     /**
@@ -120,6 +121,43 @@ public class AdminOrderController {
         List<Order> orders = orderRepository.findByFechaAndEstadoNotInOrderByPickupAtAsc(
             target, KITCHEN_ESTADOS_EXCLUIDOS);
         return AdminOrderDto.PickupGroupDto.groupByPickup(orders, ZONE);
+    }
+
+    /** CONFIRMADO -> COMANDADO for one B2C order. */
+    @PutMapping("/{id}/comandado")
+    @Transactional
+    public AdminOrderDto.PickupOrderDto markComandado(@PathVariable Long id) {
+        return AdminOrderDto.PickupOrderDto.from(orderKitchenService.markComandado(List.of(id)).get(0));
+    }
+
+    /** CONFIRMADO -> COMANDADO for several B2C orders, all or nothing. */
+    @PutMapping("/comandado")
+    @Transactional
+    public List<AdminOrderDto.PickupOrderDto> markComandadoBatch(@RequestBody AdminOrderDto.KitchenBatchRequest req) {
+        return orderKitchenService.markComandado(req.orderIds()).stream()
+            .map(AdminOrderDto.PickupOrderDto::from).toList();
+    }
+
+    /** COMANDADO -> ENTREGADO for one B2C order. */
+    @PutMapping("/{id}/entregado")
+    @Transactional
+    public AdminOrderDto.PickupOrderDto markEntregado(@PathVariable Long id) {
+        return AdminOrderDto.PickupOrderDto.from(orderKitchenService.markEntregado(List.of(id)).get(0));
+    }
+
+    /** COMANDADO -> ENTREGADO for several B2C orders, all or nothing. */
+    @PutMapping("/entregado")
+    @Transactional
+    public List<AdminOrderDto.PickupOrderDto> markEntregadoBatch(@RequestBody AdminOrderDto.KitchenBatchRequest req) {
+        return orderKitchenService.markEntregado(req.orderIds()).stream()
+            .map(AdminOrderDto.PickupOrderDto::from).toList();
+    }
+
+    /** One-step undo: COMANDADO -> CONFIRMADO, ENTREGADO -> COMANDADO. */
+    @PutMapping("/{id}/undo")
+    @Transactional
+    public AdminOrderDto.PickupOrderDto undoKitchenState(@PathVariable Long id) {
+        return AdminOrderDto.PickupOrderDto.from(orderKitchenService.undo(id));
     }
 
     /**

@@ -214,6 +214,53 @@ class AdminOrderControllerTest {
             .build());
     }
 
+    // ─── Estados de cocina (comandado / entregado / deshacer) ──
+
+    @Test
+    @DisplayName("getOrdersByPickup(): expone estado, pickupAt, comandadoAt y deliveredAt")
+    void getOrdersByPickupExposeEstadoYTimestamps() {
+        Dish dish = persistDish(persistCategory(2), persistMenuSection());
+        Instant pickup = FIXED_NOW.plus(60, ChronoUnit.MINUTES);
+        Order o = persistOrder(persistB2cUser("Coty"), dish, pickup, OrderEstado.COMANDADO, null);
+        o.setComandadoAt(FIXED_NOW);
+        orderRepo.save(o);
+
+        AdminOrderDto.PickupOrderDto row = controller.getOrdersByPickup(TODAY).get(0).orders().get(0);
+
+        assertThat(row.estado()).isEqualTo(OrderEstado.COMANDADO);
+        assertThat(row.pickupAt()).isEqualTo(pickup);
+        assertThat(row.comandadoAt()).isEqualTo(FIXED_NOW);
+        assertThat(row.deliveredAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("comandado/entregado/undo: el controller recorre el ciclo completo")
+    void kitchenStateCycleThroughController() {
+        Dish dish = persistDish(persistCategory(2), persistMenuSection());
+        Order o = persistOrder(persistB2cUser("Coty"), dish,
+            FIXED_NOW.plus(60, ChronoUnit.MINUTES), OrderEstado.CONFIRMADO, null);
+
+        assertThat(controller.markComandado(o.getId()).estado()).isEqualTo(OrderEstado.COMANDADO);
+        assertThat(controller.markEntregado(o.getId()).estado()).isEqualTo(OrderEstado.ENTREGADO);
+        assertThat(controller.undoKitchenState(o.getId()).estado()).isEqualTo(OrderEstado.COMANDADO);
+        assertThat(controller.undoKitchenState(o.getId()).estado()).isEqualTo(OrderEstado.CONFIRMADO);
+    }
+
+    @Test
+    @DisplayName("comandado/entregado en lote: devuelve los pedidos actualizados")
+    void kitchenBatchThroughController() {
+        Dish dish = persistDish(persistCategory(2), persistMenuSection());
+        Instant pickup = FIXED_NOW.plus(60, ChronoUnit.MINUTES);
+        Order a = persistOrder(persistB2cUser("Coty"), dish, pickup, OrderEstado.CONFIRMADO, null);
+        Order b = persistOrder(persistB2cUser("Fede"), dish, pickup, OrderEstado.CONFIRMADO, null);
+        var req = new AdminOrderDto.KitchenBatchRequest(List.of(a.getId(), b.getId()));
+
+        assertThat(controller.markComandadoBatch(req))
+            .hasSize(2).allMatch(r -> r.estado() == OrderEstado.COMANDADO);
+        assertThat(controller.markEntregadoBatch(req))
+            .hasSize(2).allMatch(r -> r.estado() == OrderEstado.ENTREGADO);
+    }
+
     // ─── Listado agrupado por horario de retiro (spec: "Listado agrupado por horario") ──
 
     @Test

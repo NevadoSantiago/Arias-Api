@@ -26,6 +26,11 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     List<Order> findByUserIdAndFecha(Long userId, LocalDate fecha);
 
+    /** Locks the given orders ({@code SELECT ... FOR UPDATE}) for the kitchen state transitions. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT o FROM Order o WHERE o.id IN :ids")
+    List<Order> findAllByIdInForUpdate(@Param("ids") Collection<Long> ids);
+
     /** Para validar propiedad antes de cancelar — evita el patrón findById + chequeo manual. */
     Optional<Order> findByIdAndUserId(Long id, Long userId);
 
