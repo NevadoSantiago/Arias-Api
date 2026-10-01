@@ -92,6 +92,22 @@ class RestaurantConfigControllerTest {
     }
 
     @Test
+    @DisplayName("update(): sin dailySummaryTime en el request conserva el horario ya guardado")
+    void updateSinDailySummaryTimeConservaElValorGuardado() {
+        controller.update(validRequest()); // deja 07:45 guardado
+
+        UpdateRestaurantConfigRequest withoutSummary = new UpdateRestaurantConfigRequest(
+            LocalTime.of(9, 30), 30, 60,
+            LocalTime.of(12, 0), LocalTime.of(16, 0),
+            20, null, 15
+        );
+        RestaurantConfigDto updated = controller.update(withoutSummary);
+
+        assertThat(updated.dailySummaryTime()).isEqualTo(LocalTime.of(7, 45));
+        assertThat(repo.getSingleton().getDailySummaryTime()).isEqualTo(LocalTime.of(7, 45));
+    }
+
+    @Test
     @DisplayName("update(): rechaza cuando la ventana de retiro abre después de (o igual a) cuando cierra, sin persistir nada")
     void updateRechazaVentanaInvalida() {
         LocalTime originalStart = repo.getSingleton().getPickupWindowStart();

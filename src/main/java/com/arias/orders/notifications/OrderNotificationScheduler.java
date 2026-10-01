@@ -8,6 +8,7 @@ import com.arias.users.User;
 import com.arias.users.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -66,12 +67,25 @@ public class OrderNotificationScheduler {
     private final Clock clock;
 
     /**
+     * Interruptor del resumen matutino de cocina. Apagado por defecto: se
+     * dejó de enviar por ahora, pero el job, el mail y la columna {@code
+     * daily_summary_time} se conservan para reactivarlo con
+     * {@code ARIAS_NOTIFICATIONS_DAILY_SUMMARY_ENABLED=true}, sin redeploy
+     * de código. No afecta a la alerta de cancelación ni al recordatorio de retiro.
+     */
+    @Value("${arias.notifications.daily-summary.enabled:false}")
+    private boolean dailySummaryEnabled;
+
+    /**
      * Resumen matutino — chequea cada 5 minutos si cae en la ventana
      * {@code [daily_summary_time, daily_summary_time + 5min)}, igual patrón
      * que {@code OrderReminderScheduler.runIfDue}.
      */
     @Scheduled(cron = "0 */5 * * * *", zone = ZONE)
     public void sendDailySummaryIfDue() {
+        if (!dailySummaryEnabled) {
+            return;
+        }
         LocalDate today = LocalDate.now(clock);
         LocalTime now = LocalTime.now(clock);
 

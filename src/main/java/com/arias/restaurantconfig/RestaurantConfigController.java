@@ -52,7 +52,9 @@ public class RestaurantConfigController {
         config.setPickupWindowStart(req.pickupWindowStart());
         config.setPickupWindowEnd(req.pickupWindowEnd());
         config.setPickupSlotMinutes(req.pickupSlotMinutes());
-        config.setDailySummaryTime(req.dailySummaryTime());
+        if (req.dailySummaryTime() != null) {
+            config.setDailySummaryTime(req.dailySummaryTime());
+        }
         config.setPickupReminderMinutes(req.pickupReminderMinutes());
         repo.save(config);
         return RestaurantConfigDto.from(config, pickupScheduleDtos());

@@ -30,6 +30,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.util.AopTestUtils;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -57,7 +59,10 @@ import static org.mockito.Mockito.verify;
  * mockeado. {@code OrderReminderScheduler} (recordatorio B2B) NO se toca ni
  * se testea acá.
  */
-@SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
+@SpringBootTest(properties = {
+    "spring.main.allow-bean-definition-overriding=true",
+    "arias.notifications.daily-summary.enabled=true"
+})
 @Transactional
 @RecordApplicationEvents
 @Import(OrderNotificationSchedulerTest.FixedClockConfig.class)
@@ -184,6 +189,26 @@ class OrderNotificationSchedulerTest {
         scheduler.sendDailySummaryIfDue(); // segundo tick del mismo cron, mismo día
 
         verify(emailService, times(1)).send(eq(admin.getEmail()), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("sendDailySummaryIfDue(): con el resumen deshabilitado (default de producción) no envía nada ni reclama el slot")
+    void resumenMatutinoDeshabilitadoNoEnviaNada() {
+        persistSuperAdmin();
+        User customer = persistCustomer();
+        persistOrder(customer, FIXED_NOW.plus(2, ChronoUnit.HOURS), OrderEstado.PENDIENTE, 1);
+        // El scheduler es un proxy (tiene un método @Transactional): se toca el target real.
+        OrderNotificationScheduler target = AopTestUtils.getUltimateTargetObject(scheduler);
+        ReflectionTestUtils.setField(target, "dailySummaryEnabled", false);
+        try {
+            scheduler.sendDailySummaryIfDue();
+        } finally {
+            ReflectionTestUtils.setField(target, "dailySummaryEnabled", true); // el bean es compartido entre tests
+        }
+
+        verify(emailService, never()).send(anyString(), anyString(), anyString());
+        assertThat(runLogRepo.existsById(new NotificationRunLogId("DAILY_SUMMARY", LocalDate.of(2026, 3, 10))))
+            .isFalse();
     }
 
     // ─── Alerta de cancelación ──────────────────────────────────────────────

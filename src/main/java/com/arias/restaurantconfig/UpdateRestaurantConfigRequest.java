@@ -18,6 +18,7 @@ public record UpdateRestaurantConfigRequest(
     @NotNull LocalTime pickupWindowStart,
     @NotNull LocalTime pickupWindowEnd,
     @NotNull @Positive Integer pickupSlotMinutes,
-    @NotNull LocalTime dailySummaryTime,
+    /** Opcional: el resumen matutino está desactivado; si falta se conserva el horario guardado. */
+    LocalTime dailySummaryTime,
     @NotNull @Positive Integer pickupReminderMinutes
 ) {}
