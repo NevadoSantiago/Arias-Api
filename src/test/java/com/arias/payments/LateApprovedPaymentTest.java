@@ -145,7 +145,7 @@ class LateApprovedPaymentTest {
     /** Pedido de 2 almuerzos (costo 2) con paquete DAY de 2 créditos a 3000 centavos. */
     private DirectCheckoutDto givenDirectCheckout() {
         packRepo.save(CreditPack.builder()
-            .code("DAY").nombre("Día").creditAmount(2).priceCents(3_000L)
+            .code("DAY").packType(com.arias.credits.packs.CreditPackType.INDIVIDUAL).nombre("Día").creditAmount(2).priceCents(3_000L)
             .discountPercent(0).ordenDisplay(0).enabled(true).build());
         Category category = categoryRepo.save(Category.builder()
             .nombre("Categoria-" + System.nanoTime()).ordenDisplay(0).enabled(true).creditCost(2).build());

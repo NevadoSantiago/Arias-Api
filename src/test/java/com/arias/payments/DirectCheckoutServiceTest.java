@@ -144,7 +144,7 @@ class DirectCheckoutServiceTest {
 
     private CreditPack persistDayPack(int creditAmount, long priceCents) {
         return packRepo.save(CreditPack.builder()
-            .code("DAY")
+            .code("DAY").packType(com.arias.credits.packs.CreditPackType.INDIVIDUAL)
             .nombre("Día")
             .creditAmount(creditAmount)
             .priceCents(priceCents)

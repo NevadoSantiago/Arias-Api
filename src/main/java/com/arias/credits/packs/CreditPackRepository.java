@@ -15,13 +15,15 @@ public interface CreditPackRepository extends JpaRepository<CreditPack, Long> {
     /** Listado admin — incluye deshabilitados, excluye borrados. */
     List<CreditPack> findAllByDeletedAtIsNullOrderByOrdenDisplayAsc();
 
+    /** ¿Hay un paquete vivo (no borrado) de este tipo? Para INDIVIDUAL/SUGERIDO, único. */
+    boolean existsByPackTypeAndDeletedAtIsNull(CreditPackType packType);
+
     /**
-     * Paquete DAY habilitado — usado por {@code CreditPurchaseService} para
+     * Paquete INDIVIDUAL habilitado — usado por {@code CreditPurchaseService} para
      * derivar el precio por crédito de una compra directa (unidad 11, ver
      * nota de deviación en {@code tasks.md} 11.3): al no existir una tarifa
-     * de créditos independiente del catálogo de paquetes, el paquete DAY —
-     * la denominación más chica — es la única fuente de precio unitario
-     * disponible en el diseño.
+     * de créditos independiente del catálogo de paquetes, el paquete
+     * INDIVIDUAL es la fuente de precio unitario.
      */
-    Optional<CreditPack> findByCodeAndDeletedAtIsNullAndEnabledTrue(String code);
+    Optional<CreditPack> findByPackTypeAndDeletedAtIsNullAndEnabledTrue(CreditPackType packType);
 }

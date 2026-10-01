@@ -7,6 +7,7 @@ import com.arias.credits.MovementRef;
 import com.arias.credits.MovementType;
 import com.arias.credits.packs.CreditPack;
 import com.arias.credits.packs.CreditPackRepository;
+import com.arias.credits.packs.CreditPackType;
 import com.arias.orders.Order;
 import com.arias.orders.OrderEstado;
 import com.arias.orders.OrderPlacementService;
@@ -38,8 +39,8 @@ import java.util.UUID;
  * original, documentada acá porque no hay una tarifa de créditos
  * independiente del catálogo de paquetes): el precio unitario de una compra
  * directa se deriva de {@code price_cents / credit_amount} del paquete
- * {@code DAY} habilitado (la denominación más chica) — el administrador
- * DEBE configurar un paquete con {@code code = "DAY"} para que la compra
+ * {@code INDIVIDUAL} habilitado (la denominación más chica) — el administrador
+ * DEBE configurar un paquete con {@code packType = INDIVIDUAL} para que la compra
  * directa esté disponible; si no existe, el endpoint responde 503 en vez de
  * adivinar un precio. Requiere confirmación de producto (ver `tasks.md`
  * unidad 11.3 y "Puntos abiertos" de `design.md`).
@@ -49,7 +50,6 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class CreditPurchaseService {
 
-    private static final String DAY_PACK_CODE = "DAY";
     private static final String WEBHOOK_PATH = "/api/webhooks/mercadopago";
 
     private final CreditPurchaseRepository purchaseRepo;
@@ -147,7 +147,7 @@ public class CreditPurchaseService {
             .filter(p -> p.getDeletedAt() == null && Boolean.TRUE.equals(p.getEnabled()))
             .orElseThrow(() -> BusinessException.notFound("credit-pack-not-found",
                 "Paquete de créditos no encontrado"));
-        // Sueltos sobre el pack DAY (decisión de usuario 2026-09-25): quantity
+        // Sueltos sobre el pack INDIVIDUAL (decisión de usuario 2026-09-25): quantity
         // opcional (1..10, validado en CreatePurchaseRequest); null equivale a 1.
         int quantity = req.quantity() != null ? req.quantity() : 1;
         int creditAmount = pack.getCreditAmount() * quantity;
@@ -197,12 +197,12 @@ public class CreditPurchaseService {
      * pedían el mismo plato y podía agotar el pool. Ahora:
      * <ol>
      *   <li><b>Fase 1 (transacción corta, se commitea ANTES de la red):</b>
-     *       busca el paquete {@code DAY} (fail fast: 503 sin haber tocado
+     *       busca el paquete {@code INDIVIDUAL} (fail fast: 503 sin haber tocado
      *       {@code orders}/stock), crea el pedido en {@link
      *       OrderEstado#PENDIENTE_PAGO} reservando stock y los almuerzos
      *       disponibles del saldo ({@link
      *       OrderPlacementService#placeAwaitingPayment}, B13), calcula el
-     *       importe (precio del {@code DAY} × créditos que el saldo NO cubrió)
+     *       importe (precio del {@code INDIVIDUAL} × créditos que el saldo NO cubrió)
      *       e inserta la compra {@code PENDING} sin preferencia. Al commitear
      *       se sueltan todos los locks.</li>
      *   <li><b>Fase 2 (SIN transacción):</b> {@link
@@ -883,10 +883,10 @@ public class CreditPurchaseService {
     // ─── helpers ────────────────────────────────────────────────────────────
 
     private CreditPack findEnabledDayPackOrThrow() {
-        return packRepo.findByCodeAndDeletedAtIsNullAndEnabledTrue(DAY_PACK_CODE)
+        return packRepo.findByPackTypeAndDeletedAtIsNullAndEnabledTrue(CreditPackType.INDIVIDUAL)
             .orElseThrow(() -> new BusinessException(HttpStatus.SERVICE_UNAVAILABLE,
                 "direct-purchase-unavailable",
-                "La compra directa no está disponible — falta configurar el paquete DAY"));
+                "La compra directa no está disponible — falta configurar el paquete INDIVIDUAL"));
     }
 
     /** Redondeo hacia arriba: nunca cobrar de menos por truncamiento. */

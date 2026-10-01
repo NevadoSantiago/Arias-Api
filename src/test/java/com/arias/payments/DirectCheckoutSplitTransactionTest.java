@@ -173,11 +173,11 @@ class DirectCheckoutSplitTransactionTest {
         // La base de tests es compartida: nunca se asume que el pack DAY no exista. Se
         // reutiliza el habilitado (el mismo que resuelve el servicio) y solo se crea
         // —y luego se borra— si no había ninguno.
-        CreditPack pack = packRepo.findByCodeAndDeletedAtIsNullAndEnabledTrue("DAY").orElse(null);
+        CreditPack pack = packRepo.findByPackTypeAndDeletedAtIsNullAndEnabledTrue(com.arias.credits.packs.CreditPackType.INDIVIDUAL).orElse(null);
         packCreatedByTest = pack == null;
         if (packCreatedByTest) {
             pack = packRepo.save(CreditPack.builder()
-                .code("DAY").nombre("Día").creditAmount(2).priceCents(3_000L)
+                .code("DAY").packType(com.arias.credits.packs.CreditPackType.INDIVIDUAL).nombre("Día").creditAmount(2).priceCents(3_000L)
                 .discountPercent(0).ordenDisplay(0).enabled(true).build());
         }
         // Mismo redondeo hacia arriba que CreditPurchaseService.unitPriceCentsFor.

@@ -3,6 +3,7 @@ package com.arias.credits.packs;
 public record CreditPackDto(
     Long id,
     String code,
+    CreditPackType packType,
     String nombre,
     Integer creditAmount,
     Long priceCents,
@@ -14,6 +15,7 @@ public record CreditPackDto(
         return new CreditPackDto(
             pack.getId(),
             pack.getCode(),
+            pack.getPackType(),
             pack.getNombre(),
             pack.getCreditAmount(),
             pack.getPriceCents(),

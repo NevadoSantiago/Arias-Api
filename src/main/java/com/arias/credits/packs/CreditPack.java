@@ -29,9 +29,15 @@ public class CreditPack {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** DAY | WEEK | MONTH — identificador estable, no editable desde el panel. */
+    /** Identificador interno estable, no editable. El comportamiento lo da {@link #packType}, no el código. */
     @Column(nullable = false, length = 20, unique = true)
     private String code;
+
+    /** Tipo de paquete — no editable tras la creación. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "pack_type", nullable = false, length = 12)
+    @Builder.Default
+    private CreditPackType packType = CreditPackType.OTRO;
 
     @Column(nullable = false, length = 100)
     private String nombre;
