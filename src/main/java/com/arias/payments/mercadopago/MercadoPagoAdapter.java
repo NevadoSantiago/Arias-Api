@@ -18,6 +18,7 @@ import com.mercadopago.exceptions.MPException;
 import com.mercadopago.net.MPResultsResourcesPage;
 import com.mercadopago.net.MPSearchRequest;
 import com.mercadopago.resources.payment.Payment;
+import com.mercadopago.resources.payment.PaymentFeeDetail;
 import com.mercadopago.resources.preference.Preference;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -201,8 +202,34 @@ public class MercadoPagoAdapter implements PaymentGateway {
             amountCents,
             payment.getCurrencyId(),
             payment.getExternalReference(),
-            amountRefundedCents
+            amountRefundedCents,
+            collectorFeeCents(payment),
+            payment.getTransactionDetails() == null || payment.getTransactionDetails().getNetReceivedAmount() == null
+                ? null
+                : amountToCents(payment.getTransactionDetails().getNetReceivedAmount())
         );
+    }
+
+    /**
+     * Comisión real que paga el vendedor: suma de los {@code fee_details} cuyo
+     * {@code fee_payer} es {@code collector} (en la API de Mercado Pago el
+     * "collector" es quien cobra, o sea el restaurante; "payer" son cargos a
+     * cargo del comprador, que no restan del ingreso). {@code null} si el pago
+     * no trae ninguno a cargo del vendedor. Se suma antes de redondear a
+     * centavos para no acumular error de redondeo por componente.
+     */
+    private Long collectorFeeCents(Payment payment) {
+        if (payment.getFeeDetails() == null) {
+            return null;
+        }
+        List<BigDecimal> amounts = payment.getFeeDetails().stream()
+            .filter(f -> f != null && "collector".equalsIgnoreCase(f.getFeePayer()) && f.getAmount() != null)
+            .map(PaymentFeeDetail::getAmount)
+            .toList();
+        if (amounts.isEmpty()) {
+            return null;
+        }
+        return amountToCents(amounts.stream().reduce(BigDecimal.ZERO, BigDecimal::add));
     }
 
     /**

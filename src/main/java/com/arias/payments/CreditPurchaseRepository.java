@@ -104,6 +104,23 @@ public interface CreditPurchaseRepository extends JpaRepository<CreditPurchase, 
     Optional<CreditPurchase> findByOrderIdAndType(Long orderId, PurchaseType type);
 
     /**
+     * Compras del reporte admin de pagos: las de fecha relevante en
+     * {@code [start, end)}, donde la fecha es la de acreditación si la hubo y la
+     * de creación si no. Trae usuario, paquete y pedido para no hacer una
+     * consulta por fila.
+     */
+    @Query("""
+        SELECT p FROM CreditPurchase p
+        JOIN FETCH p.user
+        LEFT JOIN FETCH p.pack
+        LEFT JOIN FETCH p.order
+        WHERE COALESCE(p.creditedAt, p.createdAt) >= :start
+          AND COALESCE(p.creditedAt, p.createdAt) < :end
+        ORDER BY COALESCE(p.creditedAt, p.createdAt) DESC
+        """)
+    List<CreditPurchase> findInRange(@Param("start") Instant start, @Param("end") Instant end);
+
+    /**
      * Compras {@code PENDING} vivas de un usuario (unidad B14, {@code GET
      * /purchases/pending}): creadas en o después de {@code since}, la más
      * nueva primero. El predicado (user_id + status + created_at) lo cubre

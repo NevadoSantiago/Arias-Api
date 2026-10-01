@@ -94,6 +94,14 @@ public class CreditPurchase {
     @Builder.Default
     private Integer creditsReversed = 0;
 
+    /** Comisión real de Mercado Pago (V31); {@code null} si no la informó o la compra es anterior. */
+    @Column(name = "mp_fee_cents")
+    private Long mpFeeCents;
+
+    /** Monto neto que recibió el vendedor (V31); {@code null} si no se informó. */
+    @Column(name = "mp_net_received_cents")
+    private Long mpNetReceivedCents;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

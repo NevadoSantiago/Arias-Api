@@ -12,6 +12,10 @@ package com.arias.payments;
  * pasa a {@code refunded}). La reversión de créditos se calcula siempre a
  * partir de este campo — nunca del string de estado — para cubrir ambos
  * casos y los reembolsos parciales encadenados con una sola fórmula.
+ *
+ * <p>{@code feeCents} / {@code netReceivedCents}: comisión real de Mercado
+ * Pago a cargo del vendedor y monto neto que recibe, en centavos. {@code null}
+ * cuando Mercado Pago no los informa (p. ej. pago todavía pendiente).
  */
 public record PaymentSnapshot(
     String paymentId,
@@ -20,5 +24,15 @@ public record PaymentSnapshot(
     long amountCents,
     String currency,
     String externalReference,
-    long amountRefundedCents
-) {}
+    long amountRefundedCents,
+    Long feeCents,
+    Long netReceivedCents
+) {
+
+    /** Snapshot sin datos de comisión (Mercado Pago no los informó). */
+    public PaymentSnapshot(String paymentId, PaymentStatus status, String statusDetail, long amountCents,
+                           String currency, String externalReference, long amountRefundedCents) {
+        this(paymentId, status, statusDetail, amountCents, currency, externalReference,
+            amountRefundedCents, null, null);
+    }
+}

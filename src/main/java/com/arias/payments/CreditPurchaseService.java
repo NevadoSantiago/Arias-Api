@@ -532,6 +532,13 @@ public class CreditPurchaseService {
         }
 
         purchase.setMpStatusDetail(snapshot.statusDetail());
+        // Un snapshot sin comisión (pago aún pendiente) no borra la ya guardada.
+        if (snapshot.feeCents() != null) {
+            purchase.setMpFeeCents(snapshot.feeCents());
+        }
+        if (snapshot.netReceivedCents() != null) {
+            purchase.setMpNetReceivedCents(snapshot.netReceivedCents());
+        }
         applyStatusMapping(purchase, snapshot);
     }
 
