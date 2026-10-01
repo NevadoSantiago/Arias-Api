@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -44,6 +45,9 @@ public class CreditLedgerService {
     private final CreditMovementRepository movementRepo;
     private final RestaurantConfigRepository restaurantConfigRepo;
     private final Clock clock;
+
+    /** Regla de producto: el almuerzo de bienvenida vence 48 horas después de otorgado. */
+    static final Duration WELCOME_EXPIRY = Duration.ofHours(48);
 
     /**
      * Único punto de mutación de saldo. Lee la billetera bloqueada (o la crea
@@ -82,7 +86,11 @@ public class CreditLedgerService {
         // paquetes". DIRECT_PURCHASE (deltaAvailable = 0, va directo a
         // committed) y PAYMENT_REVERSAL (deltaAvailable negativo) nunca caen
         // en esta rama, así que nunca renuevan — igual que exige la spec.
-        if (type == MovementType.PACK_PURCHASE
+        // Excepción: el almuerzo de bienvenida vence a las 48 horas de otorgado
+        // (no a los días configurados); si la billetera ya tiene fecha, no se toca.
+        if (type == MovementType.WELCOME_GRANT && wallet.getExpiresAt() == null) {
+            wallet.setExpiresAt(clock.instant().plus(WELCOME_EXPIRY));
+        } else if (type == MovementType.PACK_PURCHASE
             || (wallet.getExpiresAt() == null && deltaAvailable > 0)) {
             int expiryDays = restaurantConfigRepo.getSingleton().getCreditExpiryDays();
             wallet.setExpiresAt(clock.instant().plus(expiryDays, ChronoUnit.DAYS));

@@ -52,14 +52,42 @@ class CreditLedgerServiceTest {
 
     static final Instant FIXED_NOW = Instant.parse("2026-01-15T12:00:00Z");
 
+    /** Reloj controlable: arranca en {@link #FIXED_NOW} y los tests pueden avanzarlo. */
+    static class MutableClock extends Clock {
+        private volatile Instant now = FIXED_NOW;
+        private final ZoneId zone = ZoneId.of("America/Argentina/Buenos_Aires");
+
+        void set(Instant instant) {
+            this.now = instant;
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return zone;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
+    }
+
     @TestConfiguration
     static class FixedClockConfig {
         @Bean
         @Primary
-        Clock clock() {
-            return Clock.fixed(FIXED_NOW, ZoneId.of("America/Argentina/Buenos_Aires"));
+        MutableClock clock() {
+            return new MutableClock();
         }
     }
+
+    @Autowired
+    private MutableClock mutableClock;
 
     @Autowired
     private CreditLedgerService ledgerService;
@@ -249,7 +277,7 @@ class CreditLedgerServiceTest {
     // ─── Renovación de vencimiento por tipo ────────────────────────────────
 
     @Test
-    @DisplayName("WELCOME_GRANT establece el vencimiento inicial (90 días) sobre una billetera sin fecha")
+    @DisplayName("WELCOME_GRANT establece el vencimiento inicial (48 horas) sobre una billetera sin fecha")
     void welcomeGrantEstableceVencimientoInicial() {
         User user = persistTestUser("welcome-grant");
 
@@ -257,7 +285,66 @@ class CreditLedgerServiceTest {
 
         CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
         assertThat(wallet.getAvailable()).isEqualTo(5);
+        assertThat(wallet.getExpiresAt()).isEqualTo(FIXED_NOW.plus(48, ChronoUnit.HOURS));
+    }
+
+    @Test
+    @DisplayName("WELCOME_GRANT sobre una billetera con vencimiento posterior no lo acorta")
+    void welcomeGrantNoAcortaUnVencimientoExistente() {
+        User user = persistTestUser("welcome-keeps");
+        Instant later = FIXED_NOW.plus(60, ChronoUnit.DAYS);
+        seedWallet(user.getId(), 3, 0, later);
+
+        ledgerService.apply(user.getId(), MovementType.WELCOME_GRANT, 1, 0, MovementRef.none("almuerzo de bienvenida"));
+
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(4);
+        assertThat(wallet.getExpiresAt()).isEqualTo(later);
+    }
+
+    @Test
+    @DisplayName("una compra de paquete posterior al almuerzo de bienvenida renueva el vencimiento a 90 días")
+    void packPurchaseDespuesDeBienvenidaRenuevaA90Dias() {
+        User user = persistTestUser("welcome-then-pack");
+        ledgerService.grantWelcomeLunch(user.getId());
+
+        ledgerService.apply(user.getId(), MovementType.PACK_PURCHASE, 20, 0, MovementRef.none("compra de paquete"));
+
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(21);
         assertThat(wallet.getExpiresAt()).isEqualTo(FIXED_NOW.plus(90, ChronoUnit.DAYS));
+    }
+
+    @Test
+    @DisplayName("el almuerzo de bienvenida vence pasadas las 48 horas por la vía de vencimiento existente")
+    void almuerzoDeBienvenidaVencePasadas48Horas() {
+        User user = persistTestUser("welcome-expires");
+        try {
+            ledgerService.grantWelcomeLunch(user.getId());
+
+            mutableClock.set(FIXED_NOW.plus(48, ChronoUnit.HOURS).plusSeconds(1));
+            ledgerService.expireIfDue(user.getId());
+
+            CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+            assertThat(wallet.getAvailable()).isEqualTo(0);
+            assertThat(wallet.getExpiresAt()).isNull();
+            assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId()))
+                .extracting(CreditMovement::getType)
+                .contains(MovementType.EXPIRATION);
+        } finally {
+            mutableClock.set(FIXED_NOW);
+        }
+    }
+
+    @Test
+    @DisplayName("grantWelcomeLunch fija el vencimiento a 48 horas del otorgamiento")
+    void grantWelcomeLunchFijaVencimientoA48Horas() {
+        User user = persistTestUser("welcome-48h");
+
+        ledgerService.grantWelcomeLunch(user.getId());
+
+        CreditWallet wallet = walletRepo.findById(user.getId()).orElseThrow();
+        assertThat(wallet.getExpiresAt()).isEqualTo(FIXED_NOW.plus(48, ChronoUnit.HOURS));
     }
 
     @Test
