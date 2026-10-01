@@ -46,12 +46,22 @@ class MercadoPagoAdapterFeeTest {
     }
 
     @Test
-    void feeIsNullWhenNoFeeDetailBelongsToTheCollector() {
+    void feeIsZeroWhenNoFeeDetailBelongsToTheCollectorButTheNetIsReported() {
         Payment payment = payment(List.of(fee("application_fee", "payer", "3.00")), "100.00");
 
         PaymentSnapshot snapshot = adapter.snapshotsNewestFirst(List.of(payment)).get(0);
 
-        assertThat(snapshot.feeCents()).isNull();
+        assertThat(snapshot.feeCents()).isZero();
+        assertThat(snapshot.netReceivedCents()).isEqualTo(10_000L);
+    }
+
+    @Test
+    void feeIsZeroWhenThereAreNoFeeDetailsButTheNetIsReported() {
+        Payment payment = payment(null, "100.00");
+
+        PaymentSnapshot snapshot = adapter.snapshotsNewestFirst(List.of(payment)).get(0);
+
+        assertThat(snapshot.feeCents()).isZero();
         assertThat(snapshot.netReceivedCents()).isEqualTo(10_000L);
     }
 

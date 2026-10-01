@@ -195,6 +195,10 @@ public class MercadoPagoAdapter implements PaymentGateway {
         long amountRefundedCents = payment.getTransactionAmountRefunded() == null
             ? 0L
             : amountToCents(payment.getTransactionAmountRefunded());
+        Long netReceivedCents = payment.getTransactionDetails() == null
+                || payment.getTransactionDetails().getNetReceivedAmount() == null
+            ? null
+            : amountToCents(payment.getTransactionDetails().getNetReceivedAmount());
         return new PaymentSnapshot(
             String.valueOf(payment.getId()),
             PaymentStatus.fromMercadoPago(payment.getStatus()),
@@ -203,10 +207,8 @@ public class MercadoPagoAdapter implements PaymentGateway {
             payment.getCurrencyId(),
             payment.getExternalReference(),
             amountRefundedCents,
-            collectorFeeCents(payment),
-            payment.getTransactionDetails() == null || payment.getTransactionDetails().getNetReceivedAmount() == null
-                ? null
-                : amountToCents(payment.getTransactionDetails().getNetReceivedAmount())
+            collectorFeeCents(payment, netReceivedCents),
+            netReceivedCents
         );
     }
 
@@ -214,20 +216,20 @@ public class MercadoPagoAdapter implements PaymentGateway {
      * Comisión real que paga el vendedor: suma de los {@code fee_details} cuyo
      * {@code fee_payer} es {@code collector} (en la API de Mercado Pago el
      * "collector" es quien cobra, o sea el restaurante; "payer" son cargos a
-     * cargo del comprador, que no restan del ingreso). {@code null} si el pago
-     * no trae ninguno a cargo del vendedor. Se suma antes de redondear a
-     * centavos para no acumular error de redondeo por componente.
+     * cargo del comprador, que no restan del ingreso). Se suma antes de
+     * redondear a centavos para no acumular error de redondeo por componente.
+     * Si no hay ninguno a cargo del vendedor pero Mercado Pago informó el neto,
+     * la comisión fue cero; {@code null} solo cuando no hay ningún dato.
      */
-    private Long collectorFeeCents(Payment payment) {
-        if (payment.getFeeDetails() == null) {
-            return null;
-        }
-        List<BigDecimal> amounts = payment.getFeeDetails().stream()
-            .filter(f -> f != null && "collector".equalsIgnoreCase(f.getFeePayer()) && f.getAmount() != null)
-            .map(PaymentFeeDetail::getAmount)
-            .toList();
+    private Long collectorFeeCents(Payment payment, Long netReceivedCents) {
+        List<BigDecimal> amounts = payment.getFeeDetails() == null
+            ? List.of()
+            : payment.getFeeDetails().stream()
+                .filter(f -> f != null && "collector".equalsIgnoreCase(f.getFeePayer()) && f.getAmount() != null)
+                .map(PaymentFeeDetail::getAmount)
+                .toList();
         if (amounts.isEmpty()) {
-            return null;
+            return netReceivedCents == null ? null : 0L;
         }
         return amountToCents(amounts.stream().reduce(BigDecimal.ZERO, BigDecimal::add));
     }
