@@ -67,10 +67,14 @@ public record AdminOrderDto(
     // de arriba, sin tocarla: ambas leen fuentes distintas (`daily_choice` vs
     // `orders`) y se sirven desde endpoints separados en AdminOrderController.
 
-    /** Ítem dentro de un pedido agrupado por horario de retiro — plato + acompañamiento. */
-    public record PickupOrderItemDto(String dishNombre, String sideNombre, Integer creditCost) {
+    /**
+     * Ítem dentro de un pedido agrupado por horario de retiro — plato +
+     * acompañamiento + la nota que el cliente escribió para ese plato (el flujo
+     * B2C guarda las notas por ítem, no en el pedido).
+     */
+    public record PickupOrderItemDto(String dishNombre, String sideNombre, Integer creditCost, String notas) {
         public static PickupOrderItemDto from(OrderItem item) {
-            return new PickupOrderItemDto(item.getDishNombre(), item.getSideNombre(), item.getCreditCost());
+            return new PickupOrderItemDto(item.getDishNombre(), item.getSideNombre(), item.getCreditCost(), item.getNotas());
         }
     }
 

@@ -234,6 +234,22 @@ class AdminOrderControllerTest {
     }
 
     @Test
+    @DisplayName("by-pickup: cada ítem expone la nota que el cliente escribió para ese plato")
+    void getOrdersByPickupExposesItemNotes() {
+        Dish dish = persistDish(persistCategory(2), persistMenuSection());
+        Order o = persistOrder(persistB2cUser("Coty"), dish,
+            FIXED_NOW.plus(60, ChronoUnit.MINUTES), OrderEstado.CONFIRMADO, null);
+        o.getItems().get(0).setNotas("Sin sal");
+        orderRepo.save(o);
+
+        AdminOrderDto.PickupOrderDto row = controller.getOrdersByPickup(TODAY).get(0).orders().get(0);
+
+        assertThat(row.items()).singleElement()
+            .extracting(AdminOrderDto.PickupOrderItemDto::notas)
+            .isEqualTo("Sin sal");
+    }
+
+    @Test
     @DisplayName("comandado/entregado/undo: el controller recorre el ciclo completo")
     void kitchenStateCycleThroughController() {
         Dish dish = persistDish(persistCategory(2), persistMenuSection());
