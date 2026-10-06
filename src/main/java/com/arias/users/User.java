@@ -106,6 +106,14 @@ public class User {
     @Column(name = "email_verified_at")
     private Instant emailVerifiedAt;
 
+    /**
+     * Cuándo terminó o salteó el tour de primer ingreso. NULL = todavía no lo vio.
+     * La migración V32 lo completa para los usuarios preexistentes: solo las
+     * cuentas nuevas ven el tour.
+     */
+    @Column(name = "onboarding_tour_seen_at")
+    private Instant onboardingTourSeenAt;
+
     /** Subject id de Google — solo presente si la cuenta se vinculó con Google (unidad 5). */
     @Column(name = "google_sub", length = 64)
     private String googleSub;

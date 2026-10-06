@@ -2,6 +2,8 @@ package com.arias.auth.dto;
 
 import com.arias.users.Role;
 
+import java.time.Instant;
+
 /**
  * @param nickname        apodo capturado en el autorregistro B2C; {@code
  *                        null} en cuentas que no lo tienen (empresa).
@@ -15,6 +17,8 @@ import com.arias.users.Role;
  *                        {@code false} hasta {@code POST
  *                        /api/v1/auth/complete-profile} para cuentas
  *                        creadas vía Google (diseño §Decisión 9).
+ * @param onboardingTourSeenAt cuándo terminó o salteó el tour de primer
+ *                        ingreso; {@code null} si todavía no lo vio.
  */
 public record MeResponse(
     Long id,
@@ -28,5 +32,6 @@ public record MeResponse(
     String nickname,
     String displayName,
     boolean emailVerified,
-    boolean profileComplete
+    boolean profileComplete,
+    Instant onboardingTourSeenAt
 ) {}

@@ -174,7 +174,8 @@ public class AuthService {
             user.getEmailVerifiedAt() != null,
             // Solo un B2C puede quedar con el perfil pendiente: admins y
             // usuarios de empresa no tienen teléfono ni apodo y nunca los piden.
-            !user.mustCompleteProfileToSpend()
+            !user.mustCompleteProfileToSpend(),
+            user.getOnboardingTourSeenAt()
         );
     }
 
