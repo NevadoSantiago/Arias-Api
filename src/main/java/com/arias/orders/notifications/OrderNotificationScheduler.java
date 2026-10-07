@@ -174,6 +174,11 @@ public class OrderNotificationScheduler {
                 // Otra instancia ya lo mandó, o se canceló entre el SELECT y el UPDATE.
                 continue;
             }
+            if (!Boolean.TRUE.equals(order.getUser().getRecibeAvisoRetiro())) {
+                // El pedido igual queda reservado (no se reintenta), pero el cliente apagó este aviso.
+                log.debug("[CRON-PICKUP-REMINDER] Pedido #{} — aviso apagado por el cliente, no se envía", order.getId());
+                continue;
+            }
             emails.sendPickupReminder(order);
             sent++;
         }

@@ -76,6 +76,14 @@ public class User {
     private Boolean recibeRecordatorioPedido = true;
 
     /**
+     * Opt-in al mail de "tu pedido está casi listo" (recordatorio de retiro).
+     * Default true — el cliente lo puede apagar desde la campanita de la app.
+     */
+    @Column(name = "recibe_aviso_retiro", nullable = false)
+    @lombok.Builder.Default
+    private Boolean recibeAvisoRetiro = true;
+
+    /**
      * Soft delete. NULL = visible. Cuando se setea, el user desaparece
      * de listings, login y check-email — pero su id sigue referenciable
      * desde DailyChoice y otras tablas históricas.

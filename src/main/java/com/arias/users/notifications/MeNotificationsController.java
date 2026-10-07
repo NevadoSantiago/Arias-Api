@@ -28,7 +28,7 @@ public class MeNotificationsController {
     @Transactional(readOnly = true)
     public NotificationPreferencesDto get(@AuthenticationPrincipal JwtUser principal) {
         User user = findOrThrow(principal.userId());
-        return new NotificationPreferencesDto(Boolean.TRUE.equals(user.getRecibeRecordatorioPedido()));
+        return toDto(user);
     }
 
     @PutMapping
@@ -37,9 +37,19 @@ public class MeNotificationsController {
         @AuthenticationPrincipal JwtUser principal,
         @Valid @RequestBody UpdateNotificationPreferencesRequest req
     ) {
+        if (req.recibeRecordatorioPedido() == null && req.recibeAvisoRetiro() == null) {
+            throw BusinessException.badRequest("no-preferences", "Indicá al menos una preferencia");
+        }
         User user = findOrThrow(principal.userId());
-        user.setRecibeRecordatorioPedido(req.recibeRecordatorioPedido());
-        return new NotificationPreferencesDto(req.recibeRecordatorioPedido());
+        if (req.recibeRecordatorioPedido() != null) user.setRecibeRecordatorioPedido(req.recibeRecordatorioPedido());
+        if (req.recibeAvisoRetiro() != null) user.setRecibeAvisoRetiro(req.recibeAvisoRetiro());
+        return toDto(user);
+    }
+
+    private static NotificationPreferencesDto toDto(User user) {
+        return new NotificationPreferencesDto(
+            Boolean.TRUE.equals(user.getRecibeRecordatorioPedido()),
+            Boolean.TRUE.equals(user.getRecibeAvisoRetiro()));
     }
 
     private User findOrThrow(Long id) {

@@ -369,6 +369,26 @@ class OrderNotificationSchedulerTest {
         verify(emailService, times(1)).send(eq(user.getEmail()), anyString(), anyString());
     }
 
+    @Test
+    @DisplayName("sendPickupReminders(): un cliente con el aviso apagado no recibe el mail pero el pedido queda reservado")
+    void recordatorioOmiteClientesConAvisoApagadoPeroReservaElPedido() {
+        User optedOut = persistCustomer();
+        optedOut.setRecibeAvisoRetiro(false);
+        userRepo.save(optedOut);
+        User optedIn = persistCustomer();
+        Order skipped = persistOrder(optedOut, FIXED_NOW.plus(25, ChronoUnit.MINUTES), OrderEstado.PENDIENTE, 1);
+        Order sent = persistOrder(optedIn, FIXED_NOW.plus(25, ChronoUnit.MINUTES), OrderEstado.PENDIENTE, 1);
+
+        scheduler.sendPickupReminders();
+        scheduler.sendPickupReminders(); // el pedido reservado no se reintenta
+
+        verify(emailService, never()).send(eq(optedOut.getEmail()), anyString(), anyString());
+        verify(emailService, times(1)).send(eq(optedIn.getEmail()), anyString(), anyString());
+        entityManager.clear();
+        assertThat(orderRepo.findById(skipped.getId()).orElseThrow().getReminderSentAt()).isNotNull();
+        assertThat(orderRepo.findById(sent.getId()).orElseThrow().getReminderSentAt()).isNotNull();
+    }
+
     /**
      * Regresión B9: el scheduler real corre SIN transacción, y el
      * {@code @Modifying} de {@code claimReminderSlot} exige una. Los demás
