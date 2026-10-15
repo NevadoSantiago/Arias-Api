@@ -389,6 +389,50 @@ class CreditLedgerServiceTest {
         assertThat(wallet.getExpiresAt()).isEqualTo(original);
     }
 
+    @Test
+    @DisplayName("refundConsumed devuelve a AVAILABLE almuerzos ya consumidos sin tocar COMMITTED")
+    void refundConsumedSumaAvailableSinTocarCommitted() {
+        User user = persistTestUser("refund-consumed");
+        seedWallet(user.getId(), 3, 1, null);
+
+        CreditMovement movement = ledgerService.refundConsumed(user.getId(), 2, MovementRef.none("cancelación de confirmado"));
+
+        assertThat(movement.getType()).isEqualTo(MovementType.ORDER_REFUND);
+        assertThat(movement.getDeltaAvailable()).isEqualTo(2);
+        assertThat(movement.getDeltaCommitted()).isZero();
+
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(5);
+        assertThat(wallet.getCommitted()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("refundConsumed rechaza un monto no positivo")
+    void refundConsumedRechazaMontoNoPositivo() {
+        User user = persistTestUser("refund-consumed-invalid");
+
+        assertThatThrownBy(() -> ledgerService.refundConsumed(user.getId(), 0, MovementRef.none("x")))
+            .isInstanceOf(RuntimeException.class);
+    }
+
+    @Test
+    @DisplayName("invariante: con ORDER_REFUND el saldo sigue coincidiendo con la suma de movimientos")
+    void saldoCoincideConSumaDeMovimientosConOrderRefund() {
+        User user = persistTestUser("invariant-refund");
+
+        ledgerService.apply(user.getId(), MovementType.WELCOME_GRANT, 5, 0, MovementRef.none("bienvenida"));
+        ledgerService.commit(user.getId(), 2, MovementRef.none("pedido"));
+        ledgerService.consume(user.getId(), 2, MovementRef.none("consumo"));
+        ledgerService.refundConsumed(user.getId(), 2, MovementRef.none("cancelación de confirmado"));
+
+        List<CreditMovement> movements = movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId());
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(movements.stream().mapToInt(CreditMovement::getDeltaAvailable).sum());
+        assertThat(wallet.getCommitted()).isEqualTo(movements.stream().mapToInt(CreditMovement::getDeltaCommitted).sum());
+        assertThat(wallet.getAvailable()).isEqualTo(5);
+        assertThat(wallet.getCommitted()).isZero();
+    }
+
     // ─── Invariante saldo == SUM(deltas) ───────────────────────────────────
 
     @Test

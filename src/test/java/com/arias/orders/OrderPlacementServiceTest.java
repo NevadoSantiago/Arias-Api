@@ -1,5 +1,14 @@
 package com.arias.orders;
 
+import com.arias.credits.MovementRef;
+import org.springframework.test.context.event.RecordApplicationEvents;
+import org.springframework.test.context.event.ApplicationEvents;
+import com.arias.restaurantconfig.RestaurantConfigRepository;
+import com.arias.orders.notifications.OrderCancelledEvent;
+import com.arias.credits.CreditLedgerService;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.springframework.test.context.transaction.TestTransaction;
 import com.arias.catalog.categories.Category;
 import com.arias.catalog.categories.CategoryRepository;
 import com.arias.catalog.dishes.Dish;
@@ -68,6 +77,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
 @Transactional
+@RecordApplicationEvents
 @Import(OrderPlacementServiceTest.FixedClockConfig.class)
 class OrderPlacementServiceTest {
 
@@ -94,6 +104,40 @@ class OrderPlacementServiceTest {
 
     @Autowired
     private OrderPlacementService orderPlacementService;
+
+    @Autowired
+    private CreditLedgerService creditLedgerService;
+
+    @Autowired
+    private RestaurantConfigRepository configRepo;
+
+    /**
+     * El límite de cancelación (30) difiere a propósito de la preparación (20) y del
+     * mínimo para pedir (20): así cada prueba de ventana demuestra que el
+     * comportamiento sigue al límite de cancelación y no a otro parámetro.
+     */
+    @BeforeEach
+    void configureCancelLimit() {
+        var config = configRepo.getSingleton();
+        config.setPickupLeadMinutes(20);
+        config.setOrderLeadMinutes(20);
+        config.setCancelLimitMinutes(30);
+        configRepo.saveAndFlush(config);
+    }
+
+    /**
+     * La prueba de concurrencia corre sin transacción de prueba, así que el
+     * límite de 30 de arriba quedaría confirmado en la base compartida.
+     * Se restaura al valor sembrado para no afectar a otras clases de prueba.
+     */
+    @AfterEach
+    void restoreCancelLimitWhenNotRolledBack() {
+        if (!TestTransaction.isActive()) {
+            var config = configRepo.getSingleton();
+            config.setCancelLimitMinutes(20);
+            configRepo.saveAndFlush(config);
+        }
+    }
 
     @Autowired
     private OrderPlacementController orderPlacementController;
@@ -1816,5 +1860,145 @@ class OrderPlacementServiceTest {
             placed.id(), new ChangePickupTimeRequest(FIXED_NOW.plus(100, ChronoUnit.MINUTES))))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "order-not-found");
+    }
+
+    // ─── Límite de cancelación y cancelación ampliada (confirmado/comandado) ───
+
+    /** Pedido de 1 ítem (costo 2) llevado a {@code estado} con los créditos ya consumidos. */
+    private OrderDto placeAndAdvance(User user, Dish dish, int minutesAhead, OrderEstado estado) {
+        OrderDto placed = placeScheduled(user, dish, minutesAhead);
+        creditLedgerService.consume(user.getId(), 2, MovementRef.forOrder(placed.id(), "consumo"));
+        Order order = orderRepo.findById(placed.id()).orElseThrow();
+        order.setEstado(estado);
+        orderRepo.saveAndFlush(order);
+        return placed;
+    }
+
+    private void assertConfirmedCancelRefunds(OrderEstado estado, ApplicationEvents events) {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        Dish dish = persistDish(category, section, 3);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeAndAdvance(user, dish, 90, estado);
+        entityManager.flush();
+        entityManager.clear();
+
+        orderPlacementService.cancel(user.getId(), placed.id());
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(3);
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(10);
+        assertThat(wallet.getCommitted()).isZero();
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).anySatisfy(m -> {
+            assertThat(m.getType()).isEqualTo(MovementType.ORDER_REFUND);
+            assertThat(m.getDeltaAvailable()).isEqualTo(2);
+            assertThat(m.getDeltaCommitted()).isZero();
+            assertThat(m.getOrderId()).isEqualTo(placed.id());
+        });
+        Order cancelled = orderRepo.findById(placed.id()).orElseThrow();
+        assertThat(cancelled.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(cancelled.getCancelledAt()).isNotNull();
+        assertThat(events.stream(OrderCancelledEvent.class).toList()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("cancel(): un CONFIRMADO dentro del límite devuelve los créditos consumidos (ORDER_REFUND), restaura stock y publica el evento")
+    void cancelConfirmadoDevuelveCreditosConsumidos(ApplicationEvents events) {
+        assertConfirmedCancelRefunds(OrderEstado.CONFIRMADO, events);
+    }
+
+    @Test
+    @DisplayName("cancel(): un COMANDADO dentro del límite devuelve los créditos consumidos (ORDER_REFUND), restaura stock y publica el evento")
+    void cancelComandadoDevuelveCreditosConsumidos(ApplicationEvents events) {
+        assertConfirmedCancelRefunds(OrderEstado.COMANDADO, events);
+    }
+
+    @Test
+    @DisplayName("cancel(): un ENTREGADO responde order-locked")
+    void cancelRechazaEntregado() {
+        Category category = persistCategory(2);
+        Dish dish = persistDish(category, persistMenuSection(), 3);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeAndAdvance(user, dish, 90, OrderEstado.ENTREGADO);
+
+        assertThatThrownBy(() -> orderPlacementService.cancel(user.getId(), placed.id()))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-locked");
+    }
+
+    @Test
+    @DisplayName("cancel(): un CONFIRMADO pasado el límite de cancelación responde cancel-window-closed con el límite en el mensaje")
+    void cancelConfirmadoFueraDelLimite() {
+        Category category = persistCategory(2);
+        Dish dish = persistDish(category, persistMenuSection(), 3);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        // 30 min: justo en el límite (30), que ya cierra; con la preparación (20) seguiría abierto.
+        OrderDto placed = placeAndAdvance(user, dish, 30, OrderEstado.CONFIRMADO);
+
+        assertThatThrownBy(() -> orderPlacementService.cancel(user.getId(), placed.id()))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "cancel-window-closed")
+            .hasMessageContaining("30");
+        assertThat(orderRepo.findById(placed.id()).orElseThrow().getEstado()).isEqualTo(OrderEstado.CONFIRMADO);
+    }
+
+    @Test
+    @DisplayName("cancel(): un PENDIENTE a 30 min del retiro ya no se cancela (el límite es 30, no la preparación de 20)")
+    void cancelPendienteSigueElLimiteDeCancelacion() {
+        Category category = persistCategory(2);
+        Dish dish = persistDish(category, persistMenuSection(), 3);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeScheduled(user, dish, 30);
+
+        assertThatThrownBy(() -> orderPlacementService.cancel(user.getId(), placed.id()))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "cancel-window-closed");
+    }
+
+    @Test
+    @DisplayName("list(): cancellable sigue el límite de cancelación; modifiable y pickupTimeChangeable siguen siendo solo de PENDIENTE")
+    void listCancellableConfirmadoPeroNoModificable() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 20);
+        OrderDto confirmed = placeAndAdvance(user, persistDish(category, section, 3), 90, OrderEstado.CONFIRMADO);
+        OrderDto commanded = placeAndAdvance(user, persistDish(category, section, 3), 90, OrderEstado.COMANDADO);
+        OrderDto pastLimit = placeAndAdvance(user, persistDish(category, section, 3), 30, OrderEstado.CONFIRMADO);
+        OrderDto delivered = placeAndAdvance(user, persistDish(category, section, 3), 90, OrderEstado.ENTREGADO);
+
+        List<OrderDto> orders = orderPlacementService.list(user.getId());
+        java.util.function.Function<OrderDto, OrderDto> find = d ->
+            orders.stream().filter(o -> o.id().equals(d.id())).findFirst().orElseThrow();
+
+        for (OrderDto d : List.of(confirmed, commanded)) {
+            assertThat(find.apply(d).cancellable()).isTrue();
+            assertThat(find.apply(d).modifiable()).isFalse();
+            assertThat(find.apply(d).pickupTimeChangeable()).isFalse();
+        }
+        assertThat(find.apply(pastLimit).cancellable()).isFalse();
+        assertThat(find.apply(delivered).cancellable()).isFalse();
+    }
+
+    @Test
+    @DisplayName("addItems(): un PENDIENTE a 30 min del retiro no es modificable (ventana = límite de cancelación)")
+    void addItemsUsaElLimiteDeCancelacion() {
+        Category category = persistCategory(1);
+        MenuSection section = persistMenuSection();
+        Dish dishA = persistDish(category, section, 5);
+        Dish dishB = persistDish(category, section, 5);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeScheduled(user, dishA, 30);
+
+        assertThatThrownBy(() -> orderPlacementService.addItems(user.getId(), placed.id(), addItemsRequest(dishB.getId())))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-not-modifiable");
     }
 }

@@ -29,8 +29,9 @@ import java.util.List;
  * primer tick porque la consulta es por {@code pickup_at}, no por "el minuto
  * actual".
  *
- * <p><b>Unidad B7</b>: el MISMO corte también cierra los pedidos {@code
- * PENDIENTE_PAGO} (esperando el pago directo de Mercado Pago) que todavía no
+ * <p><b>Unidad B7</b>: un corte propio ({@code pickup_at - orderLead}, más una
+ * gracia de {@link #UNPAID_GRACE_MINUTES} minutos desde la creación) cierra
+ * los pedidos {@code PENDIENTE_PAGO} (esperando el pago directo de Mercado Pago) que todavía no
  * se resolvieron — "pago pendiente al momento de confirmar/preparar → se
  * cancela". Se cancelan, no se confirman: nunca comprometieron créditos, así
  * que no hay nada que consumir; si el pago se aprueba después de este cierre,
@@ -42,6 +43,14 @@ import java.util.List;
 @Slf4j
 public class OrderConsumptionScheduler {
 
+    /**
+     * Gracia fija para pedidos {@code PENDIENTE_PAGO}: nunca se cierran antes
+     * de {@code createdAt + 10 min}. Con un mínimo para pedir menor que el
+     * tiempo de preparación, un pago directo creado cerca del retiro se
+     * cancelaría al minuto siguiente sin dar tiempo a pagar.
+     */
+    static final int UNPAID_GRACE_MINUTES = 10;
+
     private final OrderRepository orderRepo;
     private final CreditLedgerService creditLedgerService;
     private final RestaurantConfigRepository configRepo;
@@ -52,9 +61,9 @@ public class OrderConsumptionScheduler {
     @Transactional
     public void consumeDueOrders() {
         Instant now = clock.instant();
-        int lead = configRepo.getSingleton().getPickupLeadMinutes();
+        var config = configRepo.getSingleton();
         // pickup_at - lead <= now  <=>  pickup_at <= now + lead
-        Instant cutoff = now.plus(lead, ChronoUnit.MINUTES);
+        Instant cutoff = now.plus(config.getPickupLeadMinutes(), ChronoUnit.MINUTES);
 
         List<Order> due = orderRepo.findByEstadoAndPickupAtLessThanEqual(OrderEstado.PENDIENTE, cutoff);
         for (Order order : due) {
@@ -69,7 +78,14 @@ public class OrderConsumptionScheduler {
         // mismo cierre que un pago rechazado (closeAtCutoff): restaura
         // stock, libera solo lo reservado del saldo (B13) y, solo en
         // este camino, avisa al cliente por mail (unidad B8).
-        List<Order> unpaidDue = orderRepo.findByEstadoAndPickupAtLessThanEqual(OrderEstado.PENDIENTE_PAGO, cutoff);
+        // Corte propio: pickup_at - orderLead (el mínimo para pedir), y nunca
+        // antes de la gracia desde que se creó el pedido.
+        Instant unpaidCutoff = now.plus(config.getOrderLeadMinutes(), ChronoUnit.MINUTES);
+        Instant graceLimit = now.minus(UNPAID_GRACE_MINUTES, ChronoUnit.MINUTES);
+        List<Order> unpaidDue = orderRepo
+            .findByEstadoAndPickupAtLessThanEqual(OrderEstado.PENDIENTE_PAGO, unpaidCutoff).stream()
+            .filter(order -> !order.getCreatedAt().isAfter(graceLimit))
+            .toList();
         for (Order order : unpaidDue) {
             orderPlacementService.closeAtCutoff(order.getId());
         }

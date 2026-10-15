@@ -58,7 +58,7 @@ import java.util.function.BooleanSupplier;
  *       transacción que los decrementos de stock, así que si el commit falla
  *       Spring revierte también el stock ya decrementado.</li>
  *   <li>Cancelación: solo mientras {@code estado == PENDIENTE} y {@code now
- *       < pickupAt - lead}; libera créditos (RELEASE), restaura stock, y
+ *       < pickupAt - cancelLimit}; libera créditos (RELEASE), restaura stock, y
  *       marca {@code CANCELADO} — nunca borra la fila, porque los
  *       movimientos del libro mayor la referencian para siempre.</li>
  *   <li>El horario de retiro se valida contra {@code restaurant_config}
@@ -111,8 +111,8 @@ public class OrderPlacementService {
         creditLedgerService.commit(userId, saved.getCreditTotal(),
             MovementRef.forOrder(saved.getId(), "Pedido #" + saved.getId()));
 
-        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
-        return toDto(saved, clock.instant(), lead);
+        int cancelLimit = restaurantConfigRepo.getSingleton().getCancelLimitMinutes();
+        return toDto(saved, clock.instant(), cancelLimit);
     }
 
     /**
@@ -177,7 +177,7 @@ public class OrderPlacementService {
     @Transactional(readOnly = true)
     public List<OrderDto> list(Long userId) {
         Instant now = clock.instant();
-        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
+        int cancelLimit = restaurantConfigRepo.getSingleton().getCancelLimitMinutes();
 
         List<Order> orders = orderRepo.findRecentByUserId(userId, PageRequest.of(0, RECENT_ORDERS_LIMIT));
 
@@ -189,34 +189,36 @@ public class OrderPlacementService {
                 orders.stream().map(Order::getId).toList(), PurchaseType.DIRECT);
 
         return orders.stream()
-            .map(order -> toDto(order, now, lead, () -> directOrderIds.contains(order.getId())))
+            .map(order -> toDto(order, now, cancelLimit, () -> directOrderIds.contains(order.getId())))
             .toList();
     }
 
     /**
-     * Cancela el pedido — solo mientras esté PENDIENTE o {@code
-     * PENDIENTE_PAGO} (unidad B7: un pedido esperando pago también se puede
-     * cancelar; solo se liberan los almuerzos que se reservaron del saldo
-     * (unidad B13) — ver {@link #applyCancellation}) y falte más de {@code lead} minutos para el
-     * retiro (misma re-validación perezosa del diseño §Decisión 4,
-     * independiente de si el job de consumo corrió).
+     * Cancela el pedido — mientras esté PENDIENTE, {@code PENDIENTE_PAGO}
+     * (unidad B7: solo se liberan los almuerzos que se reservaron del saldo,
+     * unidad B13), {@code CONFIRMADO} o {@code COMANDADO} (sus almuerzos ya se
+     * consumieron y se devuelven con {@code ORDER_REFUND}) — ver {@link
+     * #applyCancellation}, y falte más de {@code cancelLimit} minutos para el
+     * retiro (límite de cancelación configurable, re-validación perezosa del
+     * diseño §Decisión 4, independiente de si el job de consumo corrió).
+     * {@code ENTREGADO} y {@code CANCELADO} responden {@code order-locked}.
      */
     @Transactional
     public void cancel(Long userId, Long orderId) {
         Order order = orderRepo.findByIdAndUserIdForUpdate(orderId, userId)
             .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
 
-        if (order.getEstado() != OrderEstado.PENDIENTE && order.getEstado() != OrderEstado.PENDIENTE_PAGO) {
+        if (!isCancellableState(order)) {
             throw BusinessException.conflict("order-locked",
                 "El pedido ya no se puede cancelar");
         }
 
         Instant now = clock.instant();
-        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
-        Instant deadline = order.getPickupAt().minus(lead, ChronoUnit.MINUTES);
+        int cancelLimit = restaurantConfigRepo.getSingleton().getCancelLimitMinutes();
+        Instant deadline = order.getPickupAt().minus(cancelLimit, ChronoUnit.MINUTES);
         if (!now.isBefore(deadline)) {
             throw BusinessException.conflict("cancel-window-closed",
-                "Ya no se puede cancelar: falta menos de " + lead
+                "Ya no se puede cancelar: falta menos de " + cancelLimit
                     + " minutos para el retiro");
         }
 
@@ -240,8 +242,8 @@ public class OrderPlacementService {
             .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
 
         Instant now = clock.instant();
-        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
-        assertModifiable(order, now, lead);
+        int cancelLimit = restaurantConfigRepo.getSingleton().getCancelLimitMinutes();
+        assertModifiable(order, now, cancelLimit);
 
         if (req.items() == null || req.items().isEmpty()) {
             throw BusinessException.badRequest("empty-order", "Debe agregar al menos un ítem");
@@ -260,13 +262,13 @@ public class OrderPlacementService {
         creditLedgerService.commit(userId, added,
             MovementRef.forOrder(orderId, "Ítems agregados al pedido #" + orderId));
 
-        return toDto(saved, now, lead);
+        return toDto(saved, now, cancelLimit);
     }
 
     /**
      * Cambia el horario de retiro de un pedido (unidad B11, pedido del
      * usuario 2026-09-28). Solo un pedido programado ({@code PENDIENTE}) y
-     * ANTES del corte del horario ACTUAL ({@code pickupAt - lead}, ver {@link
+     * ANTES del corte del horario ACTUAL ({@code pickupAt - cancelLimit}, ver {@link
      * #isPickupTimeChangeable}); confirmado, esperando pago, cancelado o ya
      * cortado responde 409 {@code pickup-time-locked}. Un pedido pagado
      * aparte (DIRECT) SÍ puede cambiarlo: el importe no varía.
@@ -294,14 +296,14 @@ public class OrderPlacementService {
             .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
 
         Instant now = clock.instant();
-        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
-        if (!isPickupTimeChangeable(order, now, lead)) {
+        int cancelLimit = restaurantConfigRepo.getSingleton().getCancelLimitMinutes();
+        if (!isPickupTimeChangeable(order, now, cancelLimit)) {
             throw BusinessException.conflict("pickup-time-locked",
                 "El horario de retiro ya no se puede cambiar.");
         }
 
         if (newPickupAt.equals(order.getPickupAt())) {
-            return toDto(order, now, lead);
+            return toDto(order, now, cancelLimit);
         }
 
         if (!LocalDate.ofInstant(newPickupAt, ZONE).equals(order.getFecha())) {
@@ -315,7 +317,7 @@ public class OrderPlacementService {
         order.setReminderSentAt(null);
         Order saved = orderRepo.save(order);
 
-        return toDto(saved, now, lead);
+        return toDto(saved, now, cancelLimit);
     }
 
     /**
@@ -337,8 +339,8 @@ public class OrderPlacementService {
             .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
 
         Instant now = clock.instant();
-        int lead = restaurantConfigRepo.getSingleton().getPickupLeadMinutes();
-        assertModifiable(order, now, lead);
+        int cancelLimit = restaurantConfigRepo.getSingleton().getCancelLimitMinutes();
+        assertModifiable(order, now, cancelLimit);
 
         OrderItem item = order.getItems().stream()
             .filter(i -> i.getId().equals(itemId))
@@ -355,7 +357,7 @@ public class OrderPlacementService {
             order.setCreditTotal(order.getCreditTotal() - item.getCreditCost());
         }
 
-        return toDto(order, now, lead);
+        return toDto(order, now, cancelLimit);
     }
 
     /**
@@ -364,7 +366,7 @@ public class OrderPlacementService {
      * (rechazado, cancelado, o expirado por {@code
      * PaymentReconciliationScheduler} — diseño §Flujo de datos, tabla "Estado
      * del pago → Acción": "si era compra directa, se cancela el pedido
-     * asociado"), o cuyo punto de consumo (pickup − lead) llegó sin que el
+     * asociado"), o cuyo punto de cierre (pickup − orderLead) llegó sin que el
      * pago se haya resuelto todavía ({@code OrderConsumptionScheduler} —
      * bullet "pago pendiente al momento de confirmar/preparar → se cancela").
      * Invocado por {@code CreditPurchaseService} y por {@code
@@ -374,7 +376,7 @@ public class OrderPlacementService {
      * marcar {@code CANCELADO} — vía {@link #applyCancellation}, que para un pedido {@code PENDIENTE_PAGO}
      * libera SOLO los almuerzos reservados del saldo (unidad B13; lo que iba a
      * pagar Mercado Pago nunca se acreditó), y A PROPÓSITO sin la
-     * ventana de cancelación del cliente ({@code now < pickupAt - lead}): esa
+     * ventana de cancelación del cliente ({@code now < pickupAt - cancelLimit}): esa
      * ventana existe para que un cliente no cancele "a último momento" un
      * pedido que SÍ iba a cocinarse, no para este caso — acá el pedido de
      * todos modos NUNCA se va a pagar a tiempo. Por eso no puede reusarse
@@ -396,7 +398,7 @@ public class OrderPlacementService {
 
     /**
      * Cierre de un pedido {@link OrderEstado#PENDIENTE_PAGO} en el corte
-     * ({@code pickup_at - lead}) — unidad B8. Igual que {@link
+     * ({@code pickup_at - orderLead}) — unidad B8. Igual que {@link
      * #closeForPaymentFailure} (mismo lock, misma idempotencia, mismo cierre
      * de stock) y, además, avisa al cliente por mail que el pago no se
      * registró a tiempo y que, si se acredita después, los almuerzos quedan
@@ -433,13 +435,15 @@ public class OrderPlacementService {
 
     /**
      * Núcleo compartido de {@link #cancel} y {@link #closeForPaymentFailure}:
-     * restaura stock, marca {@code CANCELADO} y libera créditos COMMITTED:
-     * el total si el pedido estaba {@code PENDIENTE}, o solo {@code
+     * restaura stock, marca {@code CANCELADO} y devuelve créditos: libera
+     * COMMITTED por el total si el pedido estaba {@code PENDIENTE}, devuelve
+     * a AVAILABLE el total ya consumido ({@code ORDER_REFUND}) si estaba
+     * {@code CONFIRMADO} o {@code COMANDADO}, o libera solo {@code
      * creditsFromBalance} si estaba {@code PENDIENTE_PAGO} (unidad B13; lo
-     * que iba a pagar Mercado Pago nunca se acreditó). Solo para {@code
-     * PENDIENTE} publica el evento de cancelación (su copy de cliente asume
-     * que todo el pedido vuelve al saldo — para {@code PENDIENTE_PAGO} no se
-     * publica). El llamador es
+     * que iba a pagar Mercado Pago nunca se acreditó). Para {@code PENDIENTE},
+     * {@code CONFIRMADO} y {@code COMANDADO} publica el evento de cancelación
+     * (su copy de cliente asume que todo el pedido vuelve al saldo — para
+     * {@code PENDIENTE_PAGO} no se publica). El llamador es
      * responsable de cualquier validación previa (ventana de cancelación,
      * ownership, idempotencia) — acá se asume que YA se decidió que el
      * pedido debe cerrarse.
@@ -447,6 +451,10 @@ public class OrderPlacementService {
     private void applyCancellation(Order order, Instant now) {
         Long userId = order.getUser().getId();
         boolean teniaCreditosComprometidos = order.getEstado() == OrderEstado.PENDIENTE;
+        // CONFIRMADO/COMANDADO: los almuerzos ya se consumieron (salieron de
+        // COMMITTED); se devuelven a disponibles con ORDER_REFUND.
+        boolean teniaCreditosConsumidos = order.getEstado() == OrderEstado.CONFIRMADO
+            || order.getEstado() == OrderEstado.COMANDADO;
         // Pedido esperando pago con una parte reservada del saldo (unidad
         // B13): esos almuerzos se devuelven a disponibles. Los que iba a
         // pagar Mercado Pago nunca se acreditaron, no hay nada que liberar.
@@ -460,6 +468,10 @@ public class OrderPlacementService {
         if (teniaCreditosComprometidos) {
             creditLedgerService.release(userId, order.getCreditTotal(),
                 MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()));
+        } else if (teniaCreditosConsumidos) {
+            creditLedgerService.refundConsumed(userId, order.getCreditTotal(),
+                MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()
+                    + " — devolución de almuerzos ya confirmados"));
         } else if (reservadosDelSaldo > 0) {
             creditLedgerService.release(userId, reservadosDelSaldo,
                 MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()
@@ -469,7 +481,7 @@ public class OrderPlacementService {
         order.setEstado(OrderEstado.CANCELADO);
         order.setCancelledAt(now);
 
-        if (teniaCreditosComprometidos) {
+        if (teniaCreditosComprometidos || teniaCreditosConsumidos) {
             // Publicado DENTRO de la transacción — OrderNotificationScheduler
             // lo escucha con @TransactionalEventListener(phase = AFTER_COMMIT),
             // así que si esta transacción termina en rollback el mail nunca
@@ -493,28 +505,42 @@ public class OrderPlacementService {
 
     // ─── helpers ──────────────────────────────────────────────────────────
 
+    /** Estados desde los que {@link #cancel} acepta cancelar (dentro de la ventana). */
+    private static boolean isCancellableState(Order order) {
+        return switch (order.getEstado()) {
+            case PENDIENTE, PENDIENTE_PAGO, CONFIRMADO, COMANDADO -> true;
+            default -> false;
+        };
+    }
+
     /**
-     * Misma regla que {@link #cancel} sin lanzar: {@code (PENDIENTE ||
-     * PENDIENTE_PAGO) && now < pickupAt - lead}. Único punto de verdad para
-     * "¿se puede cancelar ESTE pedido AHORA?" — usado por {@link #place} y
-     * {@link #list} para que el campo {@code cancellable} de {@link
-     * OrderDto} nunca se calcule dos veces con lógica distinta. {@code
-     * PENDIENTE_PAGO} (unidad B7) es cancelable con la MISMA ventana — pero
-     * NO es MODIFICABLE, ver {@link #assertModifiable}.
+     * Misma regla que {@link #cancel} sin lanzar: estado cancelable ({@link
+     * #isCancellableState}) {@code && now < pickupAt - cancelLimit}. Único
+     * punto de verdad para "¿se puede cancelar ESTE pedido AHORA?" — usado
+     * por {@link #place} y {@link #list} para que el campo {@code
+     * cancellable} de {@link OrderDto} nunca se calcule dos veces con lógica
+     * distinta. {@code PENDIENTE_PAGO}, {@code CONFIRMADO} y {@code
+     * COMANDADO} son cancelables con la MISMA ventana — pero NO son
+     * MODIFICABLES, ver {@link #isWithinCancelWindow} y {@link
+     * #notModifiableReason}.
      */
-    private static boolean isCancellable(Order order, Instant now, int leadMinutes) {
-        if (order.getEstado() != OrderEstado.PENDIENTE && order.getEstado() != OrderEstado.PENDIENTE_PAGO) {
-            return false;
-        }
-        Instant deadline = order.getPickupAt().minus(leadMinutes, ChronoUnit.MINUTES);
+    private static boolean isCancellable(Order order, Instant now, int cancelLimitMinutes) {
+        return isCancellableState(order) && isWithinCancelWindow(order, now, cancelLimitMinutes);
+    }
+
+    /** {@code now < pickupAt - cancelLimit}: la ventana de cancelación/modificación sigue abierta. */
+    private static boolean isWithinCancelWindow(Order order, Instant now, int cancelLimitMinutes) {
+        Instant deadline = order.getPickupAt().minus(cancelLimitMinutes, ChronoUnit.MINUTES);
         return now.isBefore(deadline);
     }
 
     /**
-     * Un pedido es MODIFICABLE exactamente cuando es cancelable — decisión de
-     * usuario 2026-09-27 (unidad B6): misma regla ({@link #isCancellable}),
-     * mismo par de razones subyacentes (estado distinto de {@code PENDIENTE},
-     * o dentro de {@code lead} minutos del retiro), pero un solo código de
+     * Un pedido es MODIFICABLE solo si es {@code PENDIENTE} y sigue dentro
+     * de la ventana de cancelación — decisión de usuario 2026-09-27 (unidad
+     * B6), que al ampliar la cancelación a confirmados/comandados se separó
+     * de {@link #isCancellable}: mismo par de razones subyacentes (estado
+     * distinto de {@code PENDIENTE}, o dentro de {@code cancelLimit} minutos
+     * del retiro), pero un solo código de
      * error para ambas — a diferencia de {@link #cancel}, que distingue
      * {@code order-locked} de {@code cancel-window-closed}.
      *
@@ -543,8 +569,8 @@ public class OrderPlacementService {
      * placeAwaitingPayment} puede no tener su compra DIRECT todavía
      * persistida en el instante exacto en que se evalúa esto.
      */
-    private void assertModifiable(Order order, Instant now, int leadMinutes) {
-        String reason = notModifiableReason(order, now, leadMinutes,
+    private void assertModifiable(Order order, Instant now, int cancelLimitMinutes) {
+        String reason = notModifiableReason(order, now, cancelLimitMinutes,
             () -> creditPurchaseRepo.existsByOrderIdAndType(order.getId(), PurchaseType.DIRECT));
         if (reason != null) {
             throw BusinessException.conflict("order-not-modifiable", reason);
@@ -564,12 +590,13 @@ public class OrderPlacementService {
      * en bloque, sin una consulta por pedido, y un pedido ya no modificable
      * por estado/ventana ni la evalúa.
      */
-    private static String notModifiableReason(Order order, Instant now, int leadMinutes,
+    private static String notModifiableReason(Order order, Instant now, int cancelLimitMinutes,
                                               BooleanSupplier hasDirectPurchase) {
         if (order.getEstado() == OrderEstado.PENDIENTE_PAGO) {
             return "Este pedido está esperando el pago y no se puede modificar.";
         }
-        if (!isCancellable(order, now, leadMinutes)) {
+        if (order.getEstado() != OrderEstado.PENDIENTE
+            || !isWithinCancelWindow(order, now, cancelLimitMinutes)) {
             return "El pedido ya no se puede modificar";
         }
         if (hasDirectPurchase.getAsBoolean()) {
@@ -581,31 +608,32 @@ public class OrderPlacementService {
     /**
      * ¿Se puede cambiar el horario de retiro AHORA? (unidad B11) — pedido
      * programado ({@code PENDIENTE}) y antes del corte {@code pickupAt -
-     * lead}. A diferencia de {@link #isCancellable}, excluye {@code
+     * cancelLimit}. A diferencia de {@link #isCancellable}, excluye {@code
      * PENDIENTE_PAGO} (no cambia de horario); a diferencia de {@link
      * #notModifiableReason}, un pedido pagado aparte (DIRECT) SÍ puede
      * cambiarlo porque el importe no varía.
      */
-    private static boolean isPickupTimeChangeable(Order order, Instant now, int leadMinutes) {
-        return order.getEstado() == OrderEstado.PENDIENTE && isCancellable(order, now, leadMinutes);
+    private static boolean isPickupTimeChangeable(Order order, Instant now, int cancelLimitMinutes) {
+        return order.getEstado() == OrderEstado.PENDIENTE
+            && isWithinCancelWindow(order, now, cancelLimitMinutes);
     }
 
     /** DTO de un solo pedido: una única consulta {@code existsBy} de la compra DIRECT. */
-    private OrderDto toDto(Order order, Instant now, int leadMinutes) {
-        return toDto(order, now, leadMinutes,
+    private OrderDto toDto(Order order, Instant now, int cancelLimitMinutes) {
+        return toDto(order, now, cancelLimitMinutes,
             () -> creditPurchaseRepo.existsByOrderIdAndType(order.getId(), PurchaseType.DIRECT));
     }
 
-    private static OrderDto toDto(Order order, Instant now, int leadMinutes, BooleanSupplier hasDirectPurchase) {
+    private static OrderDto toDto(Order order, Instant now, int cancelLimitMinutes, BooleanSupplier hasDirectPurchase) {
         // Se resuelve UNA vez: `paidWithMercadoPago` y `modifiable` comparten
         // la misma consulta (o el mismo Set del listado), sin consulta extra.
         // `modifiable` no depende de que la compra exista para PENDIENTE_PAGO
         // (notModifiableReason corta antes por estado).
         boolean paidWithMercadoPago = hasDirectPurchase.getAsBoolean();
         return OrderDto.from(order,
-            isCancellable(order, now, leadMinutes),
-            notModifiableReason(order, now, leadMinutes, () -> paidWithMercadoPago) == null,
-            isPickupTimeChangeable(order, now, leadMinutes),
+            isCancellable(order, now, cancelLimitMinutes),
+            notModifiableReason(order, now, cancelLimitMinutes, () -> paidWithMercadoPago) == null,
+            isPickupTimeChangeable(order, now, cancelLimitMinutes),
             paidWithMercadoPago);
     }
 

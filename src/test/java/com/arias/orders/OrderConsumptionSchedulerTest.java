@@ -12,6 +12,7 @@ import com.arias.credits.CreditWallet;
 import com.arias.credits.CreditWalletRepository;
 import com.arias.credits.MovementType;
 import com.arias.orders.notifications.OrderUnpaidCancelledEvent;
+import com.arias.restaurantconfig.RestaurantConfigRepository;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -86,6 +87,26 @@ class OrderConsumptionSchedulerTest {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired
+    private RestaurantConfigRepository configRepo;
+
+    private void setLeads(int preparationMinutes, int orderLeadMinutes) {
+        var config = configRepo.getSingleton();
+        config.setPickupLeadMinutes(preparationMinutes);
+        config.setOrderLeadMinutes(orderLeadMinutes);
+        configRepo.saveAndFlush(config);
+    }
+
+    /** Fija {@code createdAt} (columna con default y no actualizable por JPA) con SQL nativo. */
+    private void setCreatedAt(Long orderId, Instant createdAt) {
+        entityManager.flush();
+        entityManager.createNativeQuery("UPDATE orders SET created_at = :c WHERE id = :id")
+            .setParameter("c", createdAt)
+            .setParameter("id", orderId)
+            .executeUpdate();
+        entityManager.clear();
+    }
 
     private User persistUser() {
         User user = User.builder()
@@ -221,6 +242,7 @@ class OrderConsumptionSchedulerTest {
             .creditCost(5)
             .build());
         orderRepo.save(due);
+        setCreatedAt(due.getId(), FIXED_NOW.minus(30, ChronoUnit.MINUTES));
 
         scheduler.consumeDueOrders();
 
@@ -259,6 +281,7 @@ class OrderConsumptionSchedulerTest {
         User user = persistUser();
         Order due = persistOrder(user, FIXED_NOW.plus(10, ChronoUnit.MINUTES), OrderEstado.PENDIENTE_PAGO, 5);
         Order notYetDue = persistOrder(user, FIXED_NOW.plus(30, ChronoUnit.MINUTES), OrderEstado.PENDIENTE_PAGO, 5);
+        setCreatedAt(due.getId(), FIXED_NOW.minus(30, ChronoUnit.MINUTES));
 
         scheduler.consumeDueOrders();
 
@@ -267,5 +290,60 @@ class OrderConsumptionSchedulerTest {
         assertThat(published.get(0).orderId()).isEqualTo(due.getId());
         assertThat(published.get(0).userEmail()).isEqualTo(user.getEmail());
         assertThat(orderRepo.findById(notYetDue.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.PENDIENTE_PAGO);
+    }
+
+    // ─── Franja de pedido: PENDIENTE_PAGO usa orderLead + gracia de 10 min ───
+
+    @Test
+    @DisplayName("consumeDueOrders(): un PENDIENTE_PAGO dentro del corte del order lead pero creado hace menos de 10 min NO se cierra")
+    void consumeDueOrdersNoCierraPendientePagoDentroDeLaGracia() {
+        setLeads(40, 20);
+        User user = persistUser();
+        Order fresh = persistOrder(user, FIXED_NOW.plus(10, ChronoUnit.MINUTES), OrderEstado.PENDIENTE_PAGO, 5);
+        setCreatedAt(fresh.getId(), FIXED_NOW.minus(5, ChronoUnit.MINUTES));
+
+        scheduler.consumeDueOrders();
+
+        assertThat(orderRepo.findById(fresh.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.PENDIENTE_PAGO);
+    }
+
+    @Test
+    @DisplayName("consumeDueOrders(): un PENDIENTE_PAGO dentro del corte del order lead y creado hace más de 10 min SÍ se cierra")
+    void consumeDueOrdersCierraPendientePagoPasadaLaGracia() {
+        setLeads(40, 20);
+        User user = persistUser();
+        Order stale = persistOrder(user, FIXED_NOW.plus(10, ChronoUnit.MINUTES), OrderEstado.PENDIENTE_PAGO, 5);
+        setCreatedAt(stale.getId(), FIXED_NOW.minus(11, ChronoUnit.MINUTES));
+
+        scheduler.consumeDueOrders();
+
+        assertThat(orderRepo.findById(stale.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.CANCELADO);
+    }
+
+    @Test
+    @DisplayName("consumeDueOrders(): un PENDIENTE_PAGO fuera del corte del order lead no se cierra aunque entre en el tiempo de preparación")
+    void consumeDueOrdersPendientePagoUsaElOrderLeadNoLaPreparacion() {
+        setLeads(40, 20);
+        User user = persistUser();
+        // 30 min: dentro de la preparación (40) pero fuera del order lead (20).
+        Order order = persistOrder(user, FIXED_NOW.plus(30, ChronoUnit.MINUTES), OrderEstado.PENDIENTE_PAGO, 5);
+        setCreatedAt(order.getId(), FIXED_NOW.minus(60, ChronoUnit.MINUTES));
+
+        scheduler.consumeDueOrders();
+
+        assertThat(orderRepo.findById(order.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.PENDIENTE_PAGO);
+    }
+
+    @Test
+    @DisplayName("consumeDueOrders(): la confirmación de PENDIENTE sigue usando el tiempo de preparación")
+    void consumeDueOrdersConfirmaPendienteConElTiempoDePreparacion() {
+        setLeads(40, 20);
+        User user = persistUser();
+        seedWallet(user.getId(), 0, 5);
+        Order order = persistOrder(user, FIXED_NOW.plus(30, ChronoUnit.MINUTES), OrderEstado.PENDIENTE, 5);
+
+        scheduler.consumeDueOrders();
+
+        assertThat(orderRepo.findById(order.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.CONFIRMADO);
     }
 }

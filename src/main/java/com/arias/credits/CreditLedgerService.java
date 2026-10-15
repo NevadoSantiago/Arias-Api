@@ -153,6 +153,26 @@ public class CreditLedgerService {
         return apply(userId, MovementType.RELEASE, amount, -amount, ref);
     }
 
+    /**
+     * Devolución de almuerzos YA consumidos (cancelación de un pedido
+     * {@code CONFIRMADO} o {@code COMANDADO} dentro del límite de cancelación):
+     * suma {@code amount} a AVAILABLE y no toca COMMITTED, porque al confirmar
+     * el pedido esos créditos ya salieron de COMMITTED ({@link #consume}). A
+     * diferencia de {@link #release} (COMMITTED → AVAILABLE) y de {@link
+     * #reverse} (contracargo de Mercado Pago, resta de AVAILABLE), este es un
+     * ingreso neto de saldo.
+     *
+     * <p>Vencimiento: no lo renueva. {@link #apply} solo renueva por {@code
+     * PACK_PURCHASE}; si la billetera todavía no tiene fecha de vencimiento,
+     * un delta positivo de AVAILABLE la fija con los días configurados — mismo
+     * comportamiento que cualquier otro ingreso, no se modifica acá.
+     */
+    @Transactional
+    public CreditMovement refundConsumed(Long userId, int amount, MovementRef ref) {
+        requirePositive(amount);
+        return apply(userId, MovementType.ORDER_REFUND, amount, 0, ref);
+    }
+
     /** Consumo definitivo en el punto de confirmación (pickup − lead, diseño §Decisión 4). */
     @Transactional
     public CreditMovement consume(Long userId, int amount, MovementRef ref) {
