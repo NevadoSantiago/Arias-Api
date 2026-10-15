@@ -5,6 +5,7 @@ import com.arias.restaurantconfig.FechaDeshabilitada;
 import com.arias.restaurantconfig.FechaDeshabilitadaRepository;
 import com.arias.restaurantconfig.PickupSchedule;
 import com.arias.restaurantconfig.PickupScheduleRepository;
+import com.arias.restaurantconfig.RestaurantConfigRepository;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -62,6 +63,9 @@ class PickupSlotServiceTest {
 
     @Autowired
     private PickupScheduleRepository pickupScheduleRepo;
+
+    @Autowired
+    private RestaurantConfigRepository configRepo;
 
     @Autowired
     private OrderRepository orderRepo;
@@ -325,5 +329,57 @@ class PickupSlotServiceTest {
         assertThatThrownBy(() -> pickupSlotService.assertValidPickupTime(noAlineadoAlSabado))
             .isInstanceOf(BusinessException.class)
             .hasFieldOrPropertyWithValue("errorCode", "pickup-time-not-aligned");
+    }
+
+    // ─── "lo antes posible" (V34) manda sobre los horarios, no la preparación ──
+
+    private void setLeads(int preparationMinutes, int orderLeadMinutes) {
+        var config = configRepo.getSingleton();
+        config.setPickupLeadMinutes(preparationMinutes);
+        config.setOrderLeadMinutes(orderLeadMinutes);
+        configRepo.saveAndFlush(config);
+    }
+
+    @Test
+    @DisplayName("slotsFor(): el primer horario sigue el mínimo para pedir (order lead), no el tiempo de preparación")
+    void slotsForUsaElOrderLeadYNoLaPreparacion() {
+        setLeads(40, 20); // preparación 40, lo antes posible 20
+
+        List<Instant> slots = pickupSlotService.slotsFor(today());
+
+        // 10:50 + 20 = 11:10 (con la preparación de 40 sería 11:30).
+        assertThat(slots.get(0).atZone(ZONE).toLocalTime()).isEqualTo(LocalTime.of(11, 10));
+    }
+
+    @Test
+    @DisplayName("slotsFor(): un order lead mayor que la preparación retrasa el primer horario")
+    void slotsForConOrderLeadMayorQueLaPreparacion() {
+        setLeads(10, 40); // preparación 10, lo antes posible 40
+
+        List<Instant> slots = pickupSlotService.slotsFor(today());
+
+        // 10:50 + 40 = 11:30 (con la preparación de 10 sería 11:00).
+        assertThat(slots.get(0).atZone(ZONE).toLocalTime()).isEqualTo(LocalTime.of(11, 30));
+    }
+
+    @Test
+    @DisplayName("assertValidPickupTime(): acepta now + order lead aunque la preparación sea mayor")
+    void assertValidPickupTimeAceptaElBordeDelOrderLeadConPreparacionMayor() {
+        setLeads(40, 20);
+        Instant borde = FIXED_NOW.plus(20, ChronoUnit.MINUTES); // 11:10 ART
+
+        assertThatCode(() -> pickupSlotService.assertValidPickupTime(borde)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("assertValidPickupTime(): pickup-too-soon se mide contra el order lead y el mensaje lo informa")
+    void assertValidPickupTimeTooSoonUsaElOrderLead() {
+        setLeads(10, 40);
+        Instant antesDelBorde = FIXED_NOW.plus(30, ChronoUnit.MINUTES); // 11:20 < 11:30
+
+        assertThatThrownBy(() -> pickupSlotService.assertValidPickupTime(antesDelBorde))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "pickup-too-soon")
+            .hasMessageContaining("al menos 40 minutos");
     }
 }

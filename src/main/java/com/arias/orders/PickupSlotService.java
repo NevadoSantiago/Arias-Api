@@ -26,16 +26,16 @@ import java.util.List;
  * (migración V24, decisión de usuario 2026-09-26 — B5/F14): una franja
  * (apertura-cierre) por día ISO de la semana, o el día cerrado. Dentro de la
  * franja del día: slots cada {@code pickup_slot_minutes} (config global),
- * filtrando los previos a {@code now + pickup_lead_minutes}, solo semana
+ * filtrando los previos a {@code now + order_lead_minutes}, solo semana
  * actual y la siguiente, excluyendo fechas deshabilitadas. Sin límite de
  * capacidad por horario: esta clase nunca consulta {@code orders}, así que el
  * resultado es el mismo sin importar cuántos pedidos ya existan para ese
  * horario.
  *
- * <p>{@code pickup_lead_minutes} es un solo valor con dos usos (diseño
- * §"pickup_lead_minutes: un solo valor, dos usos"): acá define el retiro más
- * temprano ofrecido; {@link OrderConsumptionScheduler} usa el mismo valor
- * para el punto de consumo automático.
+ * <p>El primer horario ofrecido y la validación {@code pickup-too-soon} usan
+ * {@code order_lead_minutes} ("lo antes posible", migración V34), no el
+ * tiempo de preparación {@code pickup_lead_minutes}: este último solo define
+ * el punto de consumo automático en {@link OrderConsumptionScheduler}.
  */
 @Service
 @RequiredArgsConstructor
@@ -67,7 +67,7 @@ public class PickupSlotService {
         }
 
         RestaurantConfig config = configRepo.getSingleton();
-        Instant earliest = clock.instant().plus(config.getPickupLeadMinutes(), ChronoUnit.MINUTES);
+        Instant earliest = clock.instant().plus(config.getOrderLeadMinutes(), ChronoUnit.MINUTES);
 
         LocalTime start = schedule.getWindowStart();
         LocalTime end = schedule.getWindowEnd();
@@ -134,10 +134,10 @@ public class PickupSlotService {
                 "El horario de retiro debe estar alineado a intervalos de " + stepMinutes + " minutos");
         }
 
-        Instant earliest = clock.instant().plus(config.getPickupLeadMinutes(), ChronoUnit.MINUTES);
+        Instant earliest = clock.instant().plus(config.getOrderLeadMinutes(), ChronoUnit.MINUTES);
         if (pickupAt.isBefore(earliest)) {
             throw BusinessException.badRequest("pickup-too-soon",
-                "El horario de retiro debe ser al menos " + config.getPickupLeadMinutes()
+                "El horario de retiro debe ser al menos " + config.getOrderLeadMinutes()
                     + " minutos desde ahora");
         }
     }
