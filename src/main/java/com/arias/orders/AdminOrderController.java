@@ -123,6 +123,21 @@ public class AdminOrderController {
         return AdminOrderDto.PickupGroupDto.groupByPickup(orders, ZONE);
     }
 
+    /** PENDIENTE -> CONFIRMADO a mano para un pedido B2C: consume sus créditos, sin deshacer. */
+    @PutMapping("/{id}/confirmar")
+    @Transactional
+    public AdminOrderDto.PickupOrderDto markConfirmado(@PathVariable Long id) {
+        return AdminOrderDto.PickupOrderDto.from(orderKitchenService.markConfirmado(List.of(id)).get(0));
+    }
+
+    /** PENDIENTE -> CONFIRMADO a mano para varios pedidos B2C, todo o nada. */
+    @PutMapping("/confirmar")
+    @Transactional
+    public List<AdminOrderDto.PickupOrderDto> markConfirmadoBatch(@RequestBody AdminOrderDto.KitchenBatchRequest req) {
+        return orderKitchenService.markConfirmado(req.orderIds()).stream()
+            .map(AdminOrderDto.PickupOrderDto::from).toList();
+    }
+
     /** CONFIRMADO -> COMANDADO for one B2C order. */
     @PutMapping("/{id}/comandado")
     @Transactional

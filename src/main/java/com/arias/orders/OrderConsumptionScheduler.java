@@ -1,7 +1,5 @@
 package com.arias.orders;
 
-import com.arias.credits.CreditLedgerService;
-import com.arias.credits.MovementRef;
 import com.arias.restaurantconfig.RestaurantConfigRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,7 +50,7 @@ public class OrderConsumptionScheduler {
     static final int UNPAID_GRACE_MINUTES = 10;
 
     private final OrderRepository orderRepo;
-    private final CreditLedgerService creditLedgerService;
+    private final OrderKitchenService orderKitchenService;
     private final RestaurantConfigRepository configRepo;
     private final OrderPlacementService orderPlacementService;
     private final Clock clock;
@@ -67,10 +65,7 @@ public class OrderConsumptionScheduler {
 
         List<Order> due = orderRepo.findByEstadoAndPickupAtLessThanEqual(OrderEstado.PENDIENTE, cutoff);
         for (Order order : due) {
-            creditLedgerService.consume(order.getUser().getId(), order.getCreditTotal(),
-                MovementRef.forOrder(order.getId(), "Consumo automático de pedido #" + order.getId()));
-            order.setEstado(OrderEstado.CONFIRMADO);
-            order.setConfirmedAt(now);
+            orderKitchenService.confirmOrder(order, now, "Consumo automático de pedido #" + order.getId());
         }
 
         // Pedidos esperando pago directo cuyo corte llegó sin que Mercado

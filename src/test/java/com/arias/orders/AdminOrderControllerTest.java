@@ -8,6 +8,8 @@ import com.arias.catalog.menusections.MenuSection;
 import com.arias.catalog.menusections.MenuSectionRepository;
 import com.arias.common.exception.BusinessException;
 import com.arias.common.security.JwtUser;
+import com.arias.credits.CreditWallet;
+import com.arias.credits.CreditWalletRepository;
 import com.arias.companies.Company;
 import com.arias.companies.CompanyRepository;
 import com.arias.users.Role;
@@ -99,6 +101,9 @@ class AdminOrderControllerTest {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired
+    private CreditWalletRepository walletRepo;
 
     @BeforeEach
     void authenticateAsSuperAdmin() {
@@ -275,6 +280,39 @@ class AdminOrderControllerTest {
             .hasSize(2).allMatch(r -> r.estado() == OrderEstado.COMANDADO);
         assertThat(controller.markEntregadoBatch(req))
             .hasSize(2).allMatch(r -> r.estado() == OrderEstado.ENTREGADO);
+    }
+
+    private void seedWallet(Order order, int committed) {
+        walletRepo.saveAndFlush(CreditWallet.builder()
+            .userId(order.getUser().getId()).available(0).committed(committed).build());
+    }
+
+    @Test
+    @DisplayName("confirmar: el controller confirma un pedido PENDIENTE y consume sus creditos")
+    void confirmThroughController() {
+        Dish dish = persistDish(persistCategory(2), persistMenuSection());
+        Order o = persistOrder(persistB2cUser("Coty"), dish,
+            FIXED_NOW.plus(60, ChronoUnit.MINUTES), OrderEstado.PENDIENTE, null);
+        seedWallet(o, 2);
+
+        AdminOrderDto.PickupOrderDto result = controller.markConfirmado(o.getId());
+
+        assertThat(result.estado()).isEqualTo(OrderEstado.CONFIRMADO);
+        assertThat(walletRepo.findByIdForUpdate(o.getUser().getId()).orElseThrow().getCommitted()).isZero();
+    }
+
+    @Test
+    @DisplayName("confirmar en lote: devuelve los pedidos confirmados")
+    void confirmBatchThroughController() {
+        Dish dish = persistDish(persistCategory(2), persistMenuSection());
+        Instant pickup = FIXED_NOW.plus(60, ChronoUnit.MINUTES);
+        Order a = persistOrder(persistB2cUser("Coty"), dish, pickup, OrderEstado.PENDIENTE, null);
+        Order b = persistOrder(persistB2cUser("Fede"), dish, pickup, OrderEstado.PENDIENTE, null);
+        seedWallet(a, 2);
+        seedWallet(b, 2);
+
+        assertThat(controller.markConfirmadoBatch(new AdminOrderDto.KitchenBatchRequest(List.of(a.getId(), b.getId()))))
+            .hasSize(2).allMatch(r -> r.estado() == OrderEstado.CONFIRMADO);
     }
 
     // ─── Listado agrupado por horario de retiro (spec: "Listado agrupado por horario") ──

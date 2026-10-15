@@ -1,6 +1,8 @@
 package com.arias.orders;
 
 import com.arias.common.exception.BusinessException;
+import com.arias.credits.CreditLedgerService;
+import com.arias.credits.MovementRef;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,8 +16,8 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * Kitchen state transitions of B2C {@link Order}s: CONFIRMADO -> COMANDADO ->
- * ENTREGADO, with one-step undo. Batches are all-or-nothing: every order is
+ * Transiciones de estado de los {@link Order} B2C: PENDIENTE -> CONFIRMADO ->
+ * COMANDADO -> ENTREGADO, con deshacer de un paso (salvo la confirmación). Batches are all-or-nothing: every order is
  * validated before any is changed, and the whole call runs in one transaction.
  */
 @Service
@@ -23,7 +25,35 @@ import java.util.stream.Collectors;
 public class OrderKitchenService {
 
     private final OrderRepository orderRepository;
+    private final CreditLedgerService creditLedgerService;
     private final Clock clock;
+
+    /**
+     * PENDIENTE -> CONFIRMADO a mano. Hace lo mismo que el cron en {@code
+     * pickup - preparación}: consume los créditos comprometidos y registra
+     * {@code confirmedAt}. No tiene deshacer porque los créditos ya se
+     * consumieron. Todo o nada: se valida cada pedido antes de tocar alguno.
+     */
+    @Transactional
+    public List<Order> markConfirmado(List<Long> ids) {
+        List<Order> orders = loadForUpdate(ids);
+        orders.forEach(o -> requireEstado(o, OrderEstado.PENDIENTE));
+        Instant now = clock.instant();
+        orders.forEach(o -> confirmOrder(o, now, "Consumo de pedido #" + o.getId() + " — confirmado desde el tablero"));
+        return orders;
+    }
+
+    /**
+     * Transición única PENDIENTE -> CONFIRMADO, compartida con el cron de
+     * consumo: consume los créditos, marca CONFIRMADO y fija {@code confirmedAt}.
+     * No valida el estado; quien llama ya filtró los pedidos PENDIENTE.
+     */
+    void confirmOrder(Order order, Instant now, String movementDescription) {
+        creditLedgerService.consume(order.getUser().getId(), order.getCreditTotal(),
+            MovementRef.forOrder(order.getId(), movementDescription));
+        order.setEstado(OrderEstado.CONFIRMADO);
+        order.setConfirmedAt(now);
+    }
 
     @Transactional
     public List<Order> markComandado(List<Long> ids) {

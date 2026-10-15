@@ -7,6 +7,11 @@ import com.arias.catalog.dishes.DishRepository;
 import com.arias.catalog.menusections.MenuSection;
 import com.arias.catalog.menusections.MenuSectionRepository;
 import com.arias.common.exception.BusinessException;
+import com.arias.credits.CreditMovement;
+import com.arias.credits.CreditMovementRepository;
+import com.arias.credits.CreditWallet;
+import com.arias.credits.CreditWalletRepository;
+import com.arias.credits.MovementType;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -53,6 +58,8 @@ class OrderKitchenServiceTest {
     @Autowired private CategoryRepository categoryRepo;
     @Autowired private MenuSectionRepository menuSectionRepo;
     @Autowired private DishRepository dishRepo;
+    @Autowired private CreditWalletRepository walletRepo;
+    @Autowired private CreditMovementRepository movementRepo;
 
     private Order persistOrder(OrderEstado estado) {
         Category category = categoryRepo.save(Category.builder()
@@ -72,6 +79,97 @@ class OrderKitchenServiceTest {
         order.addItem(OrderItem.builder().dish(dish).category(category).dishNombre(dish.getNombre())
             .dishCategoria(category.getNombre()).creditCost(2).build());
         return orderRepo.save(order);
+    }
+
+    private void seedWallet(Order order, int available, int committed) {
+        walletRepo.saveAndFlush(CreditWallet.builder()
+            .userId(order.getUser().getId()).available(available).committed(committed).build());
+    }
+
+    @Test
+    @DisplayName("markConfirmado(): PENDIENTE pasa a CONFIRMADO, consume los creditos comprometidos y registra confirmedAt")
+    void markConfirmadoConsumesCredits() {
+        Order o = persistOrder(OrderEstado.PENDIENTE);
+        seedWallet(o, 3, 2);
+
+        Order result = service.markConfirmado(List.of(o.getId())).get(0);
+
+        assertThat(result.getEstado()).isEqualTo(OrderEstado.CONFIRMADO);
+        assertThat(result.getConfirmedAt()).isEqualTo(FIXED_NOW);
+        CreditWallet wallet = walletRepo.findByIdForUpdate(o.getUser().getId()).orElseThrow();
+        assertThat(wallet.getCommitted()).isZero();
+        assertThat(wallet.getAvailable()).isEqualTo(3);
+        List<CreditMovement> movements = movementRepo.findByUserIdOrderByCreatedAtDesc(o.getUser().getId());
+        assertThat(movements).singleElement().satisfies(m -> {
+            assertThat(m.getType()).isEqualTo(MovementType.CONSUME);
+            assertThat(m.getDeltaCommitted()).isEqualTo(-2);
+            assertThat(m.getDeltaAvailable()).isZero();
+            assertThat(m.getOrderId()).isEqualTo(o.getId());
+        });
+    }
+
+    @Test
+    @DisplayName("markConfirmado(): rechaza CONFIRMADO, COMANDADO, CANCELADO y PENDIENTE_PAGO con 409")
+    void markConfirmadoRejectsOtherStates() {
+        for (OrderEstado estado : List.of(OrderEstado.CONFIRMADO, OrderEstado.COMANDADO,
+                OrderEstado.CANCELADO, OrderEstado.PENDIENTE_PAGO)) {
+            Order o = persistOrder(estado);
+            assertThatThrownBy(() -> service.markConfirmado(List.of(o.getId())))
+                .as("estado %s", estado)
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("order-invalid-transition");
+                    assertThat(e.getStatus().value()).isEqualTo(409);
+                });
+        }
+    }
+
+    @Test
+    @DisplayName("markConfirmado(): lote todo-o-nada, un pedido invalido no consume ni confirma a los validos")
+    void markConfirmadoBatchIsAllOrNothing() {
+        Order ok = persistOrder(OrderEstado.PENDIENTE);
+        seedWallet(ok, 0, 2);
+        Order bad = persistOrder(OrderEstado.COMANDADO);
+
+        assertThatThrownBy(() -> service.markConfirmado(List.of(ok.getId(), bad.getId())))
+            .isInstanceOf(BusinessException.class);
+
+        assertThat(ok.getEstado()).isEqualTo(OrderEstado.PENDIENTE);
+        assertThat(ok.getConfirmedAt()).isNull();
+        assertThat(walletRepo.findByIdForUpdate(ok.getUser().getId()).orElseThrow().getCommitted()).isEqualTo(2);
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(ok.getUser().getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("markConfirmado(): lote valido confirma todos")
+    void markConfirmadoBatch() {
+        Order a = persistOrder(OrderEstado.PENDIENTE);
+        Order b = persistOrder(OrderEstado.PENDIENTE);
+        seedWallet(a, 0, 2);
+        seedWallet(b, 0, 2);
+
+        assertThat(service.markConfirmado(List.of(a.getId(), b.getId())))
+            .hasSize(2)
+            .allMatch(o -> o.getEstado() == OrderEstado.CONFIRMADO);
+    }
+
+    @Test
+    @DisplayName("markConfirmado(): lista vacia da 400 order-ids-required")
+    void markConfirmadoEmptyList() {
+        assertThatThrownBy(() -> service.markConfirmado(List.of()))
+            .isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("order-ids-required");
+                assertThat(e.getStatus().value()).isEqualTo(400);
+            });
+    }
+
+    @Test
+    @DisplayName("markConfirmado(): id inexistente da 404 order-not-found")
+    void markConfirmadoUnknownId() {
+        assertThatThrownBy(() -> service.markConfirmado(List.of(-1L)))
+            .isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("order-not-found");
+                assertThat(e.getStatus().value()).isEqualTo(404);
+            });
     }
 
     @Test
