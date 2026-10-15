@@ -48,6 +48,8 @@ public class RestaurantConfigController {
         RestaurantConfig config = repo.getSingleton();
         config.setHoraCorte(req.horaCorte());
         config.setPickupLeadMinutes(req.pickupLeadMinutes());
+        config.setOrderLeadMinutes(req.orderLeadMinutes());
+        config.setCancelLimitMinutes(req.cancelLimitMinutes());
         config.setCreditExpiryDays(req.creditExpiryDays());
         config.setPickupWindowStart(req.pickupWindowStart());
         config.setPickupWindowEnd(req.pickupWindowEnd());

@@ -7,6 +7,8 @@ public record RestaurantConfigDto(
     LocalTime horaCorte,
     String timezone,
     Integer pickupLeadMinutes,
+    Integer orderLeadMinutes,
+    Integer cancelLimitMinutes,
     Integer creditExpiryDays,
     /** Reemplazado por {@link #pickupSchedule()} (migración V24, B5/F14) — se mantiene solo por compatibilidad y ya no define la franja real. */
     @Deprecated LocalTime pickupWindowStart,
@@ -23,6 +25,8 @@ public record RestaurantConfigDto(
             c.getHoraCorte(),
             c.getTimezone(),
             c.getPickupLeadMinutes(),
+            c.getOrderLeadMinutes(),
+            c.getCancelLimitMinutes(),
             c.getCreditExpiryDays(),
             c.getPickupWindowStart(),
             c.getPickupWindowEnd(),

@@ -13,6 +13,8 @@ package com.arias.credits;
  *   <li>{@link #DIRECT_PURCHASE_REFUND} — {@code +N available} (unidad B7):
  *       una compra DIRECT se aprobó pero el pedido ya estaba CANCELADO — los
  *       almuerzos van a disponibles en vez de perderse o reabrir el pedido</li>
+ *   <li>{@link #ORDER_REFUND} — {@code +N available}, {@code 0 committed}: devuelve créditos ya
+ *       consumidos al cancelar un pedido confirmado/comandado dentro del límite</li>
  *   <li>{@link #COMMIT} — {@code -N available, +N committed}</li>
  *   <li>{@link #RELEASE} — {@code +N available, -N committed}</li>
  *   <li>{@link #CONSUME} — {@code -N committed}</li>
@@ -26,6 +28,12 @@ public enum MovementType {
     PACK_PURCHASE,
     DIRECT_PURCHASE,
     DIRECT_PURCHASE_REFUND,
+    /**
+     * Devolución a disponibles de créditos ya consumidos cuando se cancela un
+     * pedido CONFIRMADO o COMANDADO dentro del límite de cancelación:
+     * {@code +N available}, committed intacto (0).
+     */
+    ORDER_REFUND,
     COMMIT,
     RELEASE,
     CONSUME,

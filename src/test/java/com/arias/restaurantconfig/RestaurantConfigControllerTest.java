@@ -59,6 +59,8 @@ class RestaurantConfigControllerTest {
         return new UpdateRestaurantConfigRequest(
             LocalTime.of(9, 30),   // horaCorte
             30,                    // pickupLeadMinutes
+            15,                    // orderLeadMinutes
+            10,                    // cancelLimitMinutes
             60,                    // creditExpiryDays
             LocalTime.of(12, 0),   // pickupWindowStart
             LocalTime.of(16, 0),   // pickupWindowEnd
@@ -92,12 +94,38 @@ class RestaurantConfigControllerTest {
     }
 
     @Test
+    @DisplayName("update(): guarda y devuelve el mínimo para pedir y el límite de cancelación por separado de la preparación")
+    void updateGuardaOrderLeadYCancelLimit() {
+        RestaurantConfigDto updated = controller.update(validRequest());
+
+        assertThat(updated.orderLeadMinutes()).isEqualTo(15);
+        assertThat(updated.cancelLimitMinutes()).isEqualTo(10);
+
+        RestaurantConfig persisted = repo.getSingleton();
+        assertThat(persisted.getOrderLeadMinutes()).isEqualTo(15);
+        assertThat(persisted.getCancelLimitMinutes()).isEqualTo(10);
+
+        RestaurantConfigDto read = controller.get();
+        assertThat(read.orderLeadMinutes()).isEqualTo(15);
+        assertThat(read.cancelLimitMinutes()).isEqualTo(10);
+    }
+
+    @Test
+    @DisplayName("get(): la config sembrada devuelve orderLead y cancelLimit iguales a la preparación (backfill de V34)")
+    void getConfigSembradaIgualaLosNuevosCamposALaPreparacion() {
+        RestaurantConfigDto read = controller.get();
+
+        assertThat(read.orderLeadMinutes()).isEqualTo(read.pickupLeadMinutes());
+        assertThat(read.cancelLimitMinutes()).isEqualTo(read.pickupLeadMinutes());
+    }
+
+    @Test
     @DisplayName("update(): sin dailySummaryTime en el request conserva el horario ya guardado")
     void updateSinDailySummaryTimeConservaElValorGuardado() {
         controller.update(validRequest()); // deja 07:45 guardado
 
         UpdateRestaurantConfigRequest withoutSummary = new UpdateRestaurantConfigRequest(
-            LocalTime.of(9, 30), 30, 60,
+            LocalTime.of(9, 30), 30, 15, 10, 60,
             LocalTime.of(12, 0), LocalTime.of(16, 0),
             20, null, 15
         );
@@ -113,7 +141,7 @@ class RestaurantConfigControllerTest {
         LocalTime originalStart = repo.getSingleton().getPickupWindowStart();
 
         UpdateRestaurantConfigRequest invalid = new UpdateRestaurantConfigRequest(
-            LocalTime.of(9, 30), 30, 60,
+            LocalTime.of(9, 30), 30, 15, 10, 60,
             LocalTime.of(16, 0),  // start
             LocalTime.of(16, 0),  // end == start → inválido (no es before)
             20, LocalTime.of(7, 45), 15

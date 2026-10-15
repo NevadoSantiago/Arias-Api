@@ -34,12 +34,29 @@ public class RestaurantConfig {
     private String timezone = "America/Argentina/Buenos_Aires";
 
     /**
-     * Único valor de tiempo de preparación (unidad 8, migración V20): define
-     * a la vez el retiro más temprano ofrecido ({@code now + lead}) y el
-     * punto de consumo automático ({@code pickup_at - lead}).
+     * Tiempo de preparación (unidad 8, migración V20). Desde V34 es solo el
+     * lado administrativo: define el punto de consumo automático
+     * ({@code pickup_at - lead}) en que un pedido programado pasa a
+     * CONFIRMADO y la cocina lo ve. El mínimo para pedir es
+     * {@link #orderLeadMinutes} y el límite para cancelar es
+     * {@link #cancelLimitMinutes}.
      */
     @Column(name = "pickup_lead_minutes", nullable = false)
     private Integer pickupLeadMinutes;
+
+    /**
+     * "Lo antes posible" (migración V34): mínimo de anticipación para pedir;
+     * el primer horario de retiro ofrecido es {@code now + orderLead}.
+     */
+    @Column(name = "order_lead_minutes", nullable = false)
+    private Integer orderLeadMinutes;
+
+    /**
+     * Límite de cancelación (migración V34): hasta cuántos minutos antes del
+     * retiro se puede cancelar o cambiar el pedido.
+     */
+    @Column(name = "cancel_limit_minutes", nullable = false)
+    private Integer cancelLimitMinutes;
 
     /** Días de vencimiento del saldo AVAILABLE de créditos — reemplaza al default fijo de {@code CreditLedgerService}. */
     @Column(name = "credit_expiry_days", nullable = false)
