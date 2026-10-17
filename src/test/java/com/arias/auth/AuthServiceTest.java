@@ -111,7 +111,7 @@ class AuthServiceTest {
         User user = saveUser(null, "Ana", "Perez");
 
         assertThatThrownBy(() -> authService.completeProfile(
-                user.getId(), new CompleteProfileRequest("+5491159876547", "Coty")))
+                user.getId(), new CompleteProfileRequest("115987654", "Coty")))
             .isInstanceOfSatisfying(BusinessException.class, ex -> {
                 assertThat(ex.getErrorCode()).isEqualTo("INVALID_PHONE");
                 assertThat(ex.getMessage()).isEqualTo("Ingresá los 10 dígitos de tu celular");

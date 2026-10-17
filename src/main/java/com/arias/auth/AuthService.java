@@ -143,7 +143,7 @@ public class AuthService {
         User user = userRepo.findById(userId)
             .orElseThrow(InvalidCredentialsException::new);
 
-        String phone = PhoneNumbers.normalizeArMobile(req.phone())
+        String phone = PhoneNumbers.normalize(req.phone())
             .orElseThrow(() -> BusinessException.badRequest(
                 "INVALID_PHONE", "Ingresá los 10 dígitos de tu celular"));
 

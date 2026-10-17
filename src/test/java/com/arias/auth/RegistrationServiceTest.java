@@ -104,10 +104,10 @@ class RegistrationServiceTest {
     }
 
     @Test
-    void registroRechazaTelefonoEnFormatoInternacional() {
+    void registroRechazaTelefonoE164Invalido() {
         String email = "registro-tel-e164-" + System.nanoTime() + "@test.arias.com";
 
-        assertThatThrownBy(() -> registrationService.register(validRequest(email, "+5491122330012")))
+        assertThatThrownBy(() -> registrationService.register(validRequest(email, "+0491122330012")))
             .isInstanceOfSatisfying(BusinessException.class,
                 ex -> assertThat(ex.getErrorCode()).isEqualTo("INVALID_PHONE"));
 

@@ -61,7 +61,7 @@ public class RegistrationService {
      */
     @Transactional
     public void register(RegisterRequest req) {
-        String phone = PhoneNumbers.normalizeArMobile(req.phone())
+        String phone = PhoneNumbers.normalize(req.phone())
             .orElseThrow(() -> BusinessException.badRequest(
                 "INVALID_PHONE", "Ingresá los 10 dígitos de tu celular"));
 
