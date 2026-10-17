@@ -1,18 +1,19 @@
 package com.arias.orders.notifications;
 
+import com.arias.email.EmailContent;
+import com.arias.email.EmailLayout;
 import com.arias.email.EmailProperties;
 import com.arias.email.EmailService;
 import com.arias.orders.Order;
-import com.arias.orders.OrderItem;
 import com.arias.users.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
-import org.springframework.web.util.HtmlUtils;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -47,30 +48,17 @@ public class OrderNotificationEmails {
                 TreeMap::new,
                 Collectors.toList()));
 
-        StringBuilder rows = new StringBuilder();
+        List<List<String>> rows = new ArrayList<>();
         for (Map.Entry<LocalTime, List<Order>> entry : byPickup.entrySet()) {
             List<Order> group = entry.getValue();
             int creditos = group.stream().mapToInt(Order::getCreditTotal).sum();
-            rows.append("""
-                <tr>
-                  <td style="padding: 8px 0; border-bottom: 1px solid #e8ddd5;"><strong>%s</strong></td>
-                  <td style="padding: 8px 0; border-bottom: 1px solid #e8ddd5;">%d pedido(s)</td>
-                  <td style="padding: 8px 0; border-bottom: 1px solid #e8ddd5;">%d almuerzo(s)</td>
-                </tr>
-                """.formatted(entry.getKey().format(HORA), group.size(), creditos));
+            rows.add(List.of("<strong>" + entry.getKey().format(HORA) + "</strong>",
+                group.size() + " pedido(s)", creditos + " almuerzo(s)"));
         }
 
-        String intro = """
-            <p style="line-height: 1.6; margin: 0 0 16px;">Resumen de pedidos para hoy (%s) — %d pedido(s) en total.</p>
-            <table cellpadding="0" cellspacing="0" width="100%%" style="margin: 0 0 24px;">
-              <tr>
-                <th style="text-align: left; padding: 8px 0; border-bottom: 2px solid #c5191d;">Retiro</th>
-                <th style="text-align: left; padding: 8px 0; border-bottom: 2px solid #c5191d;">Pedidos</th>
-                <th style="text-align: left; padding: 8px 0; border-bottom: 2px solid #c5191d;">Almuerzos</th>
-              </tr>
-              %s
-            </table>
-            """.formatted(fecha, orders.size(), rows);
+        String intro = EmailLayout.paragraph("Resumen de pedidos para hoy (%s) — %d pedido(s) en total."
+                .formatted(fecha, orders.size()))
+            + EmailLayout.summaryTable(List.of("Retiro", "Pedidos", "Almuerzos"), rows);
 
         String html = buildHtml("Resumen del día", intro);
         for (User admin : admins) {
@@ -82,11 +70,10 @@ public class OrderNotificationEmails {
     /** Alerta de cancelación — a los administradores y copia al cliente que canceló. */
     public void sendCancellationAlert(List<User> admins, OrderCancelledEvent event) {
         String hora = LocalTime.ofInstant(event.pickupAt(), ZONE).format(HORA);
-        String nombre = HtmlUtils.htmlEscape(event.userDisplayName());
+        String nombre = EmailLayout.escape(event.userDisplayName());
 
-        String introAdmin = """
-            <p style="line-height: 1.6; margin: 0 0 16px;">El pedido #%d de <strong>%s</strong> se canceló. Horario de retiro original: <strong>%s</strong>.</p>
-            """.formatted(event.orderId(), nombre, hora);
+        String introAdmin = EmailLayout.paragraph("El pedido #%d de <strong>%s</strong> se canceló. Horario de retiro original: <strong>%s</strong>."
+            .formatted(event.orderId(), nombre, hora));
         String htmlAdmin = buildHtml("Pedido cancelado", introAdmin);
         for (User admin : admins) {
             if (admin.getEmail() == null || admin.getEmail().isBlank()) continue;
@@ -94,9 +81,8 @@ public class OrderNotificationEmails {
         }
 
         if (event.userEmail() != null && !event.userEmail().isBlank()) {
-            String introCliente = """
-                <p style="line-height: 1.6; margin: 0 0 16px;">Confirmamos que cancelaste tu pedido #%d, que tenías programado para retirar a las <strong>%s</strong>. Tus almuerzos ya vuelven a estar disponibles en tu saldo.</p>
-                """.formatted(event.orderId(), hora);
+            String introCliente = EmailLayout.paragraph("Confirmamos que cancelaste tu pedido #%d, que tenías programado para retirar a las <strong>%s</strong>. Tus almuerzos ya vuelven a estar disponibles en tu saldo."
+                .formatted(event.orderId(), hora));
             String htmlCliente = buildHtml("Cancelaste tu pedido", introCliente);
             emailService.send(event.userEmail(), "Cancelaste tu pedido #" + event.orderId() + " — Arias", htmlCliente);
         }
@@ -113,16 +99,14 @@ public class OrderNotificationEmails {
         var pickup = event.pickupAt().atZone(ZONE);
         String dia = pickup.format(DIA);
         String hora = pickup.format(HORA);
-        String nombre = HtmlUtils.htmlEscape(event.userDisplayName());
+        String nombre = EmailLayout.escape(event.userDisplayName());
 
-        String intro = """
-            <p style="line-height: 1.6; margin: 0 0 16px;">Hola %s, cancelamos tu pedido #%d (retiro el %s a las <strong>%s</strong>) porque no registramos el pago de Mercado Pago antes del horario de corte.</p>
-            <p style="line-height: 1.6; margin: 0 0 24px;">Si el pago se acredita más tarde, no lo perdés: tus almuerzos disponibles quedan en tu cuenta para usarlos en otro pedido.</p>
-            <a href="%s" style="display: inline-block; background: #c5191d; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; font-size: 13px;">Ver mis pedidos</a>
-            """.formatted(nombre, event.orderId(), dia, hora, props.appUrl());
+        String intro = EmailLayout.paragraph("Hola %s, cancelamos tu pedido #%d (retiro el %s a las <strong>%s</strong>) porque no registramos el pago de Mercado Pago antes del horario de corte."
+                .formatted(nombre, event.orderId(), dia, hora))
+            + EmailLayout.paragraph("Si el pago se acredita más tarde, no lo perdés: tus almuerzos disponibles quedan en tu cuenta para usarlos en otro pedido.");
 
         emailService.send(event.userEmail(), "Cancelamos tu pedido #" + event.orderId() + " por falta de pago — Arias",
-            buildHtml("Tu pedido se canceló", intro));
+            EmailLayout.render(EmailContent.of("Tu pedido se canceló", intro).withCta("Ver mis pedidos", props.appUrl())));
     }
 
     /** Recordatorio de retiro al cliente. */
@@ -131,38 +115,21 @@ public class OrderNotificationEmails {
         if (user.getEmail() == null || user.getEmail().isBlank()) return;
 
         String hora = LocalTime.ofInstant(order.getPickupAt(), ZONE).format(HORA);
-        String platos = order.getItems().stream()
-            .map(OrderItem::getDishNombre)
-            .collect(Collectors.joining(", "));
+        List<String> platos = order.getItems().stream()
+            .map(i -> EmailLayout.escape(i.getDishNombre()))
+            .toList();
 
-        String intro = """
-            <p style="line-height: 1.6; margin: 0 0 16px;">Tu pedido #%d está casi listo — retirálo a las <strong>%s</strong>.</p>
-            <p style="line-height: 1.6; margin: 0 0 24px;">%s</p>
-            """.formatted(order.getId(), hora, HtmlUtils.htmlEscape(platos));
+        String intro = EmailLayout.paragraph("Tu pedido #%d está casi listo — retirálo a las <strong>%s</strong>."
+                .formatted(order.getId(), hora))
+            + EmailLayout.paragraph("En el mostrador te vamos a llamar por <strong>%s</strong>."
+                .formatted(EmailLayout.escape(user.displayName())))
+            + EmailLayout.labelledBox("Tu pedido", EmailLayout.bulletList(platos));
 
         emailService.send(user.getEmail(), "Tu almuerzo te espera a las " + hora + " — Arias",
             buildHtml("¡Ya casi es la hora!", intro));
     }
 
     private static String buildHtml(String heading, String introHtml) {
-        return """
-            <!DOCTYPE html>
-            <html>
-            <head><meta charset="utf-8"></head>
-            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f7f1ed; padding: 40px 20px; color: #2a1a14;">
-              <table cellpadding="0" cellspacing="0" border="0" align="center" style="max-width: 480px; background: #fffdfb; border-radius: 8px; padding: 32px;">
-                <tr><td>
-                  <h1 style="font-family: Georgia, serif; color: #c5191d; font-size: 28px; margin: 0 0 8px;">ARIAS</h1>
-                  <p style="color: #c5191d; text-transform: uppercase; letter-spacing: 2px; font-size: 11px; margin: 0 0 32px;">Bodegón · Parrilla</p>
-
-                  <h2 style="font-family: Georgia, serif; font-size: 22px; margin: 0 0 16px;">%s</h2>
-                  %s
-
-                  <p style="color: #6b5b52; font-size: 11px; margin: 32px 0 0; text-transform: uppercase; letter-spacing: 1px;">Familia Mazzariello · Desde 2015</p>
-                </td></tr>
-              </table>
-            </body>
-            </html>
-            """.formatted(heading, introHtml);
+        return EmailLayout.render(EmailContent.of(heading, introHtml));
     }
 }
