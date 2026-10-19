@@ -67,8 +67,11 @@ class OrderPaymentQuoteReminderEmailsTest {
         when(o.getPickupAt()).thenReturn(Instant.parse("2026-03-10T15:00:00Z")); // 12:00 ART
         List<OrderItem> items = new java.util.ArrayList<>();
         for (String d : dishes) {
+            // "Plato|Acompañamiento" sets a side (guarnición or salsa); no bar means no side.
+            String[] parts = d.split("\\|", 2);
             OrderItem it = mock(OrderItem.class);
-            when(it.getDishNombre()).thenReturn(d);
+            when(it.getDishNombre()).thenReturn(parts[0]);
+            when(it.getSideNombre()).thenReturn(parts.length > 1 ? parts[1] : null);
             items.add(it);
         }
         when(o.getItems()).thenReturn(items);
@@ -78,11 +81,11 @@ class OrderPaymentQuoteReminderEmailsTest {
     // ─── Pickup reminder ────────────────────────────────────────────────
 
     @Test
-    @DisplayName("recordatorio de retiro: nombre de mostrador escapado y un <li> por plato")
+    @DisplayName("recordatorio de retiro: nombre de mostrador escapado y un <li> por plato, con su acompañamiento")
     void pickupReminder() {
         User u = user("c@x.test", "Ana <b>", "Ana");
         new OrderNotificationEmails(emailService, props)
-            .sendPickupReminder(order(u, "Milanesa", "Flan <i>mixto</i>"));
+            .sendPickupReminder(order(u, "Milanesa|Puré <b>mixto</b>", "Flan <i>mixto</i>", "Ravioles|Salsa fileto"));
 
         String html = html("c@x.test", "Tu almuerzo te espera a las 12:00 — Arias");
         assertThat(html)
@@ -90,11 +93,12 @@ class OrderPaymentQuoteReminderEmailsTest {
             .contains("Tu pedido #42 está casi listo — retirálo a las <strong>12:00</strong>.")
             .contains("En el mostrador te vamos a llamar por <strong>Ana &lt;b&gt;</strong>.")
             .contains("Tu pedido</div>")
-            .contains(">Milanesa</li>")
+            .contains(">Milanesa c/ Puré &lt;b&gt;mixto&lt;/b&gt;</li>")
             .contains(">Flan &lt;i&gt;mixto&lt;/i&gt;</li>")
+            .contains(">Ravioles c/ Salsa fileto</li>")
             .doesNotContain("Milanesa, Flan")
             .doesNotContain("<i>mixto</i>");
-        assertThat(html.split("<li", -1)).hasSize(3);
+        assertThat(html.split("<li", -1)).hasSize(4);
     }
 
     // ─── Daily summary and cancellations ────────────────────────────────

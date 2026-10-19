@@ -5,6 +5,7 @@ import com.arias.email.EmailLayout;
 import com.arias.email.EmailProperties;
 import com.arias.email.EmailService;
 import com.arias.orders.Order;
+import com.arias.orders.OrderItem;
 import com.arias.users.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -116,7 +117,7 @@ public class OrderNotificationEmails {
 
         String hora = LocalTime.ofInstant(order.getPickupAt(), ZONE).format(HORA);
         List<String> platos = order.getItems().stream()
-            .map(i -> EmailLayout.escape(i.getDishNombre()))
+            .map(OrderNotificationEmails::itemLabel)
             .toList();
 
         String intro = EmailLayout.paragraph("Tu pedido #%d está casi listo — retirálo a las <strong>%s</strong>."
@@ -127,6 +128,14 @@ public class OrderNotificationEmails {
 
         emailService.send(user.getEmail(), "Tu almuerzo te espera a las " + hora + " — Arias",
             buildHtml("¡Ya casi es la hora!", intro));
+    }
+
+    /** "Plato c/ Acompañamiento" (guarnición o salsa) como en la cocina; solo el plato si no lleva. */
+    private static String itemLabel(OrderItem item) {
+        String side = item.getSideNombre();
+        return side == null || side.isBlank()
+            ? EmailLayout.escape(item.getDishNombre())
+            : EmailLayout.escape(item.getDishNombre() + " c/ " + side);
     }
 
     private static String buildHtml(String heading, String introHtml) {
