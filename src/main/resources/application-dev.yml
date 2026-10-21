@@ -1,0 +1,10 @@
+# Valores SOLO para desarrollo local (perfil dev, el default). Nunca se usan en
+# prod: ahí JWT_SECRET y BOOTSTRAP_ADMIN_PASSWORD son obligatorias. El repo es
+# público, así que estos valores son conocidos: no los reutilices en ningún
+# ambiente real.
+arias:
+  jwt:
+    secret: dev-only-secret-NEVER-use-in-prod-32-chars-min-required
+  bootstrap:
+    admin:
+      password: admin123

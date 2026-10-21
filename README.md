@@ -113,20 +113,23 @@ docker compose up -d
 La API queda en `http://localhost:8080`. Swagger UI en
 `http://localhost:8080/swagger-ui.html`.
 
-Variables de entorno relevantes (todas con default de desarrollo, ver
-`src/main/resources/application.yml`):
+Variables de entorno relevantes (los defaults de desarrollo viven en
+`src/main/resources/application-dev.yml`; `JWT_SECRET` y `BOOTSTRAP_ADMIN_PASSWORD`
+no tienen default fuera de dev/test y la app no arranca sin ellas):
 
 | Variable | Uso | Default dev |
 |---|---|---|
-| `JWT_SECRET` | Firma de los tokens | valor de desarrollo (no usar en prod) |
+| `JWT_SECRET` | Firma de los tokens (mín. 32 caracteres). **Obligatoria fuera de dev/test** | solo en dev (`application-dev.yml`) |
 | `CORS_ALLOWED_ORIGINS` | Orígenes permitidos | `http://localhost:5173` |
 | `GOOGLE_CLIENT_ID` | Client ID OAuth (propiedad `arias.google.client-id`) con el que se valida el ID token de "Ingresar con Google". Tiene que ser el mismo valor que `VITE_GOOGLE_CLIENT_ID` del frontend. Si está vacío, todo token de Google se rechaza | vacío |
-| `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` | Credenciales del primer SUPER_ADMIN (solo se crea si no existe ninguno) | `admin@arias.com` / `admin123` |
+| `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` | Credenciales del primer SUPER_ADMIN (solo se crea si no existe ninguno). `BOOTSTRAP_ADMIN_PASSWORD` es **obligatoria fuera de dev/test** | `admin@arias.com` / contraseña de `application-dev.yml` (solo dev) |
 | `RESEND_API_KEY` | Envío real de emails (si está vacío, se loguean pero no se envían) | vacío |
 | `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_PUBLIC_URL` | Storage de fotos (si están vacíos, el upload responde 503) | vacío |
 
-Con los defaults de dev, la app arranca sin configurar nada y crea automáticamente el
-usuario `admin@arias.com` / `admin123` como SUPER_ADMIN.
+Con el perfil dev, la app arranca sin configurar nada y crea automáticamente el
+usuario `admin@arias.com` como SUPER_ADMIN con la contraseña de `application-dev.yml`.
+En cualquier otro perfil (por ejemplo `prod`) hay que definir `JWT_SECRET` y
+`BOOTSTRAP_ADMIN_PASSWORD`.
 
 ### Tests
 

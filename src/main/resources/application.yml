@@ -4,9 +4,11 @@ spring:
 
   profiles:
     default: dev
-    # "local" se carga si existe application-local-old.yml (gitignored).
-    # Usalo para credenciales que no querés commitear (R2, etc.).
-    include: local
+    # El perfil dev activa también "local" (application-local.yml, gitignored):
+    # usalo para credenciales que no querés commitear (R2, etc.).
+    # Va como grupo y NO como "include": un include se aplicaría también en prod.
+    group:
+      dev: local
 
   datasource:
     # Puerto 5433 (no 5432) — evitamos conflicto con un Postgres nativo de Windows
@@ -59,8 +61,10 @@ management:
 # ───────────────────────────────────────────────────────────────────────
 arias:
   jwt:
-    # Secret de DEMO — en producción se sobreescribe vía variable de entorno
-    secret: ${JWT_SECRET:dev-only-secret-NEVER-use-in-prod-32-chars-min-required}
+    # SIN default a propósito: el repo es público, cualquier valor acá es conocido.
+    # Fuera de dev/test, si falta JWT_SECRET la app no arranca.
+    # Los valores de desarrollo viven en application-dev.yml.
+    secret: ${JWT_SECRET}
     access-token-ttl: PT15M    # 15 minutos
     refresh-token-ttl: P7D     # 7 días
   cors:
@@ -74,7 +78,8 @@ arias:
   bootstrap:
     admin:
       email: ${BOOTSTRAP_ADMIN_EMAIL:admin@arias.com}
-      password: ${BOOTSTRAP_ADMIN_PASSWORD:admin123}
+      # SIN default (ver arias.jwt.secret). Dev: application-dev.yml.
+      password: ${BOOTSTRAP_ADMIN_PASSWORD}
       first-name: ${BOOTSTRAP_ADMIN_FIRST_NAME:Admin}
       last-name: ${BOOTSTRAP_ADMIN_LAST_NAME:Arias}
 

@@ -14,9 +14,10 @@ import org.springframework.transaction.annotation.Transactional;
  * Crea un SUPER_ADMIN inicial si no existe ninguno en la BD.
  *
  * <p>Se ejecuta UNA VEZ al arrancar la app. Idempotente: si ya hay un super admin,
- * no hace nada. Las credenciales se leen de env vars (con defaults de DEV).
+ * no hace nada. Las credenciales se leen de env vars; sin default fuera de dev/test
+ * (en dev los pone {@code application-dev.yml}). La contraseña nunca se loguea.
  *
- * <p>EN PRODUCCIÓN: setear {@code BOOTSTRAP_ADMIN_EMAIL} y {@code BOOTSTRAP_ADMIN_PASSWORD}
+ * <p>EN PRODUCCIÓN: es obligatorio setear {@code BOOTSTRAP_ADMIN_PASSWORD} (y conviene {@code BOOTSTRAP_ADMIN_EMAIL})
  * en el entorno antes del primer deploy. Después podés cambiar el password desde la app.
  */
 @Component
@@ -68,7 +69,7 @@ public class AdminBootstrap implements CommandLineRunner {
         log.warn("╔════════════════════════════════════════════════════════╗");
         log.warn("║  SUPER_ADMIN inicial creado                             ║");
         log.warn("║  Email:    {}                                ", email);
-        log.warn("║  Password: {} (cambialo en cuanto puedas)    ", password);
+        log.warn("║  Password: la de BOOTSTRAP_ADMIN_PASSWORD (no se loguea)");
         log.warn("╚════════════════════════════════════════════════════════╝");
     }
 }

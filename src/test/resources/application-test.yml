@@ -1,0 +1,8 @@
+# Test-only values for settings that have no default in the main application.yml.
+# Activated by spring.profiles.active in config/application.yml.
+arias:
+  jwt:
+    secret: test-only-secret-not-used-anywhere-else-32-chars
+  bootstrap:
+    admin:
+      password: test-only-bootstrap-password

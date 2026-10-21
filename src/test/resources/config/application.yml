@@ -7,3 +7,8 @@
 spring:
   datasource:
     url: jdbc:postgresql://localhost:5433/arias_test
+  profiles:
+    active: test
+    # Same as before: tests have always picked up application-local.yml when present.
+    group:
+      test: local
