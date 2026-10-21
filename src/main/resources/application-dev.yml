@@ -4,7 +4,7 @@
 # ambiente real.
 arias:
   jwt:
-    secret: dev-only-secret-NEVER-use-in-prod-32-chars-min-required
+    secret: ${JWT_SECRET:dev-only-secret-NEVER-use-in-prod-32-chars-min-required}
   bootstrap:
     admin:
-      password: admin123
+      password: ${BOOTSTRAP_ADMIN_PASSWORD:admin123}
