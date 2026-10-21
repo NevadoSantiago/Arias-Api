@@ -13,7 +13,7 @@ aparte: [Arias-Front](https://github.com/NevadoSantiago/Arias-Front).
 
 | Entorno | URL | Notas |
 |---|---|---|
-| Producción | https://ariasbodegon.com | Cliente real. **No usar para pruebas** — ver credenciales de prueba más abajo. |
+| Producción | https://ariasbodegon.com | Cliente real. **No usar para pruebas**: para probar, usar el entorno de demo. |
 | Demo / staging | https://demo.ariasbodegon.com | Copia del mismo código, entorno aislado para que se pueda probar sin tocar datos reales. |
 
 Backend desplegado en **Railway**, frontend en **Cloudflare Pages**.
@@ -21,13 +21,6 @@ Backend desplegado en **Railway**, frontend en **Cloudflare Pages**.
 > El entorno de demo **no tiene configurados Resend ni Cloudflare R2**: los emails
 > transaccionales se loguean pero no se envían, y la subida de fotos de platos responde 503.
 > Esto es intencional, para no mandar emails reales ni tocar el storage de producción.
-
-## Usuario y contraseña de prueba
-
-- **usuario**: bigschool@admin.com
-- **password**: test
-
-
 
 
 ## Stack tecnológico
