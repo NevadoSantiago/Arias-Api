@@ -79,6 +79,12 @@ public class RefreshTokenService {
         return new AuthResult(newAccess, newRefresh, false);
     }
 
+    /** Closes every session of the user (e.g. when their credentials are reset for safety). */
+    @Transactional
+    public void revokeAllForUser(Long userId) {
+        repo.revokeAllForUser(userId, Instant.now());
+    }
+
     @Transactional
     public void revoke(String tokenValue) {
         String hash = jwtService.hashRefreshToken(tokenValue);

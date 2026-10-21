@@ -19,11 +19,14 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     /**
      * Para el flujo de check-email del login:
-     * existe el user y NO tiene password_hash (= primer ingreso pendiente).
+     * existe el user, pertenece a una empresa y NO tiene password_hash (= primer
+     * ingreso pendiente). Debe coincidir con {@code AuthService.firstLogin}, que
+     * rechaza a las cuentas B2C (sin empresa).
      */
     @Query("""
         SELECT COUNT(u) > 0 FROM User u
         WHERE u.email = :email
+          AND u.company IS NOT NULL
           AND u.passwordHash IS NULL
           AND u.active = true
           AND u.deletedAt IS NULL

@@ -30,8 +30,12 @@ import java.util.Optional;
  * <ul>
  *   <li>No existe el email → crea {@code EMPLOYEE} con {@code google_sub} y
  *       {@code email_verified_at} seteados.</li>
- *   <li>Existe con {@code google_sub = NULL} → se vincula; la contraseña
- *       existente (si la hay) sigue funcionando.</li>
+ *   <li>Existe con {@code google_sub = NULL} → se vincula. Si la cuenta ya tenía
+ *       el email verificado, su contraseña sigue funcionando (el dueño ya
+ *       probó que controla el correo). Si NO estaba verificada, quien la creó
+ *       pudo ser un tercero que se registró con el email ajeno (pre-hijack):
+ *       se borra la contraseña y se revocan todos sus refresh tokens, así que
+ *       solo el dueño real (Google) entra.</li>
  *   <li>Existe pero está inactivo → error genérico; existe y NO es B2C
  *       ({@code SUPER_ADMIN}, {@code COMPANY_ADMIN} o con empresa) →
  *       403 {@code GOOGLE_ACCOUNT_NOT_ALLOWED}, sin vincular nada.</li>
@@ -50,6 +54,7 @@ public class GoogleAuthService {
 
     private final UserRepository userRepo;
     private final AuthService authService;
+    private final RefreshTokenService refreshTokenService;
     private final CreditLedgerService creditLedgerService;
     private final GoogleIdTokenVerifier verifier;
 
@@ -100,8 +105,15 @@ public class GoogleAuthService {
                 user.setGoogleSub(googleSub);
                 if (firstValidation) {
                     user.setEmailVerifiedAt(Instant.now());
+                    // Nobody proved ownership of this email before Google did, so
+                    // whoever registered it may be an impostor: drop their password
+                    // and sessions. A verified owner keeps theirs.
+                    user.setPasswordHash(null);
                 }
                 userRepo.save(user);
+                if (firstValidation) {
+                    refreshTokenService.revokeAllForUser(user.getId());
+                }
             } else if (!user.getGoogleSub().equals(googleSub)) {
                 // No revela si el email existe ni de quién es — mismo trato
                 // genérico que login/first-login.

@@ -5,6 +5,10 @@ import com.arias.auth.dto.FirstLoginRequest;
 import com.arias.auth.dto.MeResponse;
 import com.arias.common.exception.BusinessException;
 import com.arias.common.exception.InvalidCredentialsException;
+import com.arias.catalog.categories.Category;
+import com.arias.catalog.categories.CategoryRepository;
+import com.arias.companies.Company;
+import com.arias.companies.CompanyRepository;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -14,6 +18,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -37,6 +43,30 @@ class AuthServiceTest {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private CompanyRepository companyRepo;
+
+    @Autowired
+    private CategoryRepository categoryRepo;
+
+    private Company persistCompany() {
+        Category category = categoryRepo.save(Category.builder()
+            .nombre("Categoria-" + System.nanoTime())
+            .ordenDisplay(0)
+            .enabled(true)
+            .creditCost(1)
+            .build());
+        return companyRepo.save(Company.builder()
+            .nombre("Empresa-" + System.nanoTime())
+            .cuit(String.valueOf(20000000000L + (System.nanoTime() % 9000000000L)))
+            .calle("Calle Falsa")
+            .altura("123")
+            .horaEntrega(LocalTime.of(13, 0))
+            .categoriaDefault(category)
+            .enabled(true)
+            .build());
+    }
 
     @Test
     void loginSigueFuncionandoParaUnUsuarioConPasswordYaSeteado() {
@@ -163,6 +193,7 @@ class AuthServiceTest {
         User whitelisted = User.builder()
             .email(email)
             .role(Role.EMPLOYEE)
+            .company(persistCompany())
             .active(true)
             .build(); // sin passwordHash — exactamente como CompanyAdminEmployeeService.create()
         userRepo.save(whitelisted);
@@ -193,5 +224,38 @@ class AuthServiceTest {
 
         assertThatThrownBy(() -> authService.firstLogin(req))
             .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    @Test
+    void firstLoginRejectsAGoogleCreatedB2cAccountAndLeavesItPasswordless() {
+        // B2C accounts created through Google have no company and no password.
+        // Anyone who knows the email must not be able to claim them.
+        String email = "b2c-google-first-login-" + System.nanoTime() + "@test.arias.com";
+        userRepo.save(User.builder()
+            .email(email)
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .googleSub("sub-" + System.nanoTime())
+            .emailVerifiedAt(java.time.Instant.now())
+            .build());
+
+        FirstLoginRequest req = new FirstLoginRequest(email, "Evil", "Actor", "attacker-password-1");
+
+        assertThatThrownBy(() -> authService.firstLogin(req))
+            .isInstanceOf(InvalidCredentialsException.class);
+        assertThat(userRepo.findByEmail(email).orElseThrow().getPasswordHash()).isNull();
+    }
+
+    @Test
+    void checkEmailOnlyFlagsCompanyAccountsAsFirstLoginPending() {
+        String b2cEmail = "b2c-check-email-" + System.nanoTime() + "@test.arias.com";
+        userRepo.save(User.builder().email(b2cEmail).role(Role.EMPLOYEE).active(true)
+            .googleSub("sub-" + System.nanoTime()).build());
+        String companyEmail = "b2b-check-email-" + System.nanoTime() + "@test.arias.com";
+        userRepo.save(User.builder().email(companyEmail).role(Role.EMPLOYEE).company(persistCompany())
+            .active(true).build());
+
+        assertThat(authService.checkEmail(b2cEmail).requiresFirstLogin()).isFalse();
+        assertThat(authService.checkEmail(companyEmail).requiresFirstLogin()).isTrue();
     }
 }

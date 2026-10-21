@@ -80,6 +80,12 @@ class GoogleAuthServiceTest {
     @Autowired
     private CategoryRepository categoryRepo;
 
+    @Autowired
+    private AuthService authService;
+
+    @Autowired
+    private jakarta.persistence.EntityManager em;
+
     @MockitoBean
     private GoogleIdTokenVerifier verifier;
 
@@ -244,6 +250,61 @@ class GoogleAuthServiceTest {
 
         assertThatThrownBy(() -> googleAuthService.loginWithGoogle(idTokenValue))
             .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    @Test
+    void googleLinkingAnUnverifiedAccountDropsTheSquattersPasswordAndRevokesItsSessions() throws Exception {
+        // Pre-hijack: an attacker registers the victim's email with their own
+        // password (never verified) and holds a live session.
+        String email = "google-prehijack-" + System.nanoTime() + "@test.arias.com";
+        userRepo.save(User.builder()
+            .email(email)
+            .firstName("Attacker")
+            .passwordHash(passwordEncoder.encode("attacker-password-1"))
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .build());
+        AuthService.AuthResult attackerSession = authService.login(email, "attacker-password-1");
+
+        // The real owner signs in with Google.
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), email, true, "Victim", null));
+        googleAuthService.loginWithGoogle(idTokenValue);
+        em.flush();
+        em.clear();
+
+        User linked = userRepo.findByEmail(email).orElseThrow();
+        assertThat(linked.getGoogleSub()).isNotBlank();
+        assertThat(linked.getPasswordHash()).isNull();
+        assertThatThrownBy(() -> authService.login(email, "attacker-password-1"))
+            .isInstanceOf(InvalidCredentialsException.class);
+        assertThatThrownBy(() -> authService.refresh(attackerSession.refreshTokenValue()))
+            .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    @Test
+    void googleLinkingAVerifiedAccountKeepsItsPasswordAndSessions() throws Exception {
+        String email = "google-verified-keeps-" + System.nanoTime() + "@test.arias.com";
+        userRepo.save(User.builder()
+            .email(email)
+            .firstName("Owner")
+            .passwordHash(passwordEncoder.encode("owner-password-1"))
+            .role(Role.EMPLOYEE)
+            .active(true)
+            .emailVerifiedAt(Instant.now())
+            .build());
+        AuthService.AuthResult ownerSession = authService.login(email, "owner-password-1");
+
+        String idTokenValue = "raw-token-" + System.nanoTime();
+        when(verifier.verify(idTokenValue))
+            .thenReturn(validToken("sub-" + System.nanoTime(), email, true, "Owner", null));
+        googleAuthService.loginWithGoogle(idTokenValue);
+        em.flush();
+        em.clear();
+
+        assertThat(authService.login(email, "owner-password-1").accessToken()).isNotBlank();
+        assertThat(authService.refresh(ownerSession.refreshTokenValue()).accessToken()).isNotBlank();
     }
 
     private Company persistCompany() {

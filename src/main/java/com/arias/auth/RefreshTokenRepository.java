@@ -17,6 +17,11 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Query("UPDATE RefreshToken r SET r.revokedAt = :now WHERE r.tokenHash = :tokenHash AND r.revokedAt IS NULL")
     int revokeByTokenHash(@Param("tokenHash") String tokenHash, @Param("now") Instant now);
 
+    /** Revokes every still-active refresh token of a user (all their sessions). */
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE RefreshToken r SET r.revokedAt = :now WHERE r.user.id = :userId AND r.revokedAt IS NULL")
+    int revokeAllForUser(@Param("userId") Long userId, @Param("now") Instant now);
+
     /** Limpieza de tokens expirados (puede correr en un cron periódico). */
     @Modifying
     @Query("DELETE FROM RefreshToken r WHERE r.expiresAt < :now OR r.revokedAt IS NOT NULL")

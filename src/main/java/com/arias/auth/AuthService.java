@@ -84,15 +84,19 @@ public class AuthService {
 
     /**
      * First login: empleado nuevo setea nombre + password.
-     * Solo válido si el usuario existe en la whitelist Y aún no tiene password.
+     * Solo válido si el usuario existe en la whitelist de una empresa Y aún no tiene
+     * password. Las cuentas B2C (sin empresa) nunca pasan por acá: las creadas con
+     * Google no tienen password y entran con Google; si no se exigiera la empresa,
+     * cualquiera que conozca el email podría fijarles una contraseña.
      */
     @Transactional
     public AuthResult firstLogin(FirstLoginRequest req) {
         User user = userRepo.findByEmail(normalize(req.email()))
             .orElseThrow(InvalidCredentialsException::new);
 
-        if (!Boolean.TRUE.equals(user.getActive()) || user.getPasswordHash() != null) {
-            // Ya tiene password o está deshabilitado → genérico para no leakear
+        if (!Boolean.TRUE.equals(user.getActive()) || user.getPasswordHash() != null
+            || user.getCompany() == null) {
+            // Ya tiene password, está deshabilitado o es B2C → genérico para no leakear
             throw new InvalidCredentialsException();
         }
         // Bloqueo si la empresa del user está desactivada
