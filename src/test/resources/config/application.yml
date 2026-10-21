@@ -8,7 +8,6 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5433/arias_test
   profiles:
+    # Only "test": never "local". application-local.yml holds real credentials
+    # (Resend, R2, Mercado Pago), and loading it made the suite send real emails.
     active: test
-    # Same as before: tests have always picked up application-local.yml when present.
-    group:
-      test: local

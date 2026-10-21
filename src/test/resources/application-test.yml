@@ -6,3 +6,16 @@ arias:
   bootstrap:
     admin:
       password: test-only-bootstrap-password
+  # Tests must never reach a real external service. An empty api-key makes the
+  # email sender log instead of calling Resend (guarded by NoRealEmailInTestsTest).
+  email:
+    api-key: ""
+  # Placeholder storage settings so the R2 client can be built; no test uploads.
+  r2:
+    endpoint: https://r2.test.invalid
+    access-key-id: test-access-key
+    secret-access-key: test-secret-key
+    public-url: https://r2.test.invalid/public
+  mercadopago:
+    enabled: false
+    access-token: ""
