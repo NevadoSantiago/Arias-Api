@@ -4,6 +4,7 @@ import jakarta.validation.constraints.*;
 
 public record UpdateCreditPackRequest(
     @NotBlank @Size(max = 100) String nombre,
+    @Size(max = 60) String lema,
     @NotNull @Positive Integer creditAmount,
     @NotNull @Positive Long priceCents,
     @NotNull @Min(0) @Max(100) Integer discountPercent,

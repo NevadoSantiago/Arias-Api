@@ -59,6 +59,7 @@ public class CreditPackService {
             .code(code)
             .packType(type)
             .nombre(req.nombre().trim())
+            .lema(normalizeLema(req.lema()))
             .creditAmount(req.creditAmount())
             .priceCents(req.priceCents())
             .discountPercent(req.discountPercent())
@@ -72,6 +73,7 @@ public class CreditPackService {
     public CreditPackDto update(Long id, UpdateCreditPackRequest req) {
         CreditPack pack = findOrThrow(id);
         pack.setNombre(req.nombre().trim());
+        pack.setLema(normalizeLema(req.lema()));
         pack.setCreditAmount(req.creditAmount());
         pack.setPriceCents(req.priceCents());
         pack.setDiscountPercent(req.discountPercent());
@@ -130,6 +132,11 @@ public class CreditPackService {
                 return candidate;
             }
         }
+    }
+
+    /** Lema recortado; null si falta o está en blanco. */
+    private String normalizeLema(String lema) {
+        return lema == null || lema.isBlank() ? null : lema.trim();
     }
 
     private CreditPack findOrThrow(Long id) {

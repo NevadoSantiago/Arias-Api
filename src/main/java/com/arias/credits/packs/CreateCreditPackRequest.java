@@ -8,6 +8,7 @@ public record CreateCreditPackRequest(
     /** Opcional: si falta se deriva del código (DAY → INDIVIDUAL, WEEK → SUGERIDO, otro → OTRO). */
     CreditPackType packType,
     @NotBlank @Size(max = 100) String nombre,
+    @Size(max = 60) String lema,
     @NotNull @Positive Integer creditAmount,
     @NotNull @Positive Long priceCents,
     @NotNull @Min(0) @Max(100) Integer discountPercent,

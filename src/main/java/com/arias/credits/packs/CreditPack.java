@@ -42,6 +42,10 @@ public class CreditPack {
     @Column(nullable = false, length = 100)
     private String nombre;
 
+    /** Lema corto que acompaña al paquete en la tarjeta (ej.: "Resolvé tu semana"); opcional. */
+    @Column(name = "lema", length = 60)
+    private String lema;
+
     @Column(name = "credit_amount", nullable = false)
     private Integer creditAmount;
 

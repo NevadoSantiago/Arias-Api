@@ -42,7 +42,11 @@ class CreditPackServiceTest {
     }
 
     private CreateCreditPackRequest req(String code, CreditPackType type, String nombre) {
-        return new CreateCreditPackRequest(code, type, nombre, 5, 10_000L, 0, 0);
+        return reqWithLema(code, type, nombre, null);
+    }
+
+    private CreateCreditPackRequest reqWithLema(String code, CreditPackType type, String nombre, String lema) {
+        return new CreateCreditPackRequest(code, type, nombre, lema, 5, 10_000L, 0, 0);
     }
 
     @Test
@@ -122,9 +126,36 @@ class CreditPackServiceTest {
     void updateKeepsType() {
         CreditPackDto created = service.create(req(null, CreditPackType.SUGERIDO, "Semana"));
         CreditPackDto updated = service.update(created.id(),
-            new UpdateCreditPackRequest("Semana 2", 6, 12_000L, 5, 1, true));
+            new UpdateCreditPackRequest("Semana 2", null, 6, 12_000L, 5, 1, true));
         assertThat(updated.packType()).isEqualTo(CreditPackType.SUGERIDO);
         assertThat(updated.code()).isEqualTo("WEEK");
+    }
+
+    @Test
+    @DisplayName("create(): guarda el lema recortado y lo expone en el DTO")
+    void createStoresTrimmedLema() {
+        CreditPackDto dto = service.create(reqWithLema(null, CreditPackType.SUGERIDO, "Semana", "  Resolvé tu semana  "));
+        assertThat(dto.lema()).isEqualTo("Resolvé tu semana");
+        assertThat(CreditPackDto.from(repo.findById(dto.id()).orElseThrow()).lema()).isEqualTo("Resolvé tu semana");
+    }
+
+    @Test
+    @DisplayName("create(): lema vacío o en blanco se guarda como null")
+    void createBlankLemaIsNull() {
+        assertThat(service.create(reqWithLema(null, CreditPackType.INDIVIDUAL, "Día", "   ")).lema()).isNull();
+        assertThat(service.create(reqWithLema(null, CreditPackType.SUGERIDO, "Semana", null)).lema()).isNull();
+    }
+
+    @Test
+    @DisplayName("update(): reemplaza el lema y null lo borra")
+    void updateReplacesAndClearsLema() {
+        CreditPackDto created = service.create(reqWithLema(null, CreditPackType.SUGERIDO, "Semana", "Viejo"));
+        CreditPackDto replaced = service.update(created.id(),
+            new UpdateCreditPackRequest("Semana", " Nuevo ", 5, 10_000L, 0, 0, true));
+        assertThat(replaced.lema()).isEqualTo("Nuevo");
+        CreditPackDto cleared = service.update(created.id(),
+            new UpdateCreditPackRequest("Semana", null, 5, 10_000L, 0, 0, true));
+        assertThat(cleared.lema()).isNull();
     }
 
     @Test
