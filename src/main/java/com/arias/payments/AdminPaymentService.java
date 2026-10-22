@@ -53,6 +53,7 @@ public class AdminPaymentService {
         long gross = 0;
         long fee = 0;
         long net = 0;
+        long retentions = 0;
         long withoutFee = 0;
         long mediation = 0;
         long reversed = 0;
@@ -65,8 +66,11 @@ public class AdminPaymentService {
                 case APPROVED -> {
                     approved++;
                     gross += p.getAmountCents();
-                    if (p.getMpFeeCents() == null || p.getMpNetReceivedCents() == null) {
+                    Long withheld = retentionsOf(p);
+                    if (withheld == null) {
                         withoutFee++;
+                    } else {
+                        retentions += withheld;
                     }
                     fee += p.getMpFeeCents() == null ? 0 : p.getMpFeeCents();
                     net += p.getMpNetReceivedCents() == null ? 0 : p.getMpNetReceivedCents();
@@ -81,7 +85,7 @@ public class AdminPaymentService {
         for (int i = 0; i < KINDS.size(); i++) {
             byKind.add(new AdminPaymentSummaryDto.KindBreakdown(KINDS.get(i), kindCount[i], kindGross[i]));
         }
-        return new AdminPaymentSummaryDto(approved, gross, fee, net, withoutFee, byKind, mediation, reversed);
+        return new AdminPaymentSummaryDto(approved, gross, fee, net, retentions, withoutFee, byKind, mediation, reversed);
     }
 
     private static AdminPaymentRowDto toRow(CreditPurchase p) {
@@ -98,7 +102,16 @@ public class AdminPaymentService {
             p.getMpPaymentId(),
             p.getMpFeeCents(),
             p.getMpNetReceivedCents(),
+            retentionsOf(p),
             p.getCreditsReversed());
+    }
+
+    /** Tax withholding Mercado Pago deducts besides the fee; null when the fee or the net is unknown. */
+    private static Long retentionsOf(CreditPurchase p) {
+        if (p.getMpFeeCents() == null || p.getMpNetReceivedCents() == null) {
+            return null;
+        }
+        return p.getAmountCents() - p.getMpFeeCents() - p.getMpNetReceivedCents();
     }
 
     private static String kindOf(CreditPurchase p) {

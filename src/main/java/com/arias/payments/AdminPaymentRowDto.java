@@ -8,6 +8,8 @@ import java.util.UUID;
  * (INDIVIDUAL/SUGERIDO/OTRO) or {@code DIRECT} for a purchase tied to an order;
  * {@code packName} / {@code orderId} are set for the matching kind only.
  * {@code feeCents} / {@code netCents} are null when Mercado Pago did not report them.
+ * {@code retentionsCents} is the tax withholding Mercado Pago deducts besides the fee
+ * (gross - fee - net); null when the fee or the net is null.
  */
 public record AdminPaymentRowDto(
     UUID purchaseId,
@@ -22,5 +24,6 @@ public record AdminPaymentRowDto(
     String mpPaymentId,
     Long feeCents,
     Long netCents,
+    Long retentionsCents,
     int creditsReversed
 ) {}

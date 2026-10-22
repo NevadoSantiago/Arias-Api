@@ -161,6 +161,32 @@ class AdminPaymentControllerTest {
     }
 
     @Test
+    void retentionsAreGrossMinusFeeMinusNetAndNullWhenFeeOrNetIsMissing() {
+        User user = user("eli");
+        CreditPack pack = pack(CreditPackType.OTRO);
+        CreditPurchase withholding = purchase(user, pack, null, CreditPurchaseStatus.APPROVED, 1_600_000L,
+            Instant.parse("2026-03-10T15:00:00Z"), 84_960L, 1_491_040L);
+        CreditPurchase noFee = purchase(user, pack, null, CreditPurchaseStatus.APPROVED, 10_000L,
+            Instant.parse("2026-03-10T16:00:00Z"), null, 9_900L);
+        CreditPurchase noNet = purchase(user, pack, null, CreditPurchaseStatus.APPROVED, 10_000L,
+            Instant.parse("2026-03-10T17:00:00Z"), 100L, null);
+        purchase(user, pack, null, CreditPurchaseStatus.REVERSED, 50_000L,
+            Instant.parse("2026-03-10T18:00:00Z"), 1_000L, 40_000L);
+
+        AdminPaymentReportDto report = controller.list(DAY, DAY, AdminPaymentFilter.ALL);
+
+        assertThat(rowOf(report, withholding).retentionsCents()).isEqualTo(24_000L);
+        assertThat(rowOf(report, noFee).retentionsCents()).isNull();
+        assertThat(rowOf(report, noNet).retentionsCents()).isNull();
+        // Only approved purchases with both fee and net count; the reversed one is left out.
+        assertThat(report.summary().retentionsCents()).isEqualTo(24_000L);
+    }
+
+    private static AdminPaymentRowDto rowOf(AdminPaymentReportDto report, CreditPurchase p) {
+        return report.rows().stream().filter(r -> r.purchaseId().equals(p.getId())).findFirst().orElseThrow();
+    }
+
+    @Test
     void fromAfterToIsABadRequest() {
         assertThatThrownBy(() -> controller.list(DAY.plusDays(1), DAY, AdminPaymentFilter.APPROVED))
             .isInstanceOf(BusinessException.class);

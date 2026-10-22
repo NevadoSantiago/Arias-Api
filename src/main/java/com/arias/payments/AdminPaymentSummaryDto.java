@@ -6,7 +6,8 @@ import java.util.List;
  * Totals of the report range. Income figures (approvedCount, gross, fee, net)
  * only count APPROVED purchases; feeCents and netCents add up the purchases that
  * have them, and rowsWithoutFee counts the approved ones that do not (older
- * purchases, or Mercado Pago did not report it). IN_MEDIATION and REVERSED are
+ * purchases, or Mercado Pago did not report it). retentionsCents is the tax withholding
+ * (gross - fee - net) summed over the approved purchases that have both fee and net. IN_MEDIATION and REVERSED are
  * counted apart and never summed into income.
  */
 public record AdminPaymentSummaryDto(
@@ -14,6 +15,7 @@ public record AdminPaymentSummaryDto(
     long grossCents,
     long feeCents,
     long netCents,
+    long retentionsCents,
     long rowsWithoutFee,
     List<KindBreakdown> byKind,
     long inMediationCount,
