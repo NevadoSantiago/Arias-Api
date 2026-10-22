@@ -7,10 +7,10 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Normalización de celulares argentinos: el usuario tipea los 10 dígitos
- * (área + número, sin 0 ni 15) y se guarda como {@code +549} + 10 dígitos.
- * Formato + unicidad, sin OTP (diseño §Decisión 8). Pura — sin Spring, sin
- * base de datos.
+ * Normalización de celulares: no se exige una cantidad de dígitos. Sin
+ * {@code +} se guarda como {@code +549} + dígitos; con {@code +} se guarda tal
+ * cual. Solo dígitos, tras quitar separadores. Unicidad, sin OTP (diseño
+ * §Decisión 8). Pura — sin Spring, sin base de datos.
  */
 class PhoneNumbersTest {
 
@@ -28,13 +28,10 @@ class PhoneNumbersTest {
     }
 
     @Test
-    void rechazaMenosDeDiezDigitos() {
-        assertThat(PhoneNumbers.normalize("115987654")).isEmpty();
-    }
-
-    @Test
-    void rechazaMasDeDiezDigitos() {
-        assertThat(PhoneNumbers.normalize("11598765478")).isEmpty();
+    void aceptaCualquierCantidadDeDigitosSinMas() {
+        assertThat(PhoneNumbers.normalize("115987654")).contains("+549115987654");
+        assertThat(PhoneNumbers.normalize("11598765478")).contains("+54911598765478");
+        assertThat(PhoneNumbers.normalize("1")).contains("+5491");
     }
 
     @Test
@@ -55,14 +52,15 @@ class PhoneNumbersTest {
     }
 
     @Test
-    void rechazaE164MuyCortoOMuyLargo() {
-        assertThat(PhoneNumbers.normalize("+54911")).isEmpty();
-        assertThat(PhoneNumbers.normalize("+5491159876547123")).isEmpty();
+    void aceptaE164DeCualquierLargo() {
+        assertThat(PhoneNumbers.normalize("+54911")).contains("+54911");
+        assertThat(PhoneNumbers.normalize("+5491159876547123")).contains("+5491159876547123");
     }
 
     @Test
-    void rechazaE164QueEmpiezaConCero() {
-        assertThat(PhoneNumbers.normalize("+05491159876547")).isEmpty();
+    void rechazaMasSinDigitos() {
+        assertThat(PhoneNumbers.normalize("+")).isEmpty();
+        assertThat(PhoneNumbers.normalize("+ - ")).isEmpty();
     }
 
     @Test

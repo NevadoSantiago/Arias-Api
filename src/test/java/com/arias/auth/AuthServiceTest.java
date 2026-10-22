@@ -137,14 +137,14 @@ class AuthServiceTest {
     }
 
     @Test
-    void completeProfileRechazaUnCelularQueNoTieneDiezDigitos() {
+    void completeProfileRechazaUnCelularConLetras() {
         User user = saveUser(null, "Ana", "Perez");
 
         assertThatThrownBy(() -> authService.completeProfile(
-                user.getId(), new CompleteProfileRequest("115987654", "Coty")))
+                user.getId(), new CompleteProfileRequest("11abc654", "Coty")))
             .isInstanceOfSatisfying(BusinessException.class, ex -> {
                 assertThat(ex.getErrorCode()).isEqualTo("INVALID_PHONE");
-                assertThat(ex.getMessage()).isEqualTo("Ingresá los 10 dígitos de tu celular");
+                assertThat(ex.getMessage()).isEqualTo("Ingresá tu celular, solo números");
             });
     }
 

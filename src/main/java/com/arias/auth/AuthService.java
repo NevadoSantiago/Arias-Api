@@ -149,7 +149,7 @@ public class AuthService {
 
         String phone = PhoneNumbers.normalize(req.phone())
             .orElseThrow(() -> BusinessException.badRequest(
-                "INVALID_PHONE", "Ingresá los 10 dígitos de tu celular"));
+                "INVALID_PHONE", "Ingresá tu celular, solo números"));
 
         if (!phone.equals(user.getPhone()) && userRepo.existsActivePhone(phone)) {
             throw BusinessException.conflict(

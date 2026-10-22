@@ -97,17 +97,17 @@ class RegistrationServiceTest {
 
         assertThatThrownBy(() -> registrationService.register(validRequest(email, "no-es-un-telefono")))
             .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("10 dígitos");
+            .hasMessageContaining("solo números");
 
         assertThat(userRepo.findByEmail(email)).isEmpty();
         verifyNoInteractions(emailService);
     }
 
     @Test
-    void registroRechazaTelefonoE164Invalido() {
+    void registroRechazaTelefonoE164ConLetras() {
         String email = "registro-tel-e164-" + System.nanoTime() + "@test.arias.com";
 
-        assertThatThrownBy(() -> registrationService.register(validRequest(email, "+0491122330012")))
+        assertThatThrownBy(() -> registrationService.register(validRequest(email, "+04911abc0012")))
             .isInstanceOfSatisfying(BusinessException.class,
                 ex -> assertThat(ex.getErrorCode()).isEqualTo("INVALID_PHONE"));
 

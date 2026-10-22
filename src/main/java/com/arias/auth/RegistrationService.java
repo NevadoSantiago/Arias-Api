@@ -63,7 +63,7 @@ public class RegistrationService {
     public void register(RegisterRequest req) {
         String phone = PhoneNumbers.normalize(req.phone())
             .orElseThrow(() -> BusinessException.badRequest(
-                "INVALID_PHONE", "Ingresá los 10 dígitos de tu celular"));
+                "INVALID_PHONE", "Ingresá tu celular, solo números"));
 
         if (userRepo.existsActivePhone(phone)) {
             throw BusinessException.conflict(
