@@ -73,4 +73,13 @@ class PhoneNumbersTest {
         assertThat(PhoneNumbers.normalize(null)).isEmpty();
         assertThat(PhoneNumbers.normalize("  ")).isEmpty();
     }
+
+    @Test
+    void rechazaUnNumeroQueNoEntraEnLaColumna() {
+        // users.phone is VARCHAR(30): the +549 prefix pushes 27 local digits past it.
+        assertThat(PhoneNumbers.normalize("1".repeat(26))).contains("+549" + "1".repeat(26));
+        assertThat(PhoneNumbers.normalize("1".repeat(27))).isEmpty();
+        assertThat(PhoneNumbers.normalize("+" + "1".repeat(29))).isPresent();
+        assertThat(PhoneNumbers.normalize("+" + "1".repeat(30))).isEmpty();
+    }
 }
