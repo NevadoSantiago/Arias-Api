@@ -259,3 +259,12 @@ function Get-KeySha256 {
     } finally { $sha.Dispose() }
     return (($hash | ForEach-Object { $_.ToString('x2') }) -join '')
 }
+
+function New-AgentTaskTriggers {
+    # Boot starts the agent. Task Scheduler restart settings only cover a launch failure, not an
+    # agent that exits later, so a trigger repeating every 5 minutes (no duration = indefinitely)
+    # relaunches it. The task's IgnoreNew setting and the agent mutex prevent duplicate instances.
+    $boot = New-ScheduledTaskTrigger -AtStartup
+    $repeat = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+    @($boot, $repeat)
+}

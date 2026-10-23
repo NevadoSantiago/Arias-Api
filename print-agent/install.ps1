@@ -78,7 +78,7 @@ if ($existing) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false }
 $agentPath = Join-Path $InstallDir 'agent.ps1'
 $taskArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $agentPath + '"'
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $taskArgs -WorkingDirectory $InstallDir
-$trigger = New-ScheduledTaskTrigger -AtStartup
+$trigger = New-AgentTaskTriggers
 $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries `

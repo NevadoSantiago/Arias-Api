@@ -4,7 +4,7 @@
 
 Un programa chico que corre solo en la PC del local. Cada 5 segundos le pregunta al sistema de
 Arias si hay comandas nuevas y las manda a la impresora de cocina (192.168.0.121, puerto 9100).
-Después avisa si imprimió bien o no. Arranca solo al prender la PC y se reinicia si se cae.
+Después avisa si imprimió bien o no. Arranca solo al prender la PC y, si se cae, Windows lo vuelve a levantar en menos de 5 minutos.
 
 ## Instalación
 

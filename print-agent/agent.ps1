@@ -50,7 +50,7 @@ try {
         Start-Sleep -Seconds $delay
     }
 } catch {
-    # Config or startup problem: log and exit non-zero so the task restarts us.
+    # Config or startup problem: log and exit non-zero. The task relaunches us within 5 minutes.
     $dir = Join-Path $root 'logs'
     Write-AgentLog -Message ('fatal: ' + $_.Exception.Message) -LogDir $dir
     exit 1

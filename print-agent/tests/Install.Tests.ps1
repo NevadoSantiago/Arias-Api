@@ -27,3 +27,18 @@ Describe 'install.ps1 defaults' {
         (Get-Content (Join-Path $here '..\install.ps1') -Raw) | Should Match "\[string\]\`$ApiUrl = 'https://api.ariasbodegon.com'"
     }
 }
+
+Describe 'New-AgentTaskTriggers' {
+    # Task Scheduler restart settings only cover a task that fails to launch, not an agent that
+    # exits later, so a repeating trigger relaunches it. The mutex and IgnoreNew prevent duplicates.
+    $triggers = @(New-AgentTaskTriggers)
+
+    It 'starts the agent at boot' {
+        @($triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskBootTrigger' }).Count | Should Be 1
+    }
+    It 'relaunches the agent every 5 minutes, indefinitely' {
+        $repeat = @($triggers | Where-Object { $_.Repetition.Interval -eq 'PT5M' })
+        $repeat.Count | Should Be 1
+        [string]::IsNullOrEmpty($repeat[0].Repetition.Duration) | Should Be $true
+    }
+}
