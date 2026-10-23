@@ -3,6 +3,8 @@ package com.arias.orders;
 import com.arias.companies.Company;
 import com.arias.companies.CompanyRepository;
 import com.arias.common.exception.BusinessException;
+import com.arias.printing.PrintStatusService;
+import com.arias.printing.PrintSummary;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -51,6 +53,7 @@ public class AdminOrderController {
     private final OrderService orderService;
     private final OrderExportService orderExportService;
     private final OrderKitchenService orderKitchenService;
+    private final PrintStatusService printStatusService;
     private final Clock clock;
 
     /**
@@ -120,59 +123,57 @@ public class AdminOrderController {
         LocalDate target = fecha != null ? fecha : LocalDate.now(clock);
         List<Order> orders = orderRepository.findByFechaAndEstadoNotInOrderByPickupAtAsc(
             target, KITCHEN_ESTADOS_EXCLUIDOS);
-        return AdminOrderDto.PickupGroupDto.groupByPickup(orders, ZONE);
+        return AdminOrderDto.PickupGroupDto.groupByPickup(orders, ZONE,
+            printStatusService.summarize(orders.stream().map(Order::getId).toList()));
     }
 
     /** PENDIENTE -> CONFIRMADO a mano para un pedido B2C: consume sus créditos, sin deshacer. */
     @PutMapping("/{id}/confirmar")
     @Transactional
     public AdminOrderDto.PickupOrderDto markConfirmado(@PathVariable Long id) {
-        return AdminOrderDto.PickupOrderDto.from(orderKitchenService.markConfirmado(List.of(id)).get(0));
+        return toDto(orderKitchenService.markConfirmado(List.of(id)).get(0));
     }
 
     /** PENDIENTE -> CONFIRMADO a mano para varios pedidos B2C, todo o nada. */
     @PutMapping("/confirmar")
     @Transactional
     public List<AdminOrderDto.PickupOrderDto> markConfirmadoBatch(@RequestBody AdminOrderDto.KitchenBatchRequest req) {
-        return orderKitchenService.markConfirmado(req.orderIds()).stream()
-            .map(AdminOrderDto.PickupOrderDto::from).toList();
+        return toDtos(orderKitchenService.markConfirmado(req.orderIds()));
     }
 
     /** CONFIRMADO -> COMANDADO for one B2C order. */
     @PutMapping("/{id}/comandado")
     @Transactional
     public AdminOrderDto.PickupOrderDto markComandado(@PathVariable Long id) {
-        return AdminOrderDto.PickupOrderDto.from(orderKitchenService.markComandado(List.of(id)).get(0));
+        return toDto(orderKitchenService.markComandado(List.of(id)).get(0));
     }
 
     /** CONFIRMADO -> COMANDADO for several B2C orders, all or nothing. */
     @PutMapping("/comandado")
     @Transactional
     public List<AdminOrderDto.PickupOrderDto> markComandadoBatch(@RequestBody AdminOrderDto.KitchenBatchRequest req) {
-        return orderKitchenService.markComandado(req.orderIds()).stream()
-            .map(AdminOrderDto.PickupOrderDto::from).toList();
+        return toDtos(orderKitchenService.markComandado(req.orderIds()));
     }
 
     /** COMANDADO -> ENTREGADO for one B2C order. */
     @PutMapping("/{id}/entregado")
     @Transactional
     public AdminOrderDto.PickupOrderDto markEntregado(@PathVariable Long id) {
-        return AdminOrderDto.PickupOrderDto.from(orderKitchenService.markEntregado(List.of(id)).get(0));
+        return toDto(orderKitchenService.markEntregado(List.of(id)).get(0));
     }
 
     /** COMANDADO -> ENTREGADO for several B2C orders, all or nothing. */
     @PutMapping("/entregado")
     @Transactional
     public List<AdminOrderDto.PickupOrderDto> markEntregadoBatch(@RequestBody AdminOrderDto.KitchenBatchRequest req) {
-        return orderKitchenService.markEntregado(req.orderIds()).stream()
-            .map(AdminOrderDto.PickupOrderDto::from).toList();
+        return toDtos(orderKitchenService.markEntregado(req.orderIds()));
     }
 
     /** One-step undo: COMANDADO -> CONFIRMADO, ENTREGADO -> COMANDADO. */
     @PutMapping("/{id}/undo")
     @Transactional
     public AdminOrderDto.PickupOrderDto undoKitchenState(@PathVariable Long id) {
-        return AdminOrderDto.PickupOrderDto.from(orderKitchenService.undo(id));
+        return toDto(orderKitchenService.undo(id));
     }
 
     /**
@@ -191,6 +192,18 @@ public class AdminOrderController {
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
             .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
             .body(excel);
+    }
+
+    private AdminOrderDto.PickupOrderDto toDto(Order order) {
+        return toDtos(List.of(order)).get(0);
+    }
+
+    /** Builds the board DTOs of the orders, with their print status in a single query. */
+    private List<AdminOrderDto.PickupOrderDto> toDtos(List<Order> orders) {
+        Map<Long, PrintSummary> print = printStatusService.summarize(orders.stream().map(Order::getId).toList());
+        return orders.stream()
+            .map(o -> AdminOrderDto.PickupOrderDto.from(o, print.getOrDefault(o.getId(), PrintSummary.NONE)))
+            .toList();
     }
 
     /** Quita tildes y caracteres raros del nombre de la empresa para el filename. */

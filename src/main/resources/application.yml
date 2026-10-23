@@ -102,6 +102,10 @@ arias:
   # Si enabled=false o access-token/webhook-secret están vacíos, la integración
   # queda inerte: no falla el arranque, cada operación de pago responde con un
   # error claro (mismo patrón que arias.r2 / UploadService).
+  # Agente local de impresión de comandas: hash SHA-256 (hex) de la clave del header
+  # X-Print-Agent-Key. Vacío = el agente queda cerrado (todo 401). Revocar = rotar la variable.
+  print-agent:
+    key-sha256: ${PRINT_AGENT_KEY_SHA256:}
   mercadopago:
     access-token: ${MP_ACCESS_TOKEN:}
     webhook-secret: ${MP_WEBHOOK_SECRET:}

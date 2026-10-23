@@ -1,6 +1,9 @@
 package com.arias.orders;
 
 
+import com.arias.printing.PrintStatus;
+import com.arias.printing.PrintSummary;
+
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -94,9 +97,17 @@ public record AdminOrderDto(
         OrderEstado estado,
         Instant pickupAt,
         Instant comandadoAt,
-        Instant deliveredAt
+        Instant deliveredAt,
+        /** NONE | QUEUED | PRINTED | FAILED, aggregated over the order latest comanda jobs. */
+        PrintStatus printStatus,
+        /** When the comanda finished printing; only set when printStatus is PRINTED. */
+        Instant printedAt
     ) {
         public static PickupOrderDto from(Order order) {
+            return from(order, PrintSummary.NONE);
+        }
+
+        public static PickupOrderDto from(Order order, PrintSummary print) {
             return new PickupOrderDto(
                 order.getId(),
                 order.getUser().displayName(),
@@ -105,7 +116,9 @@ public record AdminOrderDto(
                 order.getEstado(),
                 order.getPickupAt(),
                 order.getComandadoAt(),
-                order.getDeliveredAt()
+                order.getDeliveredAt(),
+                print.status(),
+                print.printedAt()
             );
         }
     }
@@ -116,11 +129,17 @@ public record AdminOrderDto(
     /** Un horario de retiro con todos los pedidos que caen en él, ordenados por horario ascendente. */
     public record PickupGroupDto(LocalTime pickupTime, List<PickupOrderDto> orders) {
         public static List<PickupGroupDto> groupByPickup(List<Order> orders, ZoneId zone) {
+            return groupByPickup(orders, zone, Map.of());
+        }
+
+        public static List<PickupGroupDto> groupByPickup(List<Order> orders, ZoneId zone,
+                                                         Map<Long, PrintSummary> printByOrderId) {
             Map<LocalTime, List<PickupOrderDto>> byPickupTime = orders.stream()
                 .collect(Collectors.groupingBy(
                     o -> LocalTime.ofInstant(o.getPickupAt(), zone),
                     TreeMap::new,
-                    Collectors.mapping(PickupOrderDto::from, Collectors.toList())
+                    Collectors.mapping(o -> PickupOrderDto.from(o, printByOrderId.getOrDefault(o.getId(), PrintSummary.NONE)),
+                        Collectors.toList())
                 ));
             return byPickupTime.entrySet().stream()
                 .map(e -> new PickupGroupDto(e.getKey(), e.getValue()))

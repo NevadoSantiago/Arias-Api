@@ -3,6 +3,7 @@ package com.arias.common.exception;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -72,6 +73,18 @@ public class GlobalExceptionHandler {
             "El parámetro '" + ex.getName() + "' tiene un formato inválido");
         pd.setTitle("Parámetro inválido");
         pd.setType(URI.create("https://arias.com/errors/invalid-parameter"));
+        return pd;
+    }
+
+    /**
+     * Body that is not valid JSON or has a value the DTO cannot take (for example an unknown enum
+     * constant). The client sent it wrong, so 400 rather than the catch-all 500.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ProblemDetail handleUnreadableBody(HttpMessageNotReadableException ex) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "El cuerpo de la solicitud es inválido");
+        pd.setTitle("Datos inválidos");
+        pd.setType(URI.create("https://arias.com/errors/unreadable-body"));
         return pd;
     }
 

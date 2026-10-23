@@ -1,8 +1,11 @@
 package com.arias.printing;
 
 import com.arias.catalog.dishes.DishStation;
+import com.arias.common.exception.BusinessException;
 import com.arias.orders.Order;
+import com.arias.orders.OrderEstado;
 import com.arias.orders.OrderItem;
+import com.arias.orders.OrderRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -31,6 +34,7 @@ public class PrintJobService {
 
     private final PrintJobRepository jobRepo;
     private final PrinterRepository printerRepo;
+    private final OrderRepository orderRepo;
     private final TicketRenderer renderer;
     private final Clock clock;
 
@@ -63,6 +67,18 @@ public class PrintJobService {
             }
         }
         return created;
+    }
+
+    /** Reprints a COMANDADO or ENTREGADO order with the same routing, claimable right away. */
+    @Transactional
+    public List<PrintJob> reprint(Long orderId) {
+        Order order = orderRepo.findById(orderId)
+            .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
+        if (order.getEstado() != OrderEstado.COMANDADO && order.getEstado() != OrderEstado.ENTREGADO) {
+            throw BusinessException.conflict("order-not-printable",
+                "Solo se pueden reimprimir pedidos comandados o entregados");
+        }
+        return enqueue(List.of(order), clock.instant());
     }
 
     /** Cancels the jobs of the order that nobody claimed yet. Claimed or printed jobs stay as they are. */
