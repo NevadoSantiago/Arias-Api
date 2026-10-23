@@ -102,6 +102,10 @@ arias:
   # X-Print-Agent-Key. Vacío = el agente queda cerrado (todo 401). Revocar = rotar la variable.
   print-agent:
     key-sha256: ${PRINT_AGENT_KEY_SHA256:}
+    # Vida maxima de un trabajo de impresion desde que se encola (Duration ISO-8601). Pasado ese
+    # tiempo sin imprimirse se descarta (EXPIRED): si el agente o la PC estaban apagados, al volver
+    # no imprime las comandas viejas. El admin puede reimprimirlas a mano.
+    job-ttl: PT30M
 
   # Mercado Pago — Checkout Pro vía Preferences API (diseño §Configuración, unidad 10).
   # Si enabled=false o access-token/webhook-secret están vacíos, la integración

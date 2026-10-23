@@ -328,4 +328,46 @@ class AdminPrintControllerTest {
 
         assertThat(boardStatusOf(o)).isEqualTo("PRINTED|2026-03-10T13:00:00Z");
     }
+
+    @Test
+    @DisplayName("reprint enqueues again when the previous jobs EXPIRED, and the new jobs are claimable")
+    void reprintAfterExpired() throws Exception {
+        Order o = order(OrderEstado.COMANDADO, DishStation.COCINA);
+        job(o, DishStation.COCINA, PrintJobStatus.EXPIRED, null);
+
+        mvc.perform(post("/api/v1/admin/orders/" + o.getId() + "/print").header(HttpHeaders.AUTHORIZATION, admin))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1));
+
+        List<PrintJob> jobs = jobRepo.findByOrderId(o.getId());
+        assertThat(jobs).hasSize(2);
+        PrintJob fresh = jobs.get(1);
+        assertThat(fresh.getStatus()).isEqualTo(PrintJobStatus.PENDING);
+        mvc.perform(post("/api/v1/print-agent/jobs/claim").header("X-Print-Agent-Key", "test-print-agent-key"))
+            .andExpect(jsonPath("$[?(@.id==" + fresh.getId() + ")]").exists());
+    }
+
+    @Test
+    @DisplayName("board DTO: EXPIRED when a latest job expired and none failed")
+    void boardExpired() throws Exception {
+        Order o = order(OrderEstado.COMANDADO, DishStation.COCINA, DishStation.PARRILLA);
+        job(o, DishStation.COCINA, PrintJobStatus.PRINTED, NOW);
+        job(o, DishStation.PARRILLA, PrintJobStatus.EXPIRED, null);
+
+        assertThat(boardStatusOf(o)).isEqualTo("EXPIRED|null");
+    }
+
+    @Test
+    @DisplayName("board DTO: FAILED outranks EXPIRED, and EXPIRED outranks QUEUED")
+    void boardExpiredPrecedence() throws Exception {
+        Order failed = order(OrderEstado.COMANDADO, DishStation.COCINA, DishStation.PARRILLA);
+        job(failed, DishStation.COCINA, PrintJobStatus.EXPIRED, null);
+        job(failed, DishStation.PARRILLA, PrintJobStatus.FAILED, null);
+        Order queued = order(OrderEstado.COMANDADO, DishStation.COCINA, DishStation.PARRILLA);
+        job(queued, DishStation.COCINA, PrintJobStatus.EXPIRED, null);
+        job(queued, DishStation.PARRILLA, PrintJobStatus.PENDING, null);
+
+        assertThat(boardStatusOf(failed)).isEqualTo("FAILED|null");
+        assertThat(boardStatusOf(queued)).isEqualTo("EXPIRED|null");
+    }
 }

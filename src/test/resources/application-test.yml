@@ -19,6 +19,7 @@ arias:
   # sha256("test-print-agent-key"); the agent tests send that dummy key.
   print-agent:
     key-sha256: aedf6eff49b74979c69215396f6f88bda24f386977dad2b5ee3893768cc28b63
+    job-ttl: PT30M
   mercadopago:
     enabled: false
     access-token: ""

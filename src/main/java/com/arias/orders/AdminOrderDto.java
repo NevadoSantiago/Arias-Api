@@ -98,7 +98,7 @@ public record AdminOrderDto(
         Instant pickupAt,
         Instant comandadoAt,
         Instant deliveredAt,
-        /** NONE | QUEUED | PRINTED | FAILED, aggregated over the order latest comanda jobs. */
+        /** NONE | QUEUED | PRINTED | FAILED | EXPIRED, aggregated over the order latest comanda jobs. */
         PrintStatus printStatus,
         /** When the comanda finished printing; only set when printStatus is PRINTED. */
         Instant printedAt

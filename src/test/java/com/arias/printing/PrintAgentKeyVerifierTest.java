@@ -12,7 +12,7 @@ class PrintAgentKeyVerifierTest {
     private static final String HASH = "aedf6eff49b74979c69215396f6f88bda24f386977dad2b5ee3893768cc28b63";
 
     private static PrintAgentKeyVerifier verifier(String hash) {
-        return new PrintAgentKeyVerifier(new PrintAgentProperties(hash));
+        return new PrintAgentKeyVerifier(new PrintAgentProperties(hash, null));
     }
 
     @Test

@@ -32,16 +32,31 @@ public interface PrintJobRepository extends JpaRepository<PrintJob, Long> {
 
     /**
      * Locks, with {@code SELECT ... FOR UPDATE SKIP LOCKED}, up to {@code page.size} jobs the agent
-     * may take: PENDING and already available, or CLAIMED for too long (re-offer). Rows another
+     * may take: PENDING and already available, or CLAIMED for too long (re-offer), and in both cases
+     * enqueued no earlier than {@code expireBefore} (older jobs are never offered). Rows another
      * claim holds locked are skipped, so two agents never get the same job.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2"))
-    @Query("SELECT j FROM PrintJob j WHERE "
+    @Query("SELECT j FROM PrintJob j WHERE j.createdAt >= :expireBefore AND ("
         + "(j.status = com.arias.printing.PrintJobStatus.PENDING AND j.availableAt <= :now) "
-        + "OR (j.status = com.arias.printing.PrintJobStatus.CLAIMED AND j.claimedAt <= :staleBefore) "
+        + "OR (j.status = com.arias.printing.PrintJobStatus.CLAIMED AND j.claimedAt <= :staleBefore)) "
         + "ORDER BY j.availableAt, j.id")
-    List<PrintJob> lockClaimable(@Param("now") Instant now, @Param("staleBefore") Instant staleBefore, Pageable page);
+    List<PrintJob> lockClaimable(@Param("now") Instant now, @Param("staleBefore") Instant staleBefore,
+                                 @Param("expireBefore") Instant expireBefore, Pageable page);
+
+    /**
+     * Expires the jobs enqueued before {@code expireBefore} that would otherwise be offered: PENDING
+     * ones and CLAIMED ones whose claim is stale ({@code claimedAt <= staleBefore}). A job claimed
+     * recently is left to its ack. Terminal, so a restarted agent never prints old tickets.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE PrintJob j SET j.status = com.arias.printing.PrintJobStatus.EXPIRED, j.updatedAt = :now "
+        + "WHERE j.createdAt < :expireBefore AND ("
+        + "j.status = com.arias.printing.PrintJobStatus.PENDING "
+        + "OR (j.status = com.arias.printing.PrintJobStatus.CLAIMED AND j.claimedAt <= :staleBefore))")
+    int expireOverdue(@Param("now") Instant now, @Param("staleBefore") Instant staleBefore,
+                      @Param("expireBefore") Instant expireBefore);
 
     /**
      * Jobs claimed long ago whose next re-offer would reach the attempt limit: they end FAILED

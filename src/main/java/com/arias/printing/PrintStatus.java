@@ -5,5 +5,6 @@ public enum PrintStatus {
     NONE,
     QUEUED,
     PRINTED,
-    FAILED
+    FAILED,
+    EXPIRED
 }

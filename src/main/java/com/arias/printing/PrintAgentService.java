@@ -28,6 +28,7 @@ public class PrintAgentService {
     private final PrintJobRepository jobRepo;
     private final PrintAgentStatusRepository statusRepo;
     private final Clock clock;
+    private final PrintAgentProperties props;
 
     /** A job as the agent receives it. */
     public record AgentJobDto(Long id, String host, Integer port, String dataBase64, String claimToken) {
@@ -47,10 +48,13 @@ public class PrintAgentService {
     public List<AgentJobDto> claim() {
         Instant now = clock.instant();
         Instant staleBefore = now.minus(CLAIM_TIMEOUT);
+        Instant expireBefore = now.minus(props.jobTtl());
         statusRepo.touch(now);
+        // Expire first: an overdue job must leave the queue before it can be re-offered or exhausted.
+        jobRepo.expireOverdue(now, staleBefore, expireBefore);
         jobRepo.failExhaustedStaleClaims(now, staleBefore, MAX_ATTEMPTS,
             "El agente no confirmó la impresión");
-        List<PrintJob> jobs = jobRepo.lockClaimable(now, staleBefore, PageRequest.of(0, CLAIM_LIMIT));
+        List<PrintJob> jobs = jobRepo.lockClaimable(now, staleBefore, expireBefore, PageRequest.of(0, CLAIM_LIMIT));
         for (PrintJob job : jobs) {
             if (job.getStatus() == PrintJobStatus.CLAIMED) {
                 job.setAttempts(job.getAttempts() + 1); // re-offer of an unacknowledged claim
@@ -65,7 +69,8 @@ public class PrintAgentService {
     /**
      * The ack must carry the token of the current claim, otherwise it is rejected with 409 and the job
      * is left untouched. PRINTED sets {@code printedAt}. FAILED counts an attempt and reschedules the job as PENDING
-     * after {@link #RETRY_BACKOFF}, until {@link #MAX_ATTEMPTS}, when it stays FAILED.
+     * after {@link #RETRY_BACKOFF}, until {@link #MAX_ATTEMPTS}, when it stays FAILED. A retry that would start
+     * past the job TTL also ends FAILED (keeping the last error): it would only be expired unprinted.
      */
     @Transactional
     public AckResult ack(Long id, AckStatus status, String error, String claimToken) {
@@ -92,11 +97,13 @@ public class PrintAgentService {
         } else {
             job.setAttempts(job.getAttempts() + 1);
             job.setLastError(truncate(error));
-            if (job.getAttempts() >= MAX_ATTEMPTS) {
+            Instant retryAt = now.plus(RETRY_BACKOFF);
+            boolean retryPastTtl = retryAt.isAfter(job.getCreatedAt().plus(props.jobTtl()));
+            if (job.getAttempts() >= MAX_ATTEMPTS || retryPastTtl) {
                 job.setStatus(PrintJobStatus.FAILED);
             } else {
                 job.setStatus(PrintJobStatus.PENDING);
-                job.setAvailableAt(now.plus(RETRY_BACKOFF));
+                job.setAvailableAt(retryAt);
                 job.setClaimedAt(null);
                 job.setClaimToken(null);
             }

@@ -107,6 +107,13 @@ class PrintAgentControllerTest {
             .claimToken(status == PrintJobStatus.CLAIMED ? TOKEN : null).build());
     }
 
+    /** The enqueue time is set by Hibernate (not the test clock), so tests place it explicitly. */
+    private PrintJob createdAt(PrintJob j, Instant createdAt) {
+        em.createQuery("UPDATE PrintJob j SET j.createdAt = :t WHERE j.id = :id")
+            .setParameter("t", createdAt).setParameter("id", j.getId()).executeUpdate();
+        return reload(j);
+    }
+
     private PrintJob reload(PrintJob j) {
         em.flush();
         em.clear();
@@ -436,6 +443,115 @@ class PrintAgentControllerTest {
         mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"status\":\"PRINTED\",\"claimToken\":\"stale\"}"))
+            .andExpect(status().isConflict());
+    }
+
+    // -- expiry (job TTL: 30 minutes since enqueue) ---------------------------
+
+    private static Instant minutesAgo(long minutes) {
+        return NOW.minus(java.time.Duration.ofMinutes(minutes));
+    }
+
+    @Test
+    @DisplayName("a PENDING job enqueued more than 30 minutes ago is marked EXPIRED and never claimed")
+    void oldPendingJobExpires() throws Exception {
+        PrintJob old = createdAt(job(PrintJobStatus.PENDING, NOW.minusSeconds(3600), null, 0),
+            minutesAgo(30).minusSeconds(1));
+
+        mvc.perform(post("/api/v1/print-agent/jobs/claim").header(HEADER, KEY))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+
+        assertThat(reload(old).getStatus()).isEqualTo(PrintJobStatus.EXPIRED);
+    }
+
+    @Test
+    @DisplayName("a PENDING job enqueued exactly 30 minutes ago is still claimable")
+    void pendingJobAtTtlBoundaryIsClaimable() throws Exception {
+        PrintJob edge = createdAt(job(PrintJobStatus.PENDING, NOW.minusSeconds(1800), null, 0), minutesAgo(30));
+
+        mvc.perform(post("/api/v1/print-agent/jobs/claim").header(HEADER, KEY))
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(jsonPath("$[0].id").value(edge.getId()));
+    }
+
+    @Test
+    @DisplayName("a stale CLAIMED job past the TTL is not re-offered: it ends EXPIRED")
+    void staleClaimedJobPastTtlExpires() throws Exception {
+        PrintJob old = createdAt(job(PrintJobStatus.CLAIMED, NOW.minusSeconds(3600), NOW.minusSeconds(61), 0),
+            minutesAgo(31));
+
+        mvc.perform(post("/api/v1/print-agent/jobs/claim").header(HEADER, KEY))
+            .andExpect(jsonPath("$.length()").value(0));
+
+        assertThat(reload(old).getStatus()).isEqualTo(PrintJobStatus.EXPIRED);
+    }
+
+    @Test
+    @DisplayName("a recent CLAIMED job (not stale yet) is left alone even if it is past the TTL")
+    void recentClaimNotTouchedByExpiry() throws Exception {
+        PrintJob j = createdAt(job(PrintJobStatus.CLAIMED, NOW.minusSeconds(3600), NOW.minusSeconds(30), 0),
+            minutesAgo(31));
+
+        mvc.perform(post("/api/v1/print-agent/jobs/claim").header(HEADER, KEY))
+            .andExpect(jsonPath("$.length()").value(0));
+
+        assertThat(reload(j).getStatus()).isEqualTo(PrintJobStatus.CLAIMED);
+    }
+
+    @Test
+    @DisplayName("claim returns the fresh jobs and expires only the old ones in the same call")
+    void claimMixesFreshAndOld() throws Exception {
+        PrintJob old = createdAt(job(PrintJobStatus.PENDING, NOW.minusSeconds(3600), null, 0), minutesAgo(20 * 60));
+        PrintJob fresh = createdAt(job(PrintJobStatus.PENDING, NOW.minusSeconds(5), null, 0), NOW.minusSeconds(10));
+
+        mvc.perform(post("/api/v1/print-agent/jobs/claim").header(HEADER, KEY))
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(jsonPath("$[0].id").value(fresh.getId()));
+
+        assertThat(reload(old).getStatus()).isEqualTo(PrintJobStatus.EXPIRED);
+    }
+
+    @Test
+    @DisplayName("a failed ack whose retry would start past the TTL ends FAILED instead of PENDING")
+    void ackFailedPastTtlEndsFailed() throws Exception {
+        // created 29m50s ago: the retry at NOW+15s would be past created+30m.
+        PrintJob j = createdAt(job(PrintJobStatus.CLAIMED, NOW.minusSeconds(5), NOW.minusSeconds(2), 0),
+            minutesAgo(30).plusSeconds(10));
+
+        mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"status\":\"FAILED\",\"error\":\"timeout\",\"claimToken\":\"" + TOKEN + "\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("FAILED"));
+
+        PrintJob after = reload(j);
+        assertThat(after.getStatus()).isEqualTo(PrintJobStatus.FAILED);
+        assertThat(after.getLastError()).isEqualTo("timeout");
+        assertThat(after.getAttempts()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a failed ack whose retry still fits in the TTL reschedules as PENDING")
+    void ackFailedWithinTtlReschedules() throws Exception {
+        PrintJob j = createdAt(job(PrintJobStatus.CLAIMED, NOW.minusSeconds(5), NOW.minusSeconds(2), 0),
+            minutesAgo(10));
+
+        mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"status\":\"FAILED\",\"error\":\"timeout\",\"claimToken\":\"" + TOKEN + "\"}"))
+            .andExpect(jsonPath("$.status").value("PENDING"));
+    }
+
+    @Test
+    @DisplayName("expired jobs are not claimable and an ack on them is 409")
+    void expiredJobsAreTerminal() throws Exception {
+        PrintJob j = job(PrintJobStatus.EXPIRED, NOW.minusSeconds(3600), null, 0);
+
+        mvc.perform(post("/api/v1/print-agent/jobs/claim").header(HEADER, KEY))
+            .andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"status\":\"PRINTED\",\"claimToken\":\"" + TOKEN + "\"}"))
             .andExpect(status().isConflict());
     }
 }

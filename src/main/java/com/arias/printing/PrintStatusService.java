@@ -15,8 +15,10 @@ import java.util.stream.Collectors;
 
 /**
  * Print status per order for the kitchen board. Only the latest non-cancelled job of each station
- * counts, so a reprint replaces the previous attempt. Any FAILED wins, then any unfinished job
- * (QUEUED), otherwise PRINTED.
+ * counts, so a reprint replaces the previous attempt. Precedence: any FAILED, then any EXPIRED
+ * (both mean "not printed" and need the admin; EXPIRED outranks QUEUED so a ticket that will never
+ * print is not hidden behind a sibling still in the queue), then any unfinished job (QUEUED),
+ * otherwise PRINTED.
  */
 @Service
 @RequiredArgsConstructor
@@ -47,6 +49,9 @@ public class PrintStatusService {
         }
         if (latest.values().stream().anyMatch(j -> j.status() == PrintJobStatus.FAILED)) {
             return new PrintSummary(PrintStatus.FAILED, null);
+        }
+        if (latest.values().stream().anyMatch(j -> j.status() == PrintJobStatus.EXPIRED)) {
+            return new PrintSummary(PrintStatus.EXPIRED, null);
         }
         if (latest.values().stream().anyMatch(j -> j.status() != PrintJobStatus.PRINTED)) {
             return new PrintSummary(PrintStatus.QUEUED, null);
