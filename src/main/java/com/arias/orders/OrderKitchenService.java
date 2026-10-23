@@ -3,6 +3,7 @@ package com.arias.orders;
 import com.arias.common.exception.BusinessException;
 import com.arias.credits.CreditLedgerService;
 import com.arias.credits.MovementRef;
+import com.arias.printing.PrintJobService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,6 +27,7 @@ public class OrderKitchenService {
 
     private final OrderRepository orderRepository;
     private final CreditLedgerService creditLedgerService;
+    private final PrintJobService printJobService;
     private final Clock clock;
 
     /**
@@ -64,6 +66,8 @@ public class OrderKitchenService {
             o.setEstado(OrderEstado.COMANDADO);
             o.setComandadoAt(now);
         });
+        // Kitchen tickets: only for the admin comandar endpoints, never the legacy Excel path.
+        printJobService.enqueueForComandado(orders);
         return orders;
     }
 
@@ -87,6 +91,7 @@ public class OrderKitchenService {
             case COMANDADO -> {
                 order.setEstado(OrderEstado.CONFIRMADO);
                 order.setComandadoAt(null);
+                printJobService.cancelPending(order.getId());
             }
             case ENTREGADO -> {
                 order.setEstado(OrderEstado.COMANDADO);
