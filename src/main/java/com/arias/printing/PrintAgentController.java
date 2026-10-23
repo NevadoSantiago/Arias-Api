@@ -1,6 +1,7 @@
 package com.arias.printing;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -22,7 +23,7 @@ public class PrintAgentController {
 
     private final PrintAgentService agentService;
 
-    public record AckRequest(@NotNull AckStatus status, String error) {}
+    public record AckRequest(@NotNull AckStatus status, String error, @NotBlank String claimToken) {}
 
     /** Claims the available jobs. Also the agent heartbeat, so call it on every polling cycle. */
     @PostMapping("/jobs/claim")
@@ -32,6 +33,6 @@ public class PrintAgentController {
 
     @PostMapping("/jobs/{id}/ack")
     public PrintAgentService.AckResult ack(@PathVariable Long id, @Valid @RequestBody AckRequest req) {
-        return agentService.ack(id, req.status(), req.error());
+        return agentService.ack(id, req.status(), req.error(), req.claimToken());
     }
 }

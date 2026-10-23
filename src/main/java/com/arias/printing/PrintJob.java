@@ -59,6 +59,10 @@ public class PrintJob {
     @Column(name = "claimed_at")
     private Instant claimedAt;
 
+    /** Random token of the current claim; the agent must echo it in the ack. Regenerated on every (re-)claim. */
+    @Column(name = "claim_token", length = 36)
+    private String claimToken;
+
     @Column(name = "printed_at")
     private Instant printedAt;
 

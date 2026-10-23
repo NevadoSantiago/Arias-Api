@@ -136,6 +136,39 @@ class AdminPrintControllerTest {
     }
 
     @Test
+    @DisplayName("reprint while jobs are unfinished returns the existing jobs and enqueues nothing")
+    void reprintIsIdempotentWhileUnfinished() throws Exception {
+        Order o = order(OrderEstado.COMANDADO, DishStation.COCINA, DishStation.PARRILLA);
+        PrintJob pending = job(o, DishStation.COCINA, PrintJobStatus.PENDING, null);
+        PrintJob claimed = job(o, DishStation.PARRILLA, PrintJobStatus.CLAIMED, null);
+
+        for (int i = 0; i < 2; i++) {
+            mvc.perform(post("/api/v1/admin/orders/" + o.getId() + "/print").header(HttpHeaders.AUTHORIZATION, admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].id").value(pending.getId()))
+                .andExpect(jsonPath("$[1].id").value(claimed.getId()));
+        }
+
+        assertThat(jobRepo.findByOrderId(o.getId())).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("reprint enqueues again when every job is finished or cancelled")
+    void reprintAfterFinished() throws Exception {
+        Order o = order(OrderEstado.COMANDADO, DishStation.COCINA);
+        job(o, DishStation.COCINA, PrintJobStatus.PRINTED, NOW);
+        job(o, DishStation.COCINA, PrintJobStatus.FAILED, null);
+        job(o, DishStation.COCINA, PrintJobStatus.CANCELLED, null);
+
+        mvc.perform(post("/api/v1/admin/orders/" + o.getId() + "/print").header(HttpHeaders.AUTHORIZATION, admin))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1));
+
+        assertThat(jobRepo.findByOrderId(o.getId())).hasSize(4);
+    }
+
+    @Test
     @DisplayName("reprint of an ENTREGADO order is allowed")
     void reprintEntregado() throws Exception {
         Order o = order(OrderEstado.ENTREGADO, DishStation.COCINA);

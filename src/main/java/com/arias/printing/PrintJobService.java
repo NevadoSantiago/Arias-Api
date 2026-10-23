@@ -69,7 +69,11 @@ public class PrintJobService {
         return created;
     }
 
-    /** Reprints a COMANDADO or ENTREGADO order with the same routing, claimable right away. */
+    /**
+     * Reprints a COMANDADO or ENTREGADO order with the same routing, claimable right away. Idempotent
+     * against double clicks and client retries: while the order still has PENDING or CLAIMED jobs
+     * those are returned and nothing new is enqueued.
+     */
     @Transactional
     public List<PrintJob> reprint(Long orderId) {
         Order order = orderRepo.findById(orderId)
@@ -77,6 +81,12 @@ public class PrintJobService {
         if (order.getEstado() != OrderEstado.COMANDADO && order.getEstado() != OrderEstado.ENTREGADO) {
             throw BusinessException.conflict("order-not-printable",
                 "Solo se pueden reimprimir pedidos comandados o entregados");
+        }
+        List<PrintJob> unfinished = jobRepo.findByOrderId(orderId).stream()
+            .filter(j -> j.getStatus() == PrintJobStatus.PENDING || j.getStatus() == PrintJobStatus.CLAIMED)
+            .toList();
+        if (!unfinished.isEmpty()) {
+            return unfinished;
         }
         return enqueue(List.of(order), clock.instant());
     }

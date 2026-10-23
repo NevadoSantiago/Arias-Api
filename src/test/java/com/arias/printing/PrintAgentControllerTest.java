@@ -98,10 +98,13 @@ class PrintAgentControllerTest {
         order = orderRepo.save(order);
     }
 
+    private static final String TOKEN = "11111111-1111-1111-1111-111111111111";
+
     private PrintJob job(PrintJobStatus status, Instant availableAt, Instant claimedAt, int attempts) {
         return jobRepo.saveAndFlush(PrintJob.builder().order(order).station(DishStation.COCINA)
             .host("192.168.0.121").port(9100).data(new byte[] {0x1B, 0x40, 'h', 'i', 0x1B, 0x40})
-            .status(status).availableAt(availableAt).claimedAt(claimedAt).attempts(attempts).build());
+            .status(status).availableAt(availableAt).claimedAt(claimedAt).attempts(attempts)
+            .claimToken(status == PrintJobStatus.CLAIMED ? TOKEN : null).build());
     }
 
     private PrintJob reload(PrintJob j) {
@@ -135,7 +138,7 @@ class PrintAgentControllerTest {
     @DisplayName("ack without the key or with a wrong key is 401")
     void ackWithoutKey() throws Exception {
         PrintJob j = job(PrintJobStatus.CLAIMED, NOW, NOW, 0);
-        String body = "{\"status\":\"PRINTED\"}";
+        String body = "{\"status\":\"PRINTED\",\"claimToken\":\"" + TOKEN + "\"}";
 
         mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack")
                 .contentType(MediaType.APPLICATION_JSON).content(body))
@@ -182,12 +185,14 @@ class PrintAgentControllerTest {
             .andExpect(jsonPath("$[0].id").value(j.getId()))
             .andExpect(jsonPath("$[0].host").value("192.168.0.121"))
             .andExpect(jsonPath("$[0].port").value(9100))
+            .andExpect(jsonPath("$[0].claimToken").isNotEmpty())
             .andExpect(jsonPath("$[0].dataBase64")
                 .value(Base64.getEncoder().encodeToString(j.getData())));
 
         PrintJob after = reload(j);
         assertThat(after.getStatus()).isEqualTo(PrintJobStatus.CLAIMED);
         assertThat(after.getClaimedAt()).isEqualTo(NOW);
+        assertThat(after.getClaimToken()).isNotBlank();
     }
 
     @Test
@@ -293,7 +298,7 @@ class PrintAgentControllerTest {
         PrintJob j = job(PrintJobStatus.CLAIMED, NOW.minusSeconds(5), NOW.minusSeconds(2), 0);
 
         mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
-                .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"PRINTED\"}"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"PRINTED\",\"claimToken\":\"" + TOKEN + "\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("PRINTED"));
 
@@ -307,9 +312,9 @@ class PrintAgentControllerTest {
     void ackPrintedTwice() throws Exception {
         PrintJob j = job(PrintJobStatus.CLAIMED, NOW.minusSeconds(5), NOW.minusSeconds(2), 0);
 
-        ack(j, "{\"status\":\"PRINTED\"}");
+        ack(j, "{\"status\":\"PRINTED\",\"claimToken\":\"" + TOKEN + "\"}");
         mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
-                .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"PRINTED\"}"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"PRINTED\",\"claimToken\":\"" + TOKEN + "\"}"))
             .andExpect(status().isOk());
     }
 
@@ -319,7 +324,7 @@ class PrintAgentControllerTest {
         PrintJob j = job(PrintJobStatus.CLAIMED, NOW.minusSeconds(5), NOW.minusSeconds(2), 0);
 
         mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
-                .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"FAILED\",\"error\":\"timeout\"}"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"FAILED\",\"error\":\"timeout\",\"claimToken\":\"" + TOKEN + "\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("PENDING"));
 
@@ -339,7 +344,7 @@ class PrintAgentControllerTest {
 
         mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"status\":\"FAILED\",\"error\":\"" + longError + "\"}"))
+                .content("{\"status\":\"FAILED\",\"error\":\"" + longError + "\",\"claimToken\":\"" + TOKEN + "\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("FAILED"));
 
@@ -353,7 +358,7 @@ class PrintAgentControllerTest {
     @DisplayName("ack of an unknown job is 404")
     void ackUnknown() throws Exception {
         mvc.perform(post("/api/v1/print-agent/jobs/999999999/ack").header(HEADER, KEY)
-                .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"PRINTED\"}"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"PRINTED\",\"claimToken\":\"" + TOKEN + "\"}"))
             .andExpect(status().isNotFound());
     }
 
@@ -365,7 +370,7 @@ class PrintAgentControllerTest {
 
         for (PrintJob j : new PrintJob[] {pending, cancelled}) {
             mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
-                    .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"PRINTED\"}"))
+                    .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"PRINTED\",\"claimToken\":\"" + TOKEN + "\"}"))
                 .andExpect(status().isConflict());
         }
     }
@@ -380,5 +385,57 @@ class PrintAgentControllerTest {
                     .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isBadRequest());
         }
+    }
+
+    @Test
+    @DisplayName("every claim, including a re-offer, issues a fresh claim token")
+    void reofferRegeneratesToken() throws Exception {
+        PrintJob j = job(PrintJobStatus.CLAIMED, NOW.minusSeconds(120), NOW.minusSeconds(61), 0);
+
+        mvc.perform(post("/api/v1/print-agent/jobs/claim").header(HEADER, KEY))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].claimToken").value(org.hamcrest.Matchers.not(TOKEN)));
+
+        assertThat(reload(j).getClaimToken()).isNotBlank().isNotEqualTo(TOKEN);
+    }
+
+    @Test
+    @DisplayName("a late ack carrying a stale claim token is 409 and leaves the job untouched")
+    void staleTokenAck() throws Exception {
+        PrintJob j = job(PrintJobStatus.CLAIMED, NOW.minusSeconds(5), NOW.minusSeconds(2), 0);
+
+        for (String status : new String[] {"PRINTED", "FAILED"}) {
+            mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"status\":\"" + status + "\",\"error\":\"x\",\"claimToken\":\"stale\"}"))
+                .andExpect(status().isConflict());
+        }
+
+        PrintJob after = reload(j);
+        assertThat(after.getStatus()).isEqualTo(PrintJobStatus.CLAIMED);
+        assertThat(after.getAttempts()).isZero();
+        assertThat(after.getPrintedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("ack without a claim token is 400")
+    void ackWithoutToken() throws Exception {
+        PrintJob j = job(PrintJobStatus.CLAIMED, NOW.minusSeconds(5), NOW.minusSeconds(2), 0);
+
+        mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"PRINTED\"}"))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("a PRINTED ack with a stale token on an already printed job is 409")
+    void printedStaleTokenAck() throws Exception {
+        PrintJob j = job(PrintJobStatus.CLAIMED, NOW.minusSeconds(5), NOW.minusSeconds(2), 0);
+        ack(j, "{\"status\":\"PRINTED\",\"claimToken\":\"" + TOKEN + "\"}");
+
+        mvc.perform(post("/api/v1/print-agent/jobs/" + j.getId() + "/ack").header(HEADER, KEY)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"status\":\"PRINTED\",\"claimToken\":\"stale\"}"))
+            .andExpect(status().isConflict());
     }
 }

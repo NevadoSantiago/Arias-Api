@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
+import java.util.UUID;
 
 /** What the local print agent can do: claim jobs (which doubles as its heartbeat) and acknowledge them. */
 @Service
@@ -29,10 +30,10 @@ public class PrintAgentService {
     private final Clock clock;
 
     /** A job as the agent receives it. */
-    public record AgentJobDto(Long id, String host, Integer port, String dataBase64) {
+    public record AgentJobDto(Long id, String host, Integer port, String dataBase64, String claimToken) {
         static AgentJobDto from(PrintJob job) {
             return new AgentJobDto(job.getId(), job.getHost(), job.getPort(),
-                Base64.getEncoder().encodeToString(job.getData()));
+                Base64.getEncoder().encodeToString(job.getData()), job.getClaimToken());
         }
     }
 
@@ -56,20 +57,26 @@ public class PrintAgentService {
             }
             job.setStatus(PrintJobStatus.CLAIMED);
             job.setClaimedAt(now);
+            job.setClaimToken(UUID.randomUUID().toString()); // a re-offer invalidates the previous claim
         }
         return jobs.stream().map(AgentJobDto::from).toList();
     }
 
     /**
-     * PRINTED sets {@code printedAt}. FAILED counts an attempt and reschedules the job as PENDING
+     * The ack must carry the token of the current claim, otherwise it is rejected with 409 and the job
+     * is left untouched. PRINTED sets {@code printedAt}. FAILED counts an attempt and reschedules the job as PENDING
      * after {@link #RETRY_BACKOFF}, until {@link #MAX_ATTEMPTS}, when it stays FAILED.
      */
     @Transactional
-    public AckResult ack(Long id, AckStatus status, String error) {
+    public AckResult ack(Long id, AckStatus status, String error, String claimToken) {
         PrintJob job = jobRepo.findByIdForUpdate(id)
             .orElseThrow(() -> BusinessException.notFound("print-job-not-found", "Trabajo de impresión no encontrado"));
         Instant now = clock.instant();
 
+        if (!claimToken.equals(job.getClaimToken())) {
+            throw BusinessException.conflict("print-job-stale-claim",
+                "El token de reclamo no corresponde al reclamo vigente del trabajo");
+        }
         if (status == AckStatus.PRINTED && job.getStatus() == PrintJobStatus.PRINTED) {
             return new AckResult(job.getId(), job.getStatus()); // idempotent retry of a lost response
         }
@@ -91,6 +98,7 @@ public class PrintAgentService {
                 job.setStatus(PrintJobStatus.PENDING);
                 job.setAvailableAt(now.plus(RETRY_BACKOFF));
                 job.setClaimedAt(null);
+                job.setClaimToken(null);
             }
         }
         return new AckResult(job.getId(), job.getStatus());
