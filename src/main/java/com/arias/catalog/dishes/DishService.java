@@ -138,6 +138,7 @@ public class DishService {
             .stockActual(req.stockActual())
             .enabled(true)
             .especial(esEspecial)
+            .station(req.station() != null ? req.station() : DishStation.COCINA)
             .build();
 
         return AdminDishDto.from(dishRepo.save(dish));
@@ -163,6 +164,9 @@ public class DishService {
         dish.setStockActual(req.stockActual());
         dish.setEnabled(req.enabled());
         dish.setEspecial(esEspecial);
+        if (req.station() != null) {
+            dish.setStation(req.station());
+        }
 
         return AdminDishDto.from(dish);
     }

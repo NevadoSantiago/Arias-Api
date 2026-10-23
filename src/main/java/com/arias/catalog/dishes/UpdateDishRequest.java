@@ -19,5 +19,7 @@ public record UpdateDishRequest(
     @NotNull @PositiveOrZero Integer stockDiarioDefault,
     @NotNull @PositiveOrZero Integer stockActual,
     @NotNull Boolean enabled,
-    Boolean especial
+    Boolean especial,
+    /** Null = keep the current station. */
+    DishStation station
 ) {}

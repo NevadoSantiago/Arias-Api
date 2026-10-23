@@ -20,5 +20,7 @@ public record CreateDishRequest(
     List<Long> allowedSideIds,
     @NotNull @PositiveOrZero Integer stockDiarioDefault,
     @NotNull @PositiveOrZero Integer stockActual,
-    Boolean especial
+    Boolean especial,
+    /** Null = COCINA. */
+    DishStation station
 ) {}

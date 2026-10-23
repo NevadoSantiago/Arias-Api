@@ -23,7 +23,8 @@ public record AdminDishDto(
     Integer stockDiarioDefault,
     Integer stockActual,
     Boolean enabled,
-    Boolean especial
+    Boolean especial,
+    DishStation station
 ) {
     public static AdminDishDto from(Dish d) {
         return new AdminDishDto(
@@ -41,7 +42,8 @@ public record AdminDishDto(
             d.getStockDiarioDefault(),
             d.getStockActual(),
             d.getEnabled(),
-            d.getEspecial()
+            d.getEspecial(),
+            d.getStation()
         );
     }
 }

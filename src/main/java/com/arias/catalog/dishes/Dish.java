@@ -68,6 +68,12 @@ public class Dish {
     @Column(name = "side_type", length = 20)
     private SideType sideType;
 
+    /** Station that prepares the dish (comanda routing). Defaults to COCINA. */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    @Builder.Default
+    private DishStation station = DishStation.COCINA;
+
     @Column(nullable = false)
     private Boolean enabled = true;
 
