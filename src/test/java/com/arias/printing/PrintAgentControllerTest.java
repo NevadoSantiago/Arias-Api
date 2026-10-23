@@ -67,6 +67,7 @@ class PrintAgentControllerTest {
     @Autowired private WebApplicationContext webContext;
     @Autowired private JwtService jwtService;
     @Autowired private UserRepository userRepo;
+    @Autowired private PrintAgentStatusRepository statusRepo;
     @Autowired private CategoryRepository categoryRepo;
     @Autowired private MenuSectionRepository menuSectionRepo;
     @Autowired private DishRepository dishRepo;
@@ -264,6 +265,8 @@ class PrintAgentControllerTest {
     @Test
     @DisplayName("every claim records the agent heartbeat, shown by the admin agent endpoint")
     void heartbeat() throws Exception {
+        // Start from "never seen", whatever an earlier committed test left behind.
+        statusRepo.touch(null);
         String admin = adminBearer();
         mvc.perform(get("/api/v1/admin/print/agent").header(HttpHeaders.AUTHORIZATION, admin))
             .andExpect(jsonPath("$.online").value(false))

@@ -67,6 +67,7 @@ class PrintJobClaimConcurrencyTest {
     @Autowired private DishRepository dishRepo;
     @Autowired private CategoryRepository categoryRepo;
     @Autowired private MenuSectionRepository menuSectionRepo;
+    @Autowired private PrintAgentStatusRepository statusRepo;
     @Autowired private TransactionTemplate tx;
 
     private Long orderId;
@@ -86,6 +87,8 @@ class PrintJobClaimConcurrencyTest {
             if (userId != null) userRepo.deleteById(userId);
             if (categoryId != null) categoryRepo.deleteById(categoryId);
             if (sectionId != null) menuSectionRepo.deleteById(sectionId);
+            // The claims committed a heartbeat; clear it so it does not leak into other test classes.
+            statusRepo.touch(null);
         });
     }
 
