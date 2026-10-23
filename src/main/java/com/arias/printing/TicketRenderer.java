@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetEncoder;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -35,6 +36,10 @@ public class TicketRenderer {
 
     private static final String INDENT = "   ";
     private static final String SEPARATOR = "-".repeat(COLUMNS);
+    private static final String HEAVY = "=".repeat(COLUMNS);
+    /** Double-width characters take two cells, so a double-size line holds half the columns. */
+    private static final int DOUBLE_COLUMNS = COLUMNS / 2;
+    private static final String[] WEEKDAYS = {"Lun", "Mar", "Mi\u00E9", "Jue", "Vie", "S\u00E1b", "Dom"};
 
     // ESC/POS commands
     private static final byte ESC = 0x1B;
@@ -47,6 +52,7 @@ public class TicketRenderer {
     private static final byte[] BOLD_ON = {ESC, 0x45, 1};
     private static final byte[] BOLD_OFF = {ESC, 0x45, 0};
     private static final byte[] SIZE_DOUBLE = {GS, 0x21, 0x11};
+    private static final byte[] SIZE_HEIGHT = {GS, 0x21, 0x01};
     private static final byte[] SIZE_NORMAL = {GS, 0x21, 0x00};
     private static final byte[] CUT = {GS, 0x56, 66, 0};
     private static final int FEED_LINES = 4;
@@ -58,39 +64,57 @@ public class TicketRenderer {
         write(out, CODE_PAGE_850);
         write(out, FONT_A);
 
-        // Header: station, large and bold, centered.
+        // Header: app + station (bold, centered), then the big PEDIDO / RETIRA lines.
         write(out, ALIGN_CENTER);
         write(out, BOLD_ON);
-        write(out, SIZE_DOUBLE);
-        line(out, station.name());
-        write(out, SIZE_NORMAL);
+        line(out, "APP ARIAS - " + station.name());
         write(out, BOLD_OFF);
         write(out, ALIGN_LEFT);
+        line(out, HEAVY);
+        sized(out, SIZE_DOUBLE, DOUBLE_COLUMNS, "PEDIDO N\u00B0 " + order.getId());
+        sized(out, SIZE_DOUBLE, DOUBLE_COLUMNS,
+            "RETIRA " + TIME.format(order.getPickupAt().atZone(ZONE)));
+        line(out, HEAVY);
 
-        line(out, "");
-        line(out, "Pedido #" + order.getId());
-        wrapped(out, "", "  ", order.getUser().displayName());
-        line(out, "Retiro: " + TIME.format(order.getPickupAt().atZone(ZONE))
-            + "   Fecha: " + DATE.format(order.getFecha()));
+        nameAndDate(out, order.getUser().displayName(), order.getFecha());
+        if (order.getComandadoAt() != null) {
+            line(out, "Comandado " + TIME.format(order.getComandadoAt().atZone(ZONE)));
+        }
         line(out, SEPARATOR);
 
-        for (Group g : group(order.getItems())) {
+        List<Group> groups = group(order.getItems());
+        int count = 0;
+        for (int i = 0; i < groups.size(); i++) {
+            Group g = groups.get(i);
+            count += g.quantity;
+            if (i > 0) {
+                line(out, "");
+            }
+            write(out, SIZE_HEIGHT);
             wrapped(out, g.quantity + "x ", INDENT, g.dish);
+            write(out, SIZE_NORMAL);
             if (g.side != null) {
                 wrapped(out, INDENT + g.quantity + "x C/", INDENT + "     ", g.side);
             }
             if (g.note != null) {
-                wrapped(out, INDENT + "Nota: ", INDENT + "      ", g.note);
+                write(out, BOLD_ON);
+                wrapped(out, INDENT + "NOTA: ", INDENT + "      ", g.note);
+                write(out, BOLD_OFF);
             }
         }
 
         String orderNotes = clean(order.getNotas());
         if (!orderNotes.isEmpty()) {
             line(out, SEPARATOR);
-            line(out, "Notas del pedido:");
+            write(out, BOLD_ON);
+            line(out, "NOTA DEL PEDIDO");
+            write(out, BOLD_OFF);
             wrapped(out, "", "", orderNotes);
         }
-        line(out, SEPARATOR);
+        line(out, HEAVY);
+        String footer = count + (count == 1 ? " plato" : " platos")
+            + " \u00B7 fin del pedido " + order.getId();
+        line(out, " ".repeat(Math.max(0, (COLUMNS - footer.length()) / 2)) + footer);
 
         // Back to the default state, feed, cut, and reset the printer for the next (Maxirest) job.
         write(out, ALIGN_LEFT);
@@ -102,6 +126,26 @@ public class TicketRenderer {
         write(out, CUT);
         write(out, INIT);
         return out.toByteArray();
+    }
+
+    /** Customer name on the left, weekday + date right-aligned; the date drops to its own line if needed. */
+    private void nameAndDate(ByteArrayOutputStream out, String name, LocalDate fecha) {
+        String date = WEEKDAYS[fecha.getDayOfWeek().getValue() - 1] + " " + DATE.format(fecha);
+        String cleanName = clean(name).replaceAll("\s+", " ");
+        if (cleanName.length() + 1 + date.length() <= COLUMNS) {
+            line(out, cleanName + " ".repeat(COLUMNS - cleanName.length() - date.length()) + date);
+        } else {
+            wrapped(out, "", "", cleanName);
+            line(out, " ".repeat(COLUMNS - date.length()) + date);
+        }
+    }
+
+    /** One line in a double-size mode, truncated to the narrower column count. */
+    private void sized(ByteArrayOutputStream out, byte[] size, int columns, String text) {
+        String t = clean(text);
+        write(out, size);
+        line(out, t.length() > columns ? t.substring(0, columns) : t);
+        write(out, SIZE_NORMAL);
     }
 
     // -- grouping ---------------------------------------------------------

@@ -124,17 +124,131 @@ class TicketRendererTest {
     // -- content ------------------------------------------------------------
 
     @Test
-    @DisplayName("header carries the station, then order number, customer and pickup time in Buenos Aires")
+    @DisplayName("header carries the app name with the station, order number, pickup time and customer")
     void headerContent() {
         List<String> cocina = lines(renderer.render(order(null, item("Milanesa", null)), DishStation.COCINA));
         List<String> parrilla = lines(renderer.render(order(null, item("Milanesa", null)), DishStation.PARRILLA));
 
-        assertThat(cocina).contains("COCINA");
-        assertThat(parrilla).contains("PARRILLA");
-        assertThat(cocina).anyMatch(l -> l.contains("Pedido #123"));
-        assertThat(cocina).anyMatch(l -> l.contains("Coty"));
-        assertThat(cocina).anyMatch(l -> l.contains("13:30"));
-        assertThat(cocina).anyMatch(l -> l.contains("10/03/2026"));
+        assertThat(cocina.get(0)).isEqualTo("APP ARIAS - COCINA");
+        assertThat(parrilla.get(0)).isEqualTo("APP ARIAS - PARRILLA");
+        assertThat(cocina).contains("PEDIDO N\u00B0 123", "RETIRA 13:30");
+        assertThat(cocina.get(1)).isEqualTo("=".repeat(48));
+        assertThat(cocina.get(4)).isEqualTo("=".repeat(48));
+    }
+
+    @Test
+    @DisplayName("header station line is bold and centered; PEDIDO and RETIRA are double size")
+    void headerStyles() {
+        byte[] b = renderer.render(order(null, item("Milanesa", null)), DishStation.COCINA);
+        String s = new String(b, CP850);
+
+        assertThat(s).contains("\u001Ba\u0001\u001BE\u0001APP ARIAS - COCINA\n");
+        assertThat(s).contains("\u001D!\u0011PEDIDO N\u00B0 123\n");
+        assertThat(s).contains("\u001D!\u0011RETIRA 13:30\n");
+    }
+
+    @Test
+    @DisplayName("customer name on the left and weekday + date right-aligned in 48 columns")
+    void nameAndDateAligned() {
+        Order o = order(null, item("Milanesa", null));
+        List<String> l = lines(renderer.render(o, DishStation.COCINA));
+
+        String expected = "Coty" + " ".repeat(48 - 4 - 14) + "Mar 10/03/2026";
+        assertThat(l).contains(expected);
+        assertThat(expected).hasSize(48);
+    }
+
+    @Test
+    @DisplayName("when name and date do not fit, the date goes on its own line")
+    void dateOnOwnLine() {
+        Order o = order(null, item("Milanesa", null));
+        o.getUser().setNickname("N".repeat(40));
+        List<String> l = lines(renderer.render(o, DishStation.COCINA));
+
+        int idx = l.indexOf("N".repeat(40));
+        assertThat(idx).isGreaterThanOrEqualTo(0);
+        assertThat(l.get(idx + 1).strip()).isEqualTo("Mar 10/03/2026");
+    }
+
+    @Test
+    @DisplayName("Comandado line shows the local time, and is omitted when null")
+    void comandadoLine() {
+        Order with = order(null, item("Milanesa", null));
+        with.setComandadoAt(Instant.parse("2026-03-10T15:31:00Z"));
+        Order without = order(null, item("Milanesa", null));
+
+        assertThat(lines(renderer.render(with, DishStation.COCINA))).contains("Comandado 12:31");
+        assertThat(lines(renderer.render(without, DishStation.COCINA))).noneMatch(s -> s.contains("Comandado"));
+    }
+
+    @Test
+    @DisplayName("item lines are double height (GS ! 1), keeping 48 columns")
+    void itemLinesDoubleHeight() {
+        byte[] b = renderer.render(order(null, item("Milanesa", "Papas")), DishStation.COCINA);
+        String s = new String(b, CP850);
+
+        assertThat(s).contains("\u001D!\u00011x Milanesa\n");
+        assertThat(s).doesNotContain("\u001D!\u00101x");
+    }
+
+    @Test
+    @DisplayName("item groups are separated by a blank line and item notes are bold NOTA:")
+    void groupSeparationAndItemNote() {
+        Order o = order(null,
+            item("Milanesa", "Papas", "Sin cebolla, porfa", DishStation.COCINA),
+            item("Ravioles", null));
+        byte[] b = renderer.render(o, DishStation.COCINA);
+        List<String> l = lines(b);
+
+        int idx = l.indexOf("1x Milanesa");
+        assertThat(l.get(idx + 1)).isEqualTo("   1x C/Papas");
+        assertThat(l.get(idx + 2)).isEqualTo("   NOTA: Sin cebolla, porfa");
+        assertThat(l.get(idx + 3)).isEmpty();
+        assertThat(l.get(idx + 4)).isEqualTo("1x Ravioles");
+        assertThat(new String(b, CP850)).contains("\u001BE\u0001   NOTA: Sin cebolla, porfa\n");
+    }
+
+    @Test
+    @DisplayName("order notes appear under a bold NOTA DEL PEDIDO heading, only when present")
+    void orderNotesSection() {
+        List<String> with = lines(renderer.render(order("Tocar timbre", item("Milanesa", null)), DishStation.COCINA));
+        List<String> without = lines(renderer.render(order(null, item("Milanesa", null)), DishStation.COCINA));
+
+        int idx = with.indexOf("NOTA DEL PEDIDO");
+        assertThat(idx).isGreaterThan(0);
+        assertThat(with.get(idx - 1)).isEqualTo("-".repeat(48));
+        assertThat(with.get(idx + 1)).isEqualTo("Tocar timbre");
+        assertThat(without).doesNotContain("NOTA DEL PEDIDO");
+    }
+
+    @Test
+    @DisplayName("footer closes with = and the centered item count, singular and plural")
+    void footerCount() {
+        List<String> one = lines(renderer.render(order(null, item("Milanesa", null)), DishStation.COCINA));
+        List<String> three = lines(renderer.render(order(null,
+            item("Milanesa", null), item("Milanesa", null), item("Ravioles", null)), DishStation.COCINA));
+
+        String f1 = "1 plato \u00B7 fin del pedido 123";
+        String f3 = "3 platos \u00B7 fin del pedido 123";
+        assertThat(one).contains(" ".repeat((48 - f1.length()) / 2) + f1);
+        assertThat(three).contains(" ".repeat((48 - f3.length()) / 2) + f3);
+        int i = three.indexOf(" ".repeat((48 - f3.length()) / 2) + f3);
+        assertThat(three.get(i - 1)).isEqualTo("=".repeat(48));
+    }
+
+    @Test
+    @DisplayName("N-degree, middle dot and accented weekdays are encoded in CP850")
+    void cp850TicketBytes() {
+        byte[] b = renderer.render(order(null, item("Milanesa", null)), DishStation.COCINA);
+        assertThat(contains(b, "N".getBytes(CP850)[0], (byte) 0xF8, (byte) ' ')).isTrue(); // N\u00B0 (0xF8)
+        assertThat(contains(b, (byte) 0xFA)).isTrue(); // middle dot
+
+        Order wed = order(null, item("Milanesa", null)); // 2026-10-21 is a Wednesday
+        wed.setFecha(LocalDate.of(2026, 10, 21));
+        Order sat = order(null, item("Milanesa", null));
+        sat.setFecha(LocalDate.of(2026, 10, 24));
+        assertThat(contains(renderer.render(wed, DishStation.COCINA), (byte) 'M', (byte) 'i', (byte) 0x82)).isTrue();
+        assertThat(contains(renderer.render(sat, DishStation.COCINA), (byte) 'S', (byte) 0xA0, (byte) 'b')).isTrue();
     }
 
     @Test
