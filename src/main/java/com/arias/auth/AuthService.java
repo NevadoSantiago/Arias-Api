@@ -163,6 +163,27 @@ public class AuthService {
         return toMeResponse(user);
     }
 
+    /**
+     * Changes only the caller's alias (any role). The value is trimmed first,
+     * then must be 2-50 characters. Phone and every other field are untouched.
+     */
+    @Transactional
+    public MeResponse updateNickname(Long userId, UpdateProfileRequest req) {
+        User user = userRepo.findById(userId)
+            .orElseThrow(InvalidCredentialsException::new);
+
+        String nickname = req.nickname() == null ? "" : req.nickname().trim();
+        if (nickname.length() < 2 || nickname.length() > 50) {
+            throw BusinessException.badRequest(
+                "INVALID_NICKNAME", "El alias debe tener entre 2 y 50 caracteres");
+        }
+
+        user.setNickname(nickname);
+        userRepo.save(user);
+
+        return toMeResponse(user);
+    }
+
     private MeResponse toMeResponse(User user) {
         return new MeResponse(
             user.getId(),

@@ -152,6 +152,15 @@ public class AuthController {
         return authService.me(user.userId());
     }
 
+    /** Edits the logged-in user's alias (nickname), any role. Phone and other fields are not touched. */
+    @PatchMapping("/me")
+    public MeResponse updateMe(
+        @AuthenticationPrincipal JwtUser user,
+        @Valid @RequestBody UpdateProfileRequest req
+    ) {
+        return authService.updateNickname(user.userId(), req);
+    }
+
     /** Helper: arma la response con access en body + refresh en cookie httpOnly. */
     private ResponseEntity<TokenResponse> withRefreshCookie(AuthResult result) {
         ResponseCookie cookie = baseCookie(result.refreshTokenValue(), jwtProperties.refreshTokenTtl())
