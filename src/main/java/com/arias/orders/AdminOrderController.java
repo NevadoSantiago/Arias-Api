@@ -141,14 +141,14 @@ public class AdminOrderController {
         return toDtos(orderKitchenService.markConfirmado(req.orderIds()));
     }
 
-    /** CONFIRMADO -> COMANDADO for one B2C order. */
+    /** PENDIENTE or CONFIRMADO -> COMANDADO for one B2C order (credits are consumed if still PENDIENTE). */
     @PutMapping("/{id}/comandado")
     @Transactional
     public AdminOrderDto.PickupOrderDto markComandado(@PathVariable Long id) {
         return toDto(orderKitchenService.markComandado(List.of(id)).get(0));
     }
 
-    /** CONFIRMADO -> COMANDADO for several B2C orders, all or nothing. */
+    /** PENDIENTE or CONFIRMADO -> COMANDADO for several B2C orders, all or nothing. */
     @PutMapping("/comandado")
     @Transactional
     public List<AdminOrderDto.PickupOrderDto> markComandadoBatch(@RequestBody AdminOrderDto.KitchenBatchRequest req) {

@@ -78,13 +78,18 @@ public class OrderKitchenService {
     }
 
     /**
-     * CONFIRMADO -> COMANDADO. All or nothing: every order is validated before
-     * any is changed.
+     * PENDIENTE or CONFIRMADO -> COMANDADO. PENDIENTE orders consume their
+     * credits in the same step ("Comandar ahora"). All or nothing: every order
+     * is validated before any is changed.
      */
     @Transactional
     public List<Order> markComandado(List<Long> ids) {
         List<Order> orders = loadForUpdate(ids);
-        orders.forEach(o -> requireEstado(o, OrderEstado.CONFIRMADO));
+        orders.forEach(o -> {
+            if (o.getEstado() != OrderEstado.PENDIENTE && o.getEstado() != OrderEstado.CONFIRMADO) {
+                throw invalidTransition(o);
+            }
+        });
         comandar(orders, clock.instant(), null);
         return orders;
     }

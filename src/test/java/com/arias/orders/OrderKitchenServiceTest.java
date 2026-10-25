@@ -185,15 +185,60 @@ class OrderKitchenServiceTest {
     }
 
     @Test
-    @DisplayName("markComandado(): rechaza un pedido que no esta CONFIRMADO con 409 order-invalid-transition")
+    @DisplayName("markComandado(): rechaza COMANDADO, ENTREGADO, CANCELADO y PENDIENTE_PAGO con 409")
     void markComandadoRejectsOtherStates() {
-        Order o = persistOrder(OrderEstado.PENDIENTE);
+        for (OrderEstado estado : List.of(OrderEstado.COMANDADO, OrderEstado.ENTREGADO,
+                OrderEstado.CANCELADO, OrderEstado.PENDIENTE_PAGO)) {
+            Order o = persistOrder(estado);
+            assertThatThrownBy(() -> service.markComandado(List.of(o.getId())))
+                .as("estado %s", estado)
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("order-invalid-transition");
+                    assertThat(e.getStatus().value()).isEqualTo(409);
+                });
+        }
+    }
 
-        assertThatThrownBy(() -> service.markComandado(List.of(o.getId())))
-            .isInstanceOfSatisfying(BusinessException.class, e -> {
-                assertThat(e.getErrorCode()).isEqualTo("order-invalid-transition");
-                assertThat(e.getStatus().value()).isEqualTo(409);
-            });
+    @Test
+    @DisplayName("markComandado(): PENDIENTE (Comandar ahora) consume creditos y comanda en un solo paso")
+    void markComandadoFromPendienteConsumesCredits() {
+        Order o = persistOrder(OrderEstado.PENDIENTE);
+        seedWallet(o, 3, 2);
+
+        Order result = service.markComandado(List.of(o.getId())).get(0);
+
+        assertThat(result.getEstado()).isEqualTo(OrderEstado.COMANDADO);
+        assertThat(result.getConfirmedAt()).isEqualTo(FIXED_NOW);
+        assertThat(result.getComandadoAt()).isEqualTo(FIXED_NOW);
+        CreditWallet wallet = walletRepo.findByIdForUpdate(o.getUser().getId()).orElseThrow();
+        assertThat(wallet.getCommitted()).isZero();
+        assertThat(wallet.getAvailable()).isEqualTo(3);
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(o.getUser().getId())).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("markComandado(): CONFIRMADO no mueve creditos")
+    void markComandadoFromConfirmadoDoesNotConsume() {
+        Order o = persistOrder(OrderEstado.CONFIRMADO);
+        seedWallet(o, 3, 0);
+
+        service.markComandado(List.of(o.getId()));
+
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(o.getUser().getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("markComandado(): lote mixto con un pedido invalido es todo o nada")
+    void markComandadoMixedBatchIsAllOrNothing() {
+        Order pending = persistOrder(OrderEstado.PENDIENTE);
+        seedWallet(pending, 0, 2);
+        Order bad = persistOrder(OrderEstado.ENTREGADO);
+
+        assertThatThrownBy(() -> service.markComandado(List.of(pending.getId(), bad.getId())))
+            .isInstanceOf(BusinessException.class);
+
+        assertThat(orderRepo.findById(pending.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.PENDIENTE);
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(pending.getUser().getId())).isEmpty();
     }
 
     @Test
