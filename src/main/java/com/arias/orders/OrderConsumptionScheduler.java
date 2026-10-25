@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
@@ -66,10 +67,13 @@ public class OrderConsumptionScheduler {
         // (OrderKitchenService#autoComandar locks the row and re-checks the state), so
         // one failure is logged and skipped without rolling back the others.
         // PENDIENTE orders consume their credits; leftover CONFIRMADO ones (confirmed
-        // before the auto flow existed) are only comandadas.
+        // before the auto flow existed) are only comandadas, and only for today's
+        // service day: older ones were already served and must not flood the printers.
+        Instant startOfToday = LocalDate.now(clock).atStartOfDay(clock.getZone()).toInstant();
         List<Order> due = new ArrayList<>(
             orderRepo.findByEstadoAndPickupAtLessThanEqual(OrderEstado.PENDIENTE, cutoff));
-        due.addAll(orderRepo.findByEstadoAndPickupAtLessThanEqual(OrderEstado.CONFIRMADO, cutoff));
+        due.addAll(orderRepo.findByEstadoAndPickupAtGreaterThanEqualAndPickupAtLessThanEqual(
+            OrderEstado.CONFIRMADO, startOfToday, cutoff));
         int comandadas = 0;
         for (Order order : due) {
             try {

@@ -402,6 +402,19 @@ class OrderConsumptionSchedulerTest {
     }
 
     @Test
+    @DisplayName("consumeDueOrders(): un CONFIRMADO de un día anterior no se comanda ni se imprime")
+    void consumeDueOrdersIgnoraConfirmadoDeDiasAnteriores() {
+        User user = persistUser();
+        Order yesterday = persistOrderWithDish(user, FIXED_NOW.minus(1, ChronoUnit.DAYS), OrderEstado.CONFIRMADO, 5);
+
+        scheduler.consumeDueOrders();
+
+        assertThat(orderRepo.findById(yesterday.getId()).orElseThrow().getEstado())
+            .isEqualTo(OrderEstado.CONFIRMADO);
+        assertThat(jobRepo.findByOrderId(yesterday.getId())).isEmpty();
+    }
+
+    @Test
     @DisplayName("consumeDueOrders(): un CONFIRMADO que todavía no venció queda como está")
     void consumeDueOrdersIgnoraConfirmadoNoVencido() {
         User user = persistUser();

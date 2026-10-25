@@ -39,7 +39,8 @@ class OrderConsumptionSchedulerIsolationTest {
         Order leftover = Order.builder().id(3L).build();
         when(orderRepo.findByEstadoAndPickupAtLessThanEqual(eq(OrderEstado.PENDIENTE), any()))
             .thenReturn(List.of(first, second));
-        when(orderRepo.findByEstadoAndPickupAtLessThanEqual(eq(OrderEstado.CONFIRMADO), any()))
+        when(orderRepo.findByEstadoAndPickupAtGreaterThanEqualAndPickupAtLessThanEqual(
+            eq(OrderEstado.CONFIRMADO), any(), any()))
             .thenReturn(List.of(leftover));
         when(orderRepo.findByEstadoAndPickupAtLessThanEqual(eq(OrderEstado.PENDIENTE_PAGO), any()))
             .thenReturn(List.of());

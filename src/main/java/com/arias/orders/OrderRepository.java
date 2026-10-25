@@ -83,6 +83,13 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     List<Order> findByEstadoAndPickupAtLessThanEqual(OrderEstado estado, Instant cutoff);
 
     /**
+     * Same as {@link #findByEstadoAndPickupAtLessThanEqual} with a lower bound on
+     * {@code pickup_at}, so the leftover-CONFIRMADO sweep never reaches past days.
+     */
+    List<Order> findByEstadoAndPickupAtGreaterThanEqualAndPickupAtLessThanEqual(
+        OrderEstado estado, Instant from, Instant cutoff);
+
+    /**
      * Pedidos del día para el resumen matutino (unidad 12) — excluye
      * {@code CANCELADO} y, desde la unidad B7, {@code PENDIENTE_PAGO}: el
      * resto de la app los trata como si no existieran (un pedido esperando
