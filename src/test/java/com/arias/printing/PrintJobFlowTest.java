@@ -191,41 +191,17 @@ class PrintJobFlowTest {
     }
 
     @Test
-    @DisplayName("undo cancels the order's jobs that are still PENDING")
-    void undoCancelsPending() {
+    @DisplayName("undo of a COMANDADO order is rejected and leaves its jobs untouched")
+    void undoComandadoIsRejected() {
         Order o = confirmedOrder(dish("Fideos", DishStation.COCINA), dish("Bife", DishStation.PARRILLA));
         kitchen.markComandado(List.of(o.getId()));
 
-        Order undone = kitchen.undo(o.getId());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> kitchen.undo(o.getId()))
+            .isInstanceOf(com.arias.common.exception.BusinessException.class);
 
-        // The returned order must stay usable by the controller (items still reachable).
-        assertThat(undone.getItems()).hasSize(2);
         em.clear();
         assertThat(jobRepo.findByOrderId(o.getId())).extracting(PrintJob::getStatus)
-            .containsOnly(PrintJobStatus.CANCELLED);
-    }
-
-    @Test
-    @DisplayName("undo leaves claimed and printed jobs alone")
-    void undoKeepsClaimedAndPrinted() {
-        Order o = confirmedOrder(dish("Fideos", DishStation.COCINA), dish("Bife", DishStation.PARRILLA));
-        kitchen.markComandado(List.of(o.getId()));
-        List<PrintJob> jobs = jobRepo.findByOrderId(o.getId());
-        PrintJob claimed = jobs.stream().filter(j -> j.getStation() == DishStation.COCINA).findFirst().orElseThrow();
-        PrintJob printed = jobs.stream().filter(j -> j.getStation() == DishStation.PARRILLA).findFirst().orElseThrow();
-        claimed.setStatus(PrintJobStatus.CLAIMED);
-        claimed.setClaimedAt(FIXED_NOW);
-        printed.setStatus(PrintJobStatus.PRINTED);
-        printed.setPrintedAt(FIXED_NOW);
-        jobRepo.saveAllAndFlush(jobs);
-
-        kitchen.undo(o.getId());
-
-        em.clear();
-        PrintJobStatus claimedAfter = jobRepo.findById(claimed.getId()).orElseThrow().getStatus();
-        PrintJobStatus printedAfter = jobRepo.findById(printed.getId()).orElseThrow().getStatus();
-        assertThat(claimedAfter).isEqualTo(PrintJobStatus.CLAIMED);
-        assertThat(printedAfter).isEqualTo(PrintJobStatus.PRINTED);
+            .containsOnly(PrintJobStatus.PENDING);
     }
 
     @Test

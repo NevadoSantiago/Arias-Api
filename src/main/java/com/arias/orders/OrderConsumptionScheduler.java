@@ -5,11 +5,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -56,16 +56,30 @@ public class OrderConsumptionScheduler {
     private final Clock clock;
 
     @Scheduled(cron = "30 * * * * *", zone = "America/Argentina/Buenos_Aires")
-    @Transactional
     public void consumeDueOrders() {
         Instant now = clock.instant();
         var config = configRepo.getSingleton();
         // pickup_at - lead <= now  <=>  pickup_at <= now + lead
         Instant cutoff = now.plus(config.getPickupLeadMinutes(), ChronoUnit.MINUTES);
 
-        List<Order> due = orderRepo.findByEstadoAndPickupAtLessThanEqual(OrderEstado.PENDIENTE, cutoff);
+        // Not transactional as a whole: each order is comandada in its own transaction
+        // (OrderKitchenService#autoComandar locks the row and re-checks the state), so
+        // one failure is logged and skipped without rolling back the others.
+        // PENDIENTE orders consume their credits; leftover CONFIRMADO ones (confirmed
+        // before the auto flow existed) are only comandadas.
+        List<Order> due = new ArrayList<>(
+            orderRepo.findByEstadoAndPickupAtLessThanEqual(OrderEstado.PENDIENTE, cutoff));
+        due.addAll(orderRepo.findByEstadoAndPickupAtLessThanEqual(OrderEstado.CONFIRMADO, cutoff));
+        int comandadas = 0;
         for (Order order : due) {
-            orderKitchenService.confirmOrder(order, now, "Consumo automático de pedido #" + order.getId());
+            try {
+                if (orderKitchenService.autoComandar(order.getId(), cutoff, now)) {
+                    comandadas++;
+                }
+            } catch (RuntimeException e) {
+                log.error("[CRON] No se pudo comandar el pedido #{}; se reintenta en el próximo ciclo",
+                    order.getId(), e);
+            }
         }
 
         // Pedidos esperando pago directo cuyo corte llegó sin que Mercado
@@ -82,11 +96,15 @@ public class OrderConsumptionScheduler {
             .filter(order -> !order.getCreatedAt().isAfter(graceLimit))
             .toList();
         for (Order order : unpaidDue) {
-            orderPlacementService.closeAtCutoff(order.getId());
+            try {
+                orderPlacementService.closeAtCutoff(order.getId());
+            } catch (RuntimeException e) {
+                log.error("[CRON] No se pudo cancelar el pedido sin pagar #{}", order.getId(), e);
+            }
         }
 
-        if (!due.isEmpty()) {
-            log.info("[CRON] Consumo automático de créditos: {} pedidos confirmados", due.size());
+        if (comandadas > 0) {
+            log.info("[CRON] Comandado automático: {} pedidos comandados", comandadas);
         }
         if (!unpaidDue.isEmpty()) {
             log.info("[CRON] Cancelación automática de pedidos sin pagar: {} pedidos cancelados", unpaidDue.size());

@@ -57,18 +57,51 @@ public class OrderKitchenService {
         order.setConfirmedAt(now);
     }
 
+    /**
+     * Auto-comandar one due order, in its own transaction when called without
+     * an outer one (the minute job). Locks the row and re-checks the state, so
+     * a concurrent admin action can neither double-consume credits nor
+     * double-enqueue print jobs. PENDIENTE consumes credits first; a leftover
+     * CONFIRMADO (confirmed before the auto flow existed) does not.
+     *
+     * @return true if the order was comandada, false if it was no longer eligible
+     */
+    @Transactional
+    public boolean autoComandar(Long id, Instant cutoff, Instant now) {
+        Order order = orderRepository.findByIdForUpdate(id).orElse(null);
+        if (order == null || order.getPickupAt().isAfter(cutoff)
+                || (order.getEstado() != OrderEstado.PENDIENTE && order.getEstado() != OrderEstado.CONFIRMADO)) {
+            return false;
+        }
+        comandar(List.of(order), now, "Consumo automático de pedido #" + id);
+        return true;
+    }
+
+    /**
+     * CONFIRMADO -> COMANDADO. All or nothing: every order is validated before
+     * any is changed.
+     */
     @Transactional
     public List<Order> markComandado(List<Long> ids) {
         List<Order> orders = loadForUpdate(ids);
         orders.forEach(o -> requireEstado(o, OrderEstado.CONFIRMADO));
-        Instant now = clock.instant();
+        comandar(orders, clock.instant(), null);
+        return orders;
+    }
+
+    /** Orders must be locked and validated; consumes credits for PENDIENTE ones, then comandas and enqueues. */
+    private void comandar(List<Order> orders, Instant now, String autoDescription) {
         orders.forEach(o -> {
+            if (o.getEstado() == OrderEstado.PENDIENTE) {
+                String description = autoDescription != null ? autoDescription
+                    : "Consumo de pedido #" + o.getId() + " — comandado desde el tablero";
+                confirmOrder(o, now, description);
+            }
             o.setEstado(OrderEstado.COMANDADO);
             o.setComandadoAt(now);
         });
-        // Kitchen tickets: only for the admin comandar endpoints, never the legacy Excel path.
+        // Kitchen tickets: only for the comandar paths, never the legacy Excel path.
         printJobService.enqueueForComandado(orders);
-        return orders;
     }
 
     @Transactional
@@ -83,16 +116,11 @@ public class OrderKitchenService {
         return orders;
     }
 
-    /** COMANDADO -> CONFIRMADO (clears comandadoAt); ENTREGADO -> COMANDADO (clears deliveredAt). */
+    /** ENTREGADO -> COMANDADO (clears deliveredAt). A COMANDADO order cannot be undone: its tickets are already queued. */
     @Transactional
     public Order undo(Long id) {
         Order order = loadForUpdate(List.of(id)).get(0);
         switch (order.getEstado()) {
-            case COMANDADO -> {
-                order.setEstado(OrderEstado.CONFIRMADO);
-                order.setComandadoAt(null);
-                printJobService.cancelPending(order.getId());
-            }
             case ENTREGADO -> {
                 order.setEstado(OrderEstado.COMANDADO);
                 order.setDeliveredAt(null);

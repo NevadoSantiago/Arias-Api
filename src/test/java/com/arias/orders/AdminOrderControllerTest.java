@@ -255,7 +255,7 @@ class AdminOrderControllerTest {
     }
 
     @Test
-    @DisplayName("comandado/entregado/undo: el controller recorre el ciclo completo")
+    @DisplayName("comandado/entregado/undo: el controller recorre el ciclo; COMANDADO no se deshace")
     void kitchenStateCycleThroughController() {
         Dish dish = persistDish(persistCategory(2), persistMenuSection());
         Order o = persistOrder(persistB2cUser("Coty"), dish,
@@ -264,7 +264,8 @@ class AdminOrderControllerTest {
         assertThat(controller.markComandado(o.getId()).estado()).isEqualTo(OrderEstado.COMANDADO);
         assertThat(controller.markEntregado(o.getId()).estado()).isEqualTo(OrderEstado.ENTREGADO);
         assertThat(controller.undoKitchenState(o.getId()).estado()).isEqualTo(OrderEstado.COMANDADO);
-        assertThat(controller.undoKitchenState(o.getId()).estado()).isEqualTo(OrderEstado.CONFIRMADO);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.undoKitchenState(o.getId()))
+            .isInstanceOf(com.arias.common.exception.BusinessException.class);
     }
 
     @Test

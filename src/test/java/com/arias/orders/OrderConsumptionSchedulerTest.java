@@ -12,6 +12,8 @@ import com.arias.credits.CreditWallet;
 import com.arias.credits.CreditWalletRepository;
 import com.arias.credits.MovementType;
 import com.arias.orders.notifications.OrderUnpaidCancelledEvent;
+import com.arias.printing.PrintJob;
+import com.arias.printing.PrintJobRepository;
 import com.arias.restaurantconfig.RestaurantConfigRepository;
 import com.arias.users.Role;
 import com.arias.users.User;
@@ -52,6 +54,21 @@ class OrderConsumptionSchedulerTest {
     static final Instant FIXED_NOW = Instant.parse("2026-03-10T15:00:00Z");
     static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
 
+    private Order persistOrderWithDish(User user, Instant pickupAt, OrderEstado estado, int creditTotal) {
+        Category category = categoryRepo.save(Category.builder()
+            .nombre("Categoria-" + System.nanoTime()).ordenDisplay(0).enabled(true).creditCost(creditTotal).build());
+        MenuSection section = menuSectionRepo.save(MenuSection.builder()
+            .nombre("Seccion-" + System.nanoTime()).ordenDisplay(0).enabled(true).build());
+        Dish dish = dishRepo.save(Dish.builder()
+            .nombre("Plato-" + System.nanoTime()).category(category).menuSection(section)
+            .enabled(true).especial(false).stockDiarioDefault(5).stockActual(5).build());
+        Order order = persistOrder(user, pickupAt, estado, creditTotal);
+        order.addItem(OrderItem.builder().dish(dish).category(category).dishNombre(dish.getNombre())
+            .dishCategoria(category.getNombre()).creditCost(creditTotal).build());
+        return orderRepo.save(order);
+    }
+
+
     @TestConfiguration
     static class FixedClockConfig {
         @Bean
@@ -87,6 +104,9 @@ class OrderConsumptionSchedulerTest {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired
+    private PrintJobRepository jobRepo;
 
     @Autowired
     private RestaurantConfigRepository configRepo;
@@ -136,7 +156,7 @@ class OrderConsumptionSchedulerTest {
     }
 
     @Test
-    @DisplayName("consumeDueOrders(): confirma y consume créditos de pedidos PENDIENTE cuyo pickup_at - lead <= now")
+    @DisplayName("consumeDueOrders(): comanda y consume créditos de pedidos PENDIENTE cuyo pickup_at - lead <= now")
     void consumeDueOrdersConfirmaYConsumeCreditos() {
         User user = persistUser();
         seedWallet(user.getId(), 0, 5);
@@ -146,8 +166,9 @@ class OrderConsumptionSchedulerTest {
         scheduler.consumeDueOrders();
 
         Order updated = orderRepo.findById(due.getId()).orElseThrow();
-        assertThat(updated.getEstado()).isEqualTo(OrderEstado.CONFIRMADO);
+        assertThat(updated.getEstado()).isEqualTo(OrderEstado.COMANDADO);
         assertThat(updated.getConfirmedAt()).isEqualTo(FIXED_NOW);
+        assertThat(updated.getComandadoAt()).isEqualTo(FIXED_NOW);
 
         CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
         assertThat(wallet.getAvailable()).isZero();
@@ -192,7 +213,7 @@ class OrderConsumptionSchedulerTest {
         scheduler.consumeDueOrders();
 
         Order updated = orderRepo.findById(overdue.getId()).orElseThrow();
-        assertThat(updated.getEstado()).isEqualTo(OrderEstado.CONFIRMADO);
+        assertThat(updated.getEstado()).isEqualTo(OrderEstado.COMANDADO);
 
         CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
         assertThat(wallet.getCommitted()).isZero();
@@ -335,7 +356,7 @@ class OrderConsumptionSchedulerTest {
     }
 
     @Test
-    @DisplayName("consumeDueOrders(): la confirmación de PENDIENTE sigue usando el tiempo de preparación")
+    @DisplayName("consumeDueOrders(): el comandado de PENDIENTE sigue usando el tiempo de preparación")
     void consumeDueOrdersConfirmaPendienteConElTiempoDePreparacion() {
         setLeads(40, 20);
         User user = persistUser();
@@ -344,6 +365,64 @@ class OrderConsumptionSchedulerTest {
 
         scheduler.consumeDueOrders();
 
-        assertThat(orderRepo.findById(order.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.CONFIRMADO);
+        assertThat(orderRepo.findById(order.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.COMANDADO);
+    }
+
+    // ─── Auto-comandado ───
+
+    @Test
+    @DisplayName("consumeDueOrders(): al comandar encola los tickets de impresión una sola vez")
+    void consumeDueOrdersEncolaImpresion() {
+        User user = persistUser();
+        seedWallet(user.getId(), 0, 5);
+        Order due = persistOrderWithDish(user, FIXED_NOW.plus(10, ChronoUnit.MINUTES), OrderEstado.PENDIENTE, 5);
+
+        scheduler.consumeDueOrders();
+        scheduler.consumeDueOrders();
+
+        List<PrintJob> jobs = jobRepo.findByOrderId(due.getId());
+        assertThat(jobs).hasSize(1);
+        assertThat(jobs.get(0).getAvailableAt()).isEqualTo(FIXED_NOW.plusSeconds(10));
+    }
+
+    @Test
+    @DisplayName("consumeDueOrders(): un CONFIRMADO vencido (previo al deploy) se comanda sin mover créditos")
+    void consumeDueOrdersComandaConfirmadoSinConsumirOtraVez() {
+        User user = persistUser();
+        seedWallet(user.getId(), 0, 0);
+        Order leftover = persistOrderWithDish(user, FIXED_NOW.plus(10, ChronoUnit.MINUTES), OrderEstado.CONFIRMADO, 5);
+
+        scheduler.consumeDueOrders();
+
+        Order updated = orderRepo.findById(leftover.getId()).orElseThrow();
+        assertThat(updated.getEstado()).isEqualTo(OrderEstado.COMANDADO);
+        assertThat(updated.getComandadoAt()).isEqualTo(FIXED_NOW);
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
+        assertThat(jobRepo.findByOrderId(leftover.getId())).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("consumeDueOrders(): un CONFIRMADO que todavía no venció queda como está")
+    void consumeDueOrdersIgnoraConfirmadoNoVencido() {
+        User user = persistUser();
+        Order notDue = persistOrder(user, FIXED_NOW.plus(30, ChronoUnit.MINUTES), OrderEstado.CONFIRMADO, 5);
+
+        scheduler.consumeDueOrders();
+
+        assertThat(orderRepo.findById(notDue.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.CONFIRMADO);
+    }
+
+    @Test
+    @DisplayName("consumeDueOrders(): re-ejecutar no vuelve a consumir créditos ni a encolar")
+    void consumeDueOrdersEsIdempotente() {
+        User user = persistUser();
+        seedWallet(user.getId(), 0, 5);
+        Order due = persistOrderWithDish(user, FIXED_NOW.plus(10, ChronoUnit.MINUTES), OrderEstado.PENDIENTE, 5);
+
+        scheduler.consumeDueOrders();
+        scheduler.consumeDueOrders();
+
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).hasSize(1);
+        assertThat(jobRepo.findByOrderId(due.getId())).hasSize(1);
     }
 }

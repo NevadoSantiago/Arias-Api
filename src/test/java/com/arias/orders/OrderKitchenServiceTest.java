@@ -260,15 +260,17 @@ class OrderKitchenServiceTest {
     }
 
     @Test
-    @DisplayName("undo(): COMANDADO vuelve a CONFIRMADO y limpia comandadoAt")
-    void undoComandado() {
+    @DisplayName("undo(): COMANDADO ya no se puede deshacer (409)")
+    void undoRejectsComandado() {
         Order o = persistOrder(OrderEstado.CONFIRMADO);
         service.markComandado(List.of(o.getId()));
 
-        Order result = service.undo(o.getId());
-
-        assertThat(result.getEstado()).isEqualTo(OrderEstado.CONFIRMADO);
-        assertThat(result.getComandadoAt()).isNull();
+        assertThatThrownBy(() -> service.undo(o.getId()))
+            .isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("order-invalid-transition");
+                assertThat(e.getStatus().value()).isEqualTo(409);
+            });
+        assertThat(orderRepo.findById(o.getId()).orElseThrow().getEstado()).isEqualTo(OrderEstado.COMANDADO);
     }
 
     @Test

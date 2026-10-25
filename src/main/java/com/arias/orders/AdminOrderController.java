@@ -127,7 +127,7 @@ public class AdminOrderController {
             printStatusService.summarize(orders.stream().map(Order::getId).toList()));
     }
 
-    /** PENDIENTE -> CONFIRMADO a mano para un pedido B2C: consume sus créditos, sin deshacer. */
+    /** Legacy (the board no longer uses it): PENDIENTE -> CONFIRMADO a mano para un pedido B2C: consume sus créditos, sin deshacer. */
     @PutMapping("/{id}/confirmar")
     @Transactional
     public AdminOrderDto.PickupOrderDto markConfirmado(@PathVariable Long id) {
@@ -169,7 +169,7 @@ public class AdminOrderController {
         return toDtos(orderKitchenService.markEntregado(req.orderIds()));
     }
 
-    /** One-step undo: COMANDADO -> CONFIRMADO, ENTREGADO -> COMANDADO. */
+    /** One-step undo: ENTREGADO -> COMANDADO (a COMANDADO order cannot be undone). */
     @PutMapping("/{id}/undo")
     @Transactional
     public AdminOrderDto.PickupOrderDto undoKitchenState(@PathVariable Long id) {
