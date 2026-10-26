@@ -46,8 +46,8 @@ public class CreditLedgerService {
     private final RestaurantConfigRepository restaurantConfigRepo;
     private final Clock clock;
 
-    /** Regla de producto: el almuerzo de bienvenida vence 48 horas después de otorgado. */
-    static final Duration WELCOME_EXPIRY = Duration.ofHours(48);
+    /** Regla de producto: el almuerzo de bienvenida vence 96 horas después de otorgado. */
+    static final Duration WELCOME_EXPIRY = Duration.ofHours(96);
 
     /**
      * Único punto de mutación de saldo. Lee la billetera bloqueada (o la crea
@@ -86,7 +86,7 @@ public class CreditLedgerService {
         // paquetes". DIRECT_PURCHASE (deltaAvailable = 0, va directo a
         // committed) y PAYMENT_REVERSAL (deltaAvailable negativo) nunca caen
         // en esta rama, así que nunca renuevan — igual que exige la spec.
-        // Excepción: el almuerzo de bienvenida vence a las 48 horas de otorgado
+        // Excepción: el almuerzo de bienvenida vence a las 96 horas de otorgado
         // (no a los días configurados); si la billetera ya tiene fecha, no se toca.
         if (type == MovementType.WELCOME_GRANT && wallet.getExpiresAt() == null) {
             wallet.setExpiresAt(clock.instant().plus(WELCOME_EXPIRY));

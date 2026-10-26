@@ -277,7 +277,7 @@ class CreditLedgerServiceTest {
     // ─── Renovación de vencimiento por tipo ────────────────────────────────
 
     @Test
-    @DisplayName("WELCOME_GRANT establece el vencimiento inicial (48 horas) sobre una billetera sin fecha")
+    @DisplayName("WELCOME_GRANT establece el vencimiento inicial (96 horas) sobre una billetera sin fecha")
     void welcomeGrantEstableceVencimientoInicial() {
         User user = persistTestUser("welcome-grant");
 
@@ -285,7 +285,7 @@ class CreditLedgerServiceTest {
 
         CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
         assertThat(wallet.getAvailable()).isEqualTo(5);
-        assertThat(wallet.getExpiresAt()).isEqualTo(FIXED_NOW.plus(48, ChronoUnit.HOURS));
+        assertThat(wallet.getExpiresAt()).isEqualTo(FIXED_NOW.plus(96, ChronoUnit.HOURS));
     }
 
     @Test
@@ -316,13 +316,13 @@ class CreditLedgerServiceTest {
     }
 
     @Test
-    @DisplayName("el almuerzo de bienvenida vence pasadas las 48 horas por la vía de vencimiento existente")
-    void almuerzoDeBienvenidaVencePasadas48Horas() {
+    @DisplayName("el almuerzo de bienvenida vence pasadas las 96 horas por la vía de vencimiento existente")
+    void almuerzoDeBienvenidaVencePasadas96Horas() {
         User user = persistTestUser("welcome-expires");
         try {
             ledgerService.grantWelcomeLunch(user.getId());
 
-            mutableClock.set(FIXED_NOW.plus(48, ChronoUnit.HOURS).plusSeconds(1));
+            mutableClock.set(FIXED_NOW.plus(96, ChronoUnit.HOURS).plusSeconds(1));
             ledgerService.expireIfDue(user.getId());
 
             CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
@@ -337,14 +337,14 @@ class CreditLedgerServiceTest {
     }
 
     @Test
-    @DisplayName("grantWelcomeLunch fija el vencimiento a 48 horas del otorgamiento")
-    void grantWelcomeLunchFijaVencimientoA48Horas() {
-        User user = persistTestUser("welcome-48h");
+    @DisplayName("grantWelcomeLunch fija el vencimiento a 96 horas del otorgamiento")
+    void grantWelcomeLunchFijaVencimientoA96Horas() {
+        User user = persistTestUser("welcome-96h");
 
         ledgerService.grantWelcomeLunch(user.getId());
 
         CreditWallet wallet = walletRepo.findById(user.getId()).orElseThrow();
-        assertThat(wallet.getExpiresAt()).isEqualTo(FIXED_NOW.plus(48, ChronoUnit.HOURS));
+        assertThat(wallet.getExpiresAt()).isEqualTo(FIXED_NOW.plus(96, ChronoUnit.HOURS));
     }
 
     @Test
