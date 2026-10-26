@@ -134,6 +134,34 @@ class PrintJobFlowTest {
     }
 
     @Test
+    @DisplayName("the COCINA job holds three copies of the ticket, each cut; the PARRILLA job holds one")
+    void cocinaPrintsThreeCopies() {
+        Order o = confirmedOrder(dish("Fideos", DishStation.COCINA), dish("Bife", DishStation.PARRILLA));
+
+        kitchen.markComandado(List.of(o.getId()));
+
+        List<PrintJob> jobs = jobRepo.findByOrderId(o.getId());
+        PrintJob cocina = jobs.stream().filter(j -> j.getStation() == DishStation.COCINA).findFirst().orElseThrow();
+        PrintJob parrilla = jobs.stream().filter(j -> j.getStation() == DishStation.PARRILLA).findFirst().orElseThrow();
+        assertThat(jobs).hasSize(2);
+        assertThat(cuts(cocina.getData())).isEqualTo(3);
+        assertThat(cuts(parrilla.getData())).isEqualTo(1);
+        String text = new String(cocina.getData(), java.nio.charset.Charset.forName("IBM850"));
+        assertThat(text.split("Fideos", -1)).hasSize(4);
+    }
+
+    /** Counts the ESC/POS partial-cut-with-feed commands (GS V 66 0): one per printed copy. */
+    private static int cuts(byte[] data) {
+        int count = 0;
+        for (int i = 0; i + 3 < data.length; i++) {
+            if (data[i] == 0x1D && data[i + 1] == 0x56 && data[i + 2] == 66 && data[i + 3] == 0) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    @Test
     @DisplayName("an order with only PARRILLA dishes still enqueues COCINA (always) plus PARRILLA")
     void parrillaOnlyStillPrintsCocina() {
         Order o = confirmedOrder(dish("Bife", DishStation.PARRILLA));

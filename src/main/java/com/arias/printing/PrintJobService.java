@@ -61,7 +61,7 @@ public class PrintJobService {
                     .station(station)
                     .host(printer.getHost())
                     .port(printer.getPort())
-                    .data(renderer.render(order, station))
+                    .data(copies(renderer.render(order, station), copiesFor(station)))
                     .availableAt(availableAt)
                     .build()));
             }
@@ -95,6 +95,23 @@ public class PrintJobService {
     @Transactional
     public int cancelPending(Long orderId) {
         return jobRepo.cancelPendingForOrder(orderId, clock.instant());
+    }
+
+    /** Copies printed per ticket: the kitchen needs three, the grill one. */
+    static int copiesFor(DishStation station) {
+        return station == DishStation.COCINA ? 3 : 1;
+    }
+
+    /**
+     * Repeats the ticket in one job, so the copies print together (no Maxirest ticket in between)
+     * and share one print status. Each rendered ticket starts with a reset and ends with a cut.
+     */
+    static byte[] copies(byte[] ticket, int count) {
+        byte[] data = new byte[ticket.length * count];
+        for (int i = 0; i < count; i++) {
+            System.arraycopy(ticket, 0, data, i * ticket.length, ticket.length);
+        }
+        return data;
     }
 
     static List<DishStation> stationsFor(Order order) {
