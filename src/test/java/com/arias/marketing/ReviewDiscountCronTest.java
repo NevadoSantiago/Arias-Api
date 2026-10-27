@@ -9,11 +9,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ReviewDiscountCronTest {
 
     @Test
-    @DisplayName("the campaign runs every day at 11:30 Buenos Aires time")
-    void runsAt1130BuenosAires() throws NoSuchMethodException {
+    @DisplayName("the campaign runs every day at 12:00 Buenos Aires time")
+    void runsAt1200BuenosAires() throws NoSuchMethodException {
         Scheduled scheduled = ReviewDiscountScheduler.class.getMethod("runDaily").getAnnotation(Scheduled.class);
 
-        assertThat(scheduled.cron()).isEqualTo("0 30 11 * * *");
+        assertThat(scheduled.cron()).isEqualTo("0 0 12 * * *");
         assertThat(scheduled.zone()).isEqualTo("America/Argentina/Buenos_Aires");
     }
 }

@@ -50,7 +50,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 /**
- * Daily 11:30 campaign: gives the account discount to B2C customers who ate yesterday and
+ * Daily 12:00 campaign: gives the account discount to B2C customers who ate yesterday and
  * mails them once. EmailService is mocked: no real email ever leaves the test.
  */
 @SpringBootTest(properties = {
@@ -62,8 +62,8 @@ import static org.mockito.Mockito.verify;
 class ReviewDiscountSchedulerTest {
 
     static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
-    // 11:30 ART on 2026-03-11; the campaign targets 2026-03-10.
-    static final Instant FIXED_NOW = Instant.parse("2026-03-11T14:30:00Z");
+    // 12:00 ART on 2026-03-11; the campaign targets 2026-03-10.
+    static final Instant FIXED_NOW = Instant.parse("2026-03-11T15:00:00Z");
     static final LocalDate YESTERDAY = LocalDate.of(2026, 3, 10);
     private static final AtomicLong PHONE_SEQ = new AtomicLong(5_000);
 

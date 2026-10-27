@@ -17,7 +17,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * Every day at 11:30 (Buenos Aires): customers who ate yesterday and never had an account
+ * Every day at 12:00 (Buenos Aires): customers who ate yesterday and never had an account
  * discount get one, plus the review/discount email. Off unless
  * {@code arias.marketing.review-campaign-enabled} is true.
  *
@@ -39,7 +39,7 @@ public class ReviewDiscountScheduler {
     private final NotificationRunLogRepository runLogRepo;
     private final Clock clock;
 
-    @Scheduled(cron = "0 30 11 * * *", zone = "America/Argentina/Buenos_Aires")
+    @Scheduled(cron = "0 0 12 * * *", zone = "America/Argentina/Buenos_Aires")
     public void runDaily() {
         if (!marketing.reviewCampaignEnabled()) {
             log.info("[CRON-REVIEW-DISCOUNT] arias.marketing.review-campaign-enabled=false — campaña apagada");
