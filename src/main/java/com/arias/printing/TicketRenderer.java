@@ -135,7 +135,8 @@ public class TicketRenderer {
     private void nameAndDate(ByteArrayOutputStream out, String name, LocalDate fecha) {
         String date = WEEKDAYS[fecha.getDayOfWeek().getValue() - 1] + " " + DATE.format(fecha);
         write(out, BOLD_ON);
-        for (String part : wrap("", "", name, DOUBLE_COLUMNS)) {
+        // A name is a single line: any line break or tab collapses to one space before wrapping.
+        for (String part : wrap("", "", clean(name).replaceAll("\\s+", " "), DOUBLE_COLUMNS)) {
             write(out, SIZE_DOUBLE);
             line(out, part);
         }

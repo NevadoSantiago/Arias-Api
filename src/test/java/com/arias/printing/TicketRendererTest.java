@@ -169,6 +169,16 @@ class TicketRendererTest {
     }
 
     @Test
+    @DisplayName("line breaks and tabs inside the name collapse to single spaces")
+    void nameWhitespaceCollapses() {
+        Order o = order(null, item("Milanesa", null));
+        o.getUser().setNickname("Ana\n\tMaria");
+        String s = new String(renderer.render(o, DishStation.COCINA), CP850);
+
+        assertThat(s).contains("\u001BE\u0001\u001D!\u0011" + "Ana Maria\n" + "\u001BE\u0000");
+    }
+
+    @Test
     @DisplayName("a single word longer than 24 columns is hard-split, never truncated")
     void overlongNameWordIsSplit() {
         Order o = order(null, item("Milanesa", null));

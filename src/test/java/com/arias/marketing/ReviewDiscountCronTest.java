@@ -6,7 +6,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class ReviewDiscountScheduleTest {
+class ReviewDiscountCronTest {
 
     @Test
     @DisplayName("the campaign runs every day at 11:30 Buenos Aires time")

@@ -334,6 +334,28 @@ class AuthServiceTest {
     }
 
     @Test
+    void checkEmailStatusPrefersFirstLoginOverGoogleForCompanyAccounts() {
+        String email = uniqueEmail("company-google");
+        userRepo.save(baseUser(email).company(persistCompany()).googleSub("sub-" + System.nanoTime()).build());
+        assertThat(authService.checkEmail(email).status()).isEqualTo(AccountStatus.FIRST_LOGIN);
+    }
+
+    @Test
+    void checkEmailStatusIsPasswordForCompanyAccountWithPassword() {
+        String email = uniqueEmail("company-pw");
+        userRepo.save(baseUser(email).company(persistCompany())
+            .passwordHash(passwordEncoder.encode("pw-123456")).build());
+        assertThat(authService.checkEmail(email).status()).isEqualTo(AccountStatus.PASSWORD);
+    }
+
+    @Test
+    void checkEmailStatusIsPasswordForB2cWithoutPasswordOrGoogle() {
+        String email = uniqueEmail("bare");
+        userRepo.save(baseUser(email).build());
+        assertThat(authService.checkEmail(email).status()).isEqualTo(AccountStatus.PASSWORD);
+    }
+
+    @Test
     void checkEmailNormalizesCaseAndWhitespaceLikeLogin() {
         String email = uniqueEmail("case");
         userRepo.save(baseUser(email).googleSub("sub-" + System.nanoTime()).build());

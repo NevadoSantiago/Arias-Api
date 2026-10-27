@@ -57,6 +57,10 @@ public class AuthService {
         return new CheckEmailResponse(status == AccountStatus.FIRST_LOGIN, status);
     }
 
+    /**
+     * FIRST_LOGIN must stay in sync with the checks of {@link #firstLogin}: a company account
+     * without a password. B2C accounts never go through first login.
+     */
     private static AccountStatus statusOf(User user) {
         if (!Boolean.TRUE.equals(user.getActive())) {
             return AccountStatus.PASSWORD;
