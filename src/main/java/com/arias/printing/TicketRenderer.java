@@ -128,16 +128,20 @@ public class TicketRenderer {
         return out.toByteArray();
     }
 
-    /** Customer name on the left, weekday + date right-aligned; the date drops to its own line if needed. */
+    /**
+     * Customer name in bold double size (word-wrapped at {@link #DOUBLE_COLUMNS}), then the weekday
+     * + date on its own line in normal size. Size and bold are back to normal afterwards.
+     */
     private void nameAndDate(ByteArrayOutputStream out, String name, LocalDate fecha) {
         String date = WEEKDAYS[fecha.getDayOfWeek().getValue() - 1] + " " + DATE.format(fecha);
-        String cleanName = clean(name).replaceAll("\s+", " ");
-        if (cleanName.length() + 1 + date.length() <= COLUMNS) {
-            line(out, cleanName + " ".repeat(COLUMNS - cleanName.length() - date.length()) + date);
-        } else {
-            wrapped(out, "", "", cleanName);
-            line(out, " ".repeat(COLUMNS - date.length()) + date);
+        write(out, BOLD_ON);
+        for (String part : wrap("", "", name, DOUBLE_COLUMNS)) {
+            write(out, SIZE_DOUBLE);
+            line(out, part);
         }
+        write(out, BOLD_OFF);
+        write(out, SIZE_NORMAL);
+        line(out, date);
     }
 
     /** One line in a double-size mode, truncated to the narrower column count. */
@@ -216,26 +220,33 @@ public class TicketRenderer {
      * word is longer than the available width.
      */
     private void wrapped(ByteArrayOutputStream out, String firstPrefix, String restPrefix, String text) {
+        for (String l : wrap(firstPrefix, restPrefix, text, COLUMNS)) {
+            line(out, l);
+        }
+    }
+
+    private static List<String> wrap(String firstPrefix, String restPrefix, String text, int columns) {
+        List<String> lines = new ArrayList<>();
         for (String paragraph : clean(text).split("\n", -1)) {
             String prefix = firstPrefix;
             StringBuilder current = new StringBuilder();
             boolean emitted = false;
             for (String word : paragraph.split(" +")) {
                 if (word.isEmpty()) continue;
-                int width = COLUMNS - prefix.length();
+                int width = columns - prefix.length();
                 while (word.length() > width) {
                     if (current.length() > 0) {
-                        line(out, prefix + current);
+                        lines.add(prefix + current);
                         current.setLength(0);
                         prefix = restPrefix;
-                        width = COLUMNS - prefix.length();
+                        width = columns - prefix.length();
                         emitted = true;
                         continue;
                     }
-                    line(out, prefix + word.substring(0, width));
+                    lines.add(prefix + word.substring(0, width));
                     word = word.substring(width);
                     prefix = restPrefix;
-                    width = COLUMNS - prefix.length();
+                    width = columns - prefix.length();
                     emitted = true;
                 }
                 if (current.length() == 0) {
@@ -243,7 +254,7 @@ public class TicketRenderer {
                 } else if (current.length() + 1 + word.length() <= width) {
                     current.append(' ').append(word);
                 } else {
-                    line(out, prefix + current);
+                    lines.add(prefix + current);
                     prefix = restPrefix;
                     current.setLength(0);
                     current.append(word);
@@ -251,9 +262,10 @@ public class TicketRenderer {
                 }
             }
             if (current.length() > 0 || !emitted) {
-                line(out, prefix + current);
+                lines.add(prefix + current);
             }
         }
+        return lines;
     }
 
     private void line(ByteArrayOutputStream out, String text) {

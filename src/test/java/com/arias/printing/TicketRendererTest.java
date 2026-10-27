@@ -148,26 +148,34 @@ class TicketRendererTest {
     }
 
     @Test
-    @DisplayName("customer name on the left and weekday + date right-aligned in 48 columns")
-    void nameAndDateAligned() {
-        Order o = order(null, item("Milanesa", null));
-        List<String> l = lines(renderer.render(o, DishStation.COCINA));
+    @DisplayName("customer name is double size and bold on its own line, then the date in normal size")
+    void nameLargeThenDate() {
+        byte[] b = renderer.render(order(null, item("Milanesa", null)), DishStation.COCINA);
+        String s = new String(b, CP850);
 
-        String expected = "Coty" + " ".repeat(48 - 4 - 14) + "Mar 10/03/2026";
-        assertThat(l).contains(expected);
-        assertThat(expected).hasSize(48);
+        assertThat(s).contains("\u001BE\u0001\u001D!\u0011" + "Coty\n" + "\u001BE\u0000\u001D!\u0000" + "Mar 10/03/2026\n");
     }
 
     @Test
-    @DisplayName("when name and date do not fit, the date goes on its own line")
-    void dateOnOwnLine() {
+    @DisplayName("a long name wraps at word boundaries into several double-size lines of at most 24 columns")
+    void longNameWrapsInDoubleSize() {
         Order o = order(null, item("Milanesa", null));
-        o.getUser().setNickname("N".repeat(40));
-        List<String> l = lines(renderer.render(o, DishStation.COCINA));
+        o.getUser().setNickname("Maria Fernanda Gonzalez Rodriguez");
+        String s = new String(renderer.render(o, DishStation.COCINA), CP850);
 
-        int idx = l.indexOf("N".repeat(40));
-        assertThat(idx).isGreaterThanOrEqualTo(0);
-        assertThat(l.get(idx + 1).strip()).isEqualTo("Mar 10/03/2026");
+        assertThat(s).contains("\u001BE\u0001\u001D!\u0011" + "Maria Fernanda Gonzalez\n"
+            + "\u001D!\u0011" + "Rodriguez\n"
+            + "\u001BE\u0000\u001D!\u0000" + "Mar 10/03/2026\n");
+    }
+
+    @Test
+    @DisplayName("a single word longer than 24 columns is hard-split, never truncated")
+    void overlongNameWordIsSplit() {
+        Order o = order(null, item("Milanesa", null));
+        o.getUser().setNickname("N".repeat(30));
+        String s = new String(renderer.render(o, DishStation.COCINA), CP850);
+
+        assertThat(s).contains("\u001D!\u0011" + "N".repeat(24) + "\n" + "\u001D!\u0011" + "N".repeat(6) + "\n");
     }
 
     @Test
