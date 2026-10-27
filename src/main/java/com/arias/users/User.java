@@ -91,6 +91,12 @@ public class User {
     @lombok.Builder.Default
     private Boolean recibeNovedades = true;
 
+    /** In-app Google review card state; NEVER wins over OPENED. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "review_prompt_status", nullable = false, length = 10)
+    @lombok.Builder.Default
+    private ReviewPromptStatus reviewPromptStatus = ReviewPromptStatus.PENDING;
+
     /**
      * Soft delete. NULL = visible. Cuando se setea, el user desaparece
      * de listings, login y check-email — pero su id sigue referenciable
