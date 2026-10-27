@@ -42,7 +42,9 @@ class ReviewDiscountEmailTest {
             .contains("href=\"https://g.page/r/test-review\"")
             .contains("Beneficio primeros 100 clientes")
             .contains("10%")
-            .contains("de descuento");
+            .contains("de descuento")
+            .contains("En tu próxima compra.")
+            .doesNotContain("próximo pack");
     }
 
     @Test
@@ -83,6 +85,17 @@ class ReviewDiscountEmailTest {
     @DisplayName("without a dish name it still reads well")
     void withoutDish() {
         assertThat(email.build(user(), null, 10).html()).contains("Esperamos que hayas disfrutado tu almuerzo.");
+    }
+
+    @Test
+    @DisplayName("without a first name the title has no name and no filler")
+    void withoutFirstName() {
+        User u = user();
+        u.setFirstName(null);
+
+        String html = email.build(u, "Milanesa", 10).html();
+
+        assertThat(html).contains("¡Gracias por probar Arias!").doesNotContain("Arias, che");
     }
 
     @Test

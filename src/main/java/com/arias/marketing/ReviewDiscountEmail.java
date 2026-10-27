@@ -39,7 +39,7 @@ public class ReviewDiscountEmail {
             "<div style=\"font-family:" + SERIF + "; font-size:46px; font-weight:900; line-height:1; color:" + RED + ";\">"
                 + percent + "% <span style=\"font-size:20px; font-weight:700;\">de descuento</span></div>"
                 + "<p style=\"margin:8px 0 0; font-size:13.5px; line-height:1.55;\">"
-                + "En tu próximo pack de almuerzos. Ya está aplicado en tu cuenta, no tenés que hacer nada.</p>");
+                + "En tu próxima compra. Ya está aplicado en tu cuenta, no tenés que hacer nada.</p>");
 
         String body = EmailLayout.paragraph("Esperamos que hayas disfrutado " + dish + ".")
             + EmailLayout.paragraph("¿Qué tal estuvo? Contanos en Google, nos ayuda mucho.")
@@ -51,11 +51,13 @@ public class ReviewDiscountEmail {
         String unsubscribe = "<a href=\"" + EmailLayout.escape(unsubscribeUrl)
             + "\" style=\"color:#66524B; text-decoration:underline;\">No quiero recibir más novedades</a>";
 
-        return EmailLayout.render(EmailContent.of("¡Gracias por probar Arias, " + safeName(user.getFirstName()) + "!", body)
+        return EmailLayout.render(EmailContent.of(title(user.getFirstName()), body)
             .withBelowFooter(unsubscribe));
     }
 
-    private static String safeName(String name) {
-        return (name != null && !name.isBlank()) ? name : "che";
+    private static String title(String firstName) {
+        return firstName != null && !firstName.isBlank()
+            ? "¡Gracias por probar Arias, " + firstName + "!"
+            : "¡Gracias por probar Arias!";
     }
 }
