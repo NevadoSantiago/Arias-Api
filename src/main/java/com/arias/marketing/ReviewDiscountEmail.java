@@ -28,7 +28,7 @@ public class ReviewDiscountEmail {
     public OutgoingEmail build(User user, String dishName) {
         String name = isBlank(user.getFirstName()) ? null : user.getFirstName();
         String dish = isBlank(dishName) ? "almuerzo" : dishName;
-        String subject = (name != null ? name + ", te" : "Te") + " dejamos una sorpresa que vence en " + DAYS + " días";
+        String subject = (name != null ? name + ", tu" : "Tu") + " almuerzo vino con sorpresa";
         String title = "¡Gracias por elegir Arias" + (name != null ? ", " + name : "") + "!";
         return new OutgoingEmail(user.getEmail(), subject, html(title, dish), text(title, dish), sender());
     }

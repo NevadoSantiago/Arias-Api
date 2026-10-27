@@ -40,7 +40,7 @@ class ReviewDiscountEmailTest {
         OutgoingEmail mail = email.build(user(), "Milanesa");
 
         assertThat(mail.to()).isEqualTo("ana@test.arias.com");
-        assertThat(mail.subject()).isEqualTo("Ana, te dejamos una sorpresa que vence en " + DAYS + " días");
+        assertThat(mail.subject()).isEqualTo("Ana, tu almuerzo vino con sorpresa");
         assertThat(mail.html())
             .contains("¡Gracias por elegir Arias, Ana!")
             .contains("Esperamos que hayas disfrutado tu <strong")
@@ -63,7 +63,7 @@ class ReviewDiscountEmailTest {
 
         OutgoingEmail mail = email.build(u, null);
 
-        assertThat(mail.subject()).isEqualTo("Te dejamos una sorpresa que vence en " + DAYS + " días");
+        assertThat(mail.subject()).isEqualTo("Tu almuerzo vino con sorpresa");
         assertThat(mail.html()).contains("¡Gracias por elegir Arias!").contains("disfrutado tu <strong")
             .contains("almuerzo");
         assertThat(mail.text()).startsWith("¡Gracias por elegir Arias!");
