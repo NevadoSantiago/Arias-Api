@@ -35,7 +35,11 @@ public class AccountDiscountService {
         return repo.insertIfAbsent(user.getId(), percent, now, now.plus(VALIDITY), source) == 1;
     }
 
-    /** The discount the user can use at {@code now}: unexpired, unconsumed and not held by a live purchase. */
+    /**
+     * The discount the user can use at {@code now}: unexpired and unconsumed. A reservation by a
+     * PENDING purchase does not hide it: that purchase may be abandoned, and a new purchase takes
+     * the reservation over.
+     */
     @Transactional(readOnly = true)
     public Optional<AccountDiscountDto> findActive(Long userId, Instant now) {
         return repo.findByUserId(userId)
@@ -53,8 +57,9 @@ public class AccountDiscountService {
     }
 
     /**
-     * Locks the user's discount row ({@code FOR UPDATE}) and returns it only if it is usable at
-     * {@code now}. Joins the caller's transaction so the reservation is atomic with the purchase insert.
+     * Locks the user's discount row (FOR UPDATE) and returns it if usable at {@code now}. A reservation
+     * held by another (necessarily still PENDING) purchase is taken over by {@link #reserve}. Joins the
+     * caller's transaction so the reservation is atomic with the purchase insert.
      */
     @Transactional
     public Optional<AccountDiscount> lockUsable(Long userId, Instant now) {
@@ -97,7 +102,6 @@ public class AccountDiscountService {
 
     static boolean isUsable(AccountDiscount d, Instant now) {
         return d.getConsumedAt() == null
-            && d.getReservedPurchaseId() == null
             && now.isBefore(d.getExpiresAt());
     }
 }

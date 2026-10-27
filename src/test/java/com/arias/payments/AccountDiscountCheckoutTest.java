@@ -278,27 +278,56 @@ class AccountDiscountCheckoutTest {
     // ─── reservation ────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("a PENDING purchase reserves the discount: hidden from the wallet until released")
+    @DisplayName("a PENDING purchase reserves the discount but the wallet still shows it")
     void reservedWhilePending() {
         givenDiscount();
         UUID first = buyPack(pack(10, 10_000L, CreditPackType.OTRO), null);
 
         assertThat(discount().getReservedPurchaseId()).isEqualTo(first);
         assertThat(discount().getConsumedAt()).isNull();
-        assertThat(usableNow()).isFalse();
+        assertThat(usableNow()).isTrue();
     }
 
     @Test
-    @DisplayName("a second purchase made while the discount is reserved pays the full price")
-    void secondPurchaseWhileReservedIsFullPrice() {
+    @DisplayName("a new purchase takes over the reservation of an abandoned PENDING one and gets the discount")
+    void newPurchaseTakesOverReservation() {
         givenDiscount();
         CreditPack pack = pack(10, 10_000L, CreditPackType.OTRO);
         UUID first = buyPack(pack, null);
 
         UUID second = buyPack(pack, null);
 
-        assertThat(purchaseRepo.findById(second).orElseThrow().getAmountCents()).isEqualTo(10_000L);
-        assertThat(discount().getReservedPurchaseId()).isEqualTo(first);
+        assertThat(purchaseRepo.findById(second).orElseThrow().getAmountCents()).isEqualTo(9_000L);
+        assertThat(purchaseRepo.findById(first).orElseThrow().getAmountCents()).isEqualTo(9_000L);
+        assertThat(discount().getReservedPurchaseId()).isEqualTo(second);
+    }
+
+    @Test
+    @DisplayName("the old purchase closing unpaid does not release the new holder's reservation")
+    void oldReleaseLeavesNewReservation() {
+        givenDiscount();
+        CreditPack pack = pack(10, 10_000L, CreditPackType.OTRO);
+        UUID first = buyPack(pack, null);
+        UUID second = buyPack(pack, null);
+
+        purchaseService.expirePendingPurchase(first);
+        flushAndClear();
+
+        assertThat(discount().getReservedPurchaseId()).isEqualTo(second);
+    }
+
+    @Test
+    @DisplayName("a consumed discount is never applied again")
+    void consumedIsNeverApplied() {
+        givenDiscount();
+        CreditPack pack = pack(10, 10_000L, CreditPackType.OTRO);
+        apply(buyPack(pack, null), "mp-1", PaymentStatus.APPROVED);
+
+        UUID next = buyPack(pack, null);
+
+        assertThat(purchaseRepo.findById(next).orElseThrow().getAmountCents()).isEqualTo(10_000L);
+        assertThat(purchaseRepo.findById(next).orElseThrow().getDiscountPercent()).isNull();
+        assertThat(usableNow()).isFalse();
     }
 
     // ─── consume / release ──────────────────────────────────────────────────
