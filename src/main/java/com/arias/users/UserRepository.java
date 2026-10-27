@@ -17,22 +17,6 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("SELECT u FROM User u WHERE u.email = :email AND u.deletedAt IS NULL")
     Optional<User> findByEmail(@Param("email") String email);
 
-    /**
-     * Para el flujo de check-email del login:
-     * existe el user, pertenece a una empresa y NO tiene password_hash (= primer
-     * ingreso pendiente). Debe coincidir con {@code AuthService.firstLogin}, que
-     * rechaza a las cuentas B2C (sin empresa).
-     */
-    @Query("""
-        SELECT COUNT(u) > 0 FROM User u
-        WHERE u.email = :email
-          AND u.company IS NOT NULL
-          AND u.passwordHash IS NULL
-          AND u.active = true
-          AND u.deletedAt IS NULL
-    """)
-    boolean isFirstLoginPending(@Param("email") String email);
-
     /** Empleados activos de una empresa — para queries que no necesitan inactivos. */
     @Query("""
         SELECT u FROM User u
