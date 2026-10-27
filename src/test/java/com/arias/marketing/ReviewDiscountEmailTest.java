@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest
 class ReviewDiscountEmailTest {
 
+    private static final long DAYS = com.arias.credits.discount.AccountDiscountService.VALIDITY.toDays();
     private static final List<String> FORBIDDEN = List.of("descuento", "%", "off", "beneficio", "promo",
         "oferta", "gratis", "precio", "reseña", "google");
 
@@ -39,13 +40,13 @@ class ReviewDiscountEmailTest {
         OutgoingEmail mail = email.build(user(), "Milanesa");
 
         assertThat(mail.to()).isEqualTo("ana@test.arias.com");
-        assertThat(mail.subject()).isEqualTo("¿Qué tal estuvo tu Milanesa, Ana?");
+        assertThat(mail.subject()).isEqualTo("Ana, te dejamos una sorpresa que vence en " + DAYS + " días");
         assertThat(mail.html())
             .contains("¡Gracias por elegir Arias, Ana!")
             .contains("Esperamos que hayas disfrutado tu <strong")
             .contains("Milanesa")
-            .contains("La próxima vez que entres a la app vas a encontrar una sorpresa.")
-            .contains("¡Gracias!<br>Santiago, de Arias");
+            .contains("La próxima vez que entres a la app vas a encontrar una sorpresa. Tenés " + DAYS + " días antes de que venza.")
+            .contains("¡Gracias!<br>Equipo de Arias");
     }
 
     @Test
@@ -62,7 +63,7 @@ class ReviewDiscountEmailTest {
 
         OutgoingEmail mail = email.build(u, null);
 
-        assertThat(mail.subject()).isEqualTo("¿Qué tal estuvo tu almuerzo?");
+        assertThat(mail.subject()).isEqualTo("Te dejamos una sorpresa que vence en " + DAYS + " días");
         assertThat(mail.html()).contains("¡Gracias por elegir Arias!").contains("disfrutado tu <strong")
             .contains("almuerzo");
         assertThat(mail.text()).startsWith("¡Gracias por elegir Arias!");
@@ -96,15 +97,15 @@ class ReviewDiscountEmailTest {
 
         assertThat(text).startsWith("¡Gracias por elegir Arias, Ana!")
             .contains("tu Milanesa.")
-            .contains("La próxima vez que entres a la app vas a encontrar una sorpresa.")
-            .contains("Santiago, de Arias");
+            .contains("La próxima vez que entres a la app vas a encontrar una sorpresa. Tenés " + DAYS + " días antes de que venza.")
+            .contains("Equipo de Arias");
     }
 
     @Test
     @DisplayName("sender is the marketing from-name with the global address unless a marketing address is set")
     void sender() {
         assertThat(email.build(user(), "Milanesa").from())
-            .isEqualTo("Santiago de Arias <" + emailProps.from() + ">");
+            .isEqualTo("Equipo de Arias <" + emailProps.from() + ">");
     }
 
     @Test

@@ -141,7 +141,7 @@ arias:
     review-campaign-enabled: ${MARKETING_CAMPAIGN_ENABLED:false}
     # Remitente de los mails de marketing (opcional). Vacio from = el remitente global.
     from: ${MARKETING_EMAIL_FROM:}
-    from-name: ${MARKETING_EMAIL_FROM_NAME:Santiago de Arias}
+    from-name: ${MARKETING_EMAIL_FROM_NAME:Equipo de Arias}
 
   # Cloudflare R2 — storage de imágenes (fotos de platos)
   # Los valores reales viven en application-local-old.yml (gitignored) o env vars.

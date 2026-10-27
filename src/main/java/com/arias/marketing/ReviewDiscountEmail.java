@@ -1,5 +1,6 @@
 package com.arias.marketing;
 
+import com.arias.credits.discount.AccountDiscountService;
 import com.arias.email.EmailContent;
 import com.arias.email.EmailLayout;
 import com.arias.email.EmailProperties;
@@ -17,7 +18,9 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class ReviewDiscountEmail {
 
-    private static final String SURPRISE = "La próxima vez que entres a la app vas a encontrar una sorpresa.";
+    private static final long DAYS = AccountDiscountService.VALIDITY.toDays();
+    private static final String SURPRISE = "La próxima vez que entres a la app vas a encontrar una sorpresa. "
+        + "Tenés " + DAYS + " días antes de que venza.";
 
     private final EmailProperties props;
     private final MarketingProperties marketing;
@@ -25,7 +28,7 @@ public class ReviewDiscountEmail {
     public OutgoingEmail build(User user, String dishName) {
         String name = isBlank(user.getFirstName()) ? null : user.getFirstName();
         String dish = isBlank(dishName) ? "almuerzo" : dishName;
-        String subject = "¿Qué tal estuvo tu " + dish + (name != null ? ", " + name : "") + "?";
+        String subject = (name != null ? name + ", te" : "Te") + " dejamos una sorpresa que vence en " + DAYS + " días";
         String title = "¡Gracias por elegir Arias" + (name != null ? ", " + name : "") + "!";
         return new OutgoingEmail(user.getEmail(), subject, html(title, dish), text(title, dish), sender());
     }
@@ -40,7 +43,7 @@ public class ReviewDiscountEmail {
         String body = EmailLayout.paragraph("Esperamos que hayas disfrutado tu <strong>"
                 + EmailLayout.escape(dish) + "</strong>.")
             + EmailLayout.paragraph(SURPRISE)
-            + EmailLayout.paragraph("¡Gracias!<br>Santiago, de Arias");
+            + EmailLayout.paragraph("¡Gracias!<br>Equipo de Arias");
         return EmailLayout.render(EmailContent.of(title, body));
     }
 
@@ -48,7 +51,7 @@ public class ReviewDiscountEmail {
         return title + "\n\n"
             + "Esperamos que hayas disfrutado tu " + dish + ".\n\n"
             + SURPRISE + "\n\n"
-            + "¡Gracias!\nSantiago, de Arias\n";
+            + "¡Gracias!\nEquipo de Arias\n";
     }
 
     private static boolean isBlank(String s) {

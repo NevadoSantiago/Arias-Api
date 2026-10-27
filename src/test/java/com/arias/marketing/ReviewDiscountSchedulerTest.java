@@ -162,7 +162,7 @@ class ReviewDiscountSchedulerTest {
         List<OutgoingEmail> emails = sentEmails();
         assertThat(emails).hasSize(1);
         assertThat(emails.get(0).to()).isEqualTo(user.getEmail());
-        assertThat(emails.get(0).subject()).contains("Milanesa napolitana");
+        assertThat(emails.get(0).subject()).contains("sorpresa");
         assertThat(emails.get(0).html()).contains("Milanesa napolitana");
     }
 
