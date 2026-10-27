@@ -26,6 +26,23 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     List<Order> findByUserIdAndFecha(Long userId, LocalDate fecha);
 
+    /**
+     * B2C orders that were eaten (COMANDADO or ENTREGADO) on {@code fecha} by active, non-deleted
+     * customers who never had an account discount (neither used nor current). Newest first: the
+     * first order of each customer is their latest of the day. Feeds the daily review/discount campaign.
+     */
+    @Query("""
+        SELECT o FROM Order o JOIN FETCH o.user u
+        WHERE o.fecha = :fecha
+          AND o.company IS NULL
+          AND o.estado IN (com.arias.orders.OrderEstado.COMANDADO, com.arias.orders.OrderEstado.ENTREGADO)
+          AND u.deletedAt IS NULL
+          AND u.active = true
+          AND NOT EXISTS (SELECT 1 FROM AccountDiscount d WHERE d.user.id = u.id)
+        ORDER BY o.pickupAt DESC, o.id DESC
+        """)
+    List<Order> findOrdersForReviewCampaign(@Param("fecha") LocalDate fecha);
+
     /** Locks the given orders ({@code SELECT ... FOR UPDATE}) for the kitchen state transitions. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT o FROM Order o WHERE o.id IN :ids")

@@ -136,6 +136,11 @@ arias:
     # Si está vacío, el mail se loguea pero no se envía (igual que email.api-key).
     quote-to: ${CONTACT_QUOTE_TO:nevadosantiago97@gmail.com}
 
+  # Campanas de marketing. Vacio = la campana diaria de resena + descuento queda apagada.
+  marketing:
+    # Link de la ficha de Google del restaurante (boton "Dejar mi opinion" del mail).
+    google-review-url: ${GOOGLE_REVIEW_URL:}
+
   # Cloudflare R2 — storage de imágenes (fotos de platos)
   # Los valores reales viven en application-local-old.yml (gitignored) o env vars.
   # Si están vacíos, el endpoint de upload responde 503 con un error claro.
