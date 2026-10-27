@@ -55,7 +55,7 @@ import static org.mockito.Mockito.verify;
  */
 @SpringBootTest(properties = {
     "spring.main.allow-bean-definition-overriding=true",
-    "arias.marketing.google-review-url=https://g.page/r/test-review"
+    "arias.marketing.review-campaign-enabled=true"
 })
 @Transactional
 @Import(ReviewDiscountSchedulerTest.FixedClockConfig.class)
@@ -163,7 +163,7 @@ class ReviewDiscountSchedulerTest {
         assertThat(emails).hasSize(1);
         assertThat(emails.get(0).to()).isEqualTo(user.getEmail());
         assertThat(emails.get(0).subject()).contains("Milanesa napolitana");
-        assertThat(emails.get(0).html()).contains("Milanesa napolitana").contains("https://g.page/r/test-review");
+        assertThat(emails.get(0).html()).contains("Milanesa napolitana");
     }
 
     @Test

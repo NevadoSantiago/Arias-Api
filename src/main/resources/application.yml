@@ -136,10 +136,9 @@ arias:
     # Si está vacío, el mail se loguea pero no se envía (igual que email.api-key).
     quote-to: ${CONTACT_QUOTE_TO:nevadosantiago97@gmail.com}
 
-  # Campanas de marketing. Vacio = la campana diaria de resena + descuento queda apagada.
+  # Campanas de marketing. La campana diaria de descuento + mail de agradecimiento esta apagada por defecto.
   marketing:
-    # Link de la ficha de Google del restaurante (boton "Dejar mi opinion" del mail).
-    google-review-url: ${GOOGLE_REVIEW_URL:}
+    review-campaign-enabled: ${MARKETING_CAMPAIGN_ENABLED:false}
     # Remitente de los mails de marketing (opcional). Vacio from = el remitente global.
     from: ${MARKETING_EMAIL_FROM:}
     from-name: ${MARKETING_EMAIL_FROM_NAME:Santiago de Arias}

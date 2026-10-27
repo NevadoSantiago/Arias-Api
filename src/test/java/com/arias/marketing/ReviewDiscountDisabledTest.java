@@ -15,8 +15,8 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
-/** Without a configured Google review link the campaign is off: nothing is granted, mailed or logged. */
-@SpringBootTest(properties = "arias.marketing.google-review-url=")
+/** Unless review-campaign-enabled is true the campaign is off: nothing is granted, mailed or logged. */
+@SpringBootTest(properties = "arias.marketing.review-campaign-enabled=false")
 @Transactional
 class ReviewDiscountDisabledTest {
 
@@ -28,7 +28,7 @@ class ReviewDiscountDisabledTest {
     private EmailService emailService;
 
     @Test
-    @DisplayName("blank google-review-url disables the campaign")
+    @DisplayName("campaign disabled by default")
     void disabledWithoutReviewUrl() {
         long discountsBefore = discountRepo.count();
         long runsBefore = runLogRepo.count();

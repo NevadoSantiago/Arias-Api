@@ -18,8 +18,8 @@ import java.util.List;
 
 /**
  * Every day at 10:00 (Buenos Aires): customers who ate yesterday and never had an account
- * discount get one, plus the review/discount email. Off while
- * {@code arias.marketing.google-review-url} is blank.
+ * discount get one, plus the review/discount email. Off unless
+ * {@code arias.marketing.review-campaign-enabled} is true.
  *
  * <p>Idempotent per day through {@code notification_run_log} (PK {@code (tipo, fecha)}), the
  * same atomic-claim pattern as the other schedulers. Each customer also gets the discount (and
@@ -41,8 +41,8 @@ public class ReviewDiscountScheduler {
 
     @Scheduled(cron = "0 0 10 * * *", zone = "America/Argentina/Buenos_Aires")
     public void runDaily() {
-        if (!marketing.isReviewCampaignEnabled()) {
-            log.info("[CRON-REVIEW-DISCOUNT] arias.marketing.google-review-url vacío — campaña apagada");
+        if (!marketing.reviewCampaignEnabled()) {
+            log.info("[CRON-REVIEW-DISCOUNT] arias.marketing.review-campaign-enabled=false — campaña apagada");
             return;
         }
 
