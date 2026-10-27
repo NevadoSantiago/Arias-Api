@@ -1,12 +1,14 @@
 package com.arias.credits;
 
 import com.arias.common.security.JwtUser;
+import com.arias.credits.discount.AccountDiscountService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Clock;
 import java.util.List;
 
 /**
@@ -21,10 +23,13 @@ import java.util.List;
 public class CreditController {
 
     private final CreditLedgerService ledgerService;
+    private final AccountDiscountService discountService;
+    private final Clock clock;
 
     @GetMapping("/wallet")
     public CreditWalletDto getWallet(@AuthenticationPrincipal JwtUser user) {
-        return CreditWalletDto.from(ledgerService.getWallet(user.userId()));
+        return CreditWalletDto.from(ledgerService.getWallet(user.userId()),
+            discountService.findActive(user.userId(), clock.instant()).orElse(null));
     }
 
     @GetMapping("/movements")
