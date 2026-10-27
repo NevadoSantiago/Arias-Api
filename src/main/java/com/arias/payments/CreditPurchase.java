@@ -102,6 +102,17 @@ public class CreditPurchase {
     @Column(name = "mp_net_received_cents")
     private Long mpNetReceivedCents;
 
+    /**
+     * Price before the account discount (V41); {@code null} when none was applied.
+     * {@code amountCents} is what is actually charged.
+     */
+    @Column(name = "list_amount_cents")
+    private Long listAmountCents;
+
+    /** Account discount percent applied to this purchase (V41); {@code null} when none. */
+    @Column(name = "discount_percent")
+    private Integer discountPercent;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

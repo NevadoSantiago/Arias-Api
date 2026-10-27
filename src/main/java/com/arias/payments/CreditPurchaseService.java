@@ -5,6 +5,8 @@ import com.arias.common.exception.BusinessException;
 import com.arias.credits.CreditLedgerService;
 import com.arias.credits.MovementRef;
 import com.arias.credits.MovementType;
+import com.arias.credits.discount.AccountDiscount;
+import com.arias.credits.discount.AccountDiscountService;
 import com.arias.credits.packs.CreditPack;
 import com.arias.credits.packs.CreditPackRepository;
 import com.arias.credits.packs.CreditPackType;
@@ -27,6 +29,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -59,6 +62,7 @@ public class CreditPurchaseService {
     private final CreditLedgerService creditLedgerService;
     private final OrderPlacementService orderPlacementService;
     private final PaymentGateway paymentGateway;
+    private final AccountDiscountService discountService;
     private final PublicUrlProperties publicUrlProps;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
@@ -151,11 +155,17 @@ public class CreditPurchaseService {
         // opcional (1..10, validado en CreatePurchaseRequest); null equivale a 1.
         int quantity = req.quantity() != null ? req.quantity() : 1;
         int creditAmount = pack.getCreditAmount() * quantity;
-        long amountCents = pack.getPriceCents() * quantity;
+        long listAmountCents = pack.getPriceCents() * quantity;
+        // Descuento de cuenta (V41): se aplica sobre el total y se reserva en esta misma transacción.
+        Optional<AppliedDiscount> discount = applyAccountDiscount(userId, listAmountCents);
+        long amountCents = discount.map(AppliedDiscount::amountCents).orElse(listAmountCents);
         // La línea de Mercado Pago lleva quantity * precio unitario del
         // paquete, para que el total que ve Mercado Pago coincida siempre
         // con amountCents calculado acá — nunca un importe único inventado.
-        long mpUnitPriceCents = pack.getPriceCents();
+        // Con descuento el total ya no es múltiplo del precio unitario: va
+        // una sola línea por amountCents.
+        int mpQuantity = discount.isPresent() ? 1 : quantity;
+        long mpUnitPriceCents = discount.isPresent() ? amountCents : pack.getPriceCents();
 
         CreditPurchase purchase = CreditPurchase.builder()
             .user(user)
@@ -163,17 +173,20 @@ public class CreditPurchaseService {
             .pack(pack)
             .creditAmount(creditAmount)
             .amountCents(amountCents)
+            .listAmountCents(discount.isPresent() ? listAmountCents : null)
+            .discountPercent(discount.map(AppliedDiscount::percent).orElse(null))
             .currency("ARS")
             .status(CreditPurchaseStatus.PENDING)
             .build();
         purchase = purchaseRepo.save(purchase);
+        reserveDiscount(discount, purchase);
 
         String frontendUrl = publicUrlProps.frontendUrl();
         String returnUrl = frontendUrl + "/compras/" + purchase.getId() + "/procesando";
         CheckoutRequest checkoutReq = new CheckoutRequest(
             purchase.getId().toString(),
-            checkoutTitle(PurchaseType.PACK, creditAmount),
-            quantity,
+            checkoutTitle(PurchaseType.PACK, creditAmount) + discountTitleSuffix(discount),
+            mpQuantity,
             mpUnitPriceCents,
             user.getEmail(),
             returnUrl,
@@ -282,7 +295,10 @@ public class CreditPurchaseService {
         // Pago parcial (unidad B13): Mercado Pago cobra SOLO lo que el saldo
         // del cliente no cubrió; placeAwaitingPayment ya reservó el resto.
         int creditAmount = order.getCreditTotal() - order.getCreditsFromBalance();
-        long amountCents = unitPriceCentsFor(dayPack) * creditAmount;
+        long listAmountCents = unitPriceCentsFor(dayPack) * creditAmount;
+        // Descuento de cuenta (V41): se aplica sobre lo que cobra Mercado Pago, no sobre el saldo.
+        Optional<AppliedDiscount> discount = applyAccountDiscount(userId, listAmountCents);
+        long amountCents = discount.map(AppliedDiscount::amountCents).orElse(listAmountCents);
 
         CreditPurchase purchase = CreditPurchase.builder()
             .user(user)
@@ -290,15 +306,18 @@ public class CreditPurchaseService {
             .order(order)
             .creditAmount(creditAmount)
             .amountCents(amountCents)
+            .listAmountCents(discount.isPresent() ? listAmountCents : null)
+            .discountPercent(discount.map(AppliedDiscount::percent).orElse(null))
             .currency("ARS")
             .status(CreditPurchaseStatus.PENDING)
             .build();
         purchase = purchaseRepo.save(purchase);
+        reserveDiscount(discount, purchase);
 
         String returnUrl = publicUrlProps.frontendUrl() + "/compras/" + purchase.getId() + "/procesando";
         CheckoutRequest checkoutReq = new CheckoutRequest(
             purchase.getId().toString(),
-            checkoutTitle(PurchaseType.DIRECT, creditAmount),
+            checkoutTitle(PurchaseType.DIRECT, creditAmount) + discountTitleSuffix(discount),
             1,
             amountCents,
             user.getEmail(),
@@ -619,6 +638,7 @@ public class CreditPurchaseService {
         purchaseRepo.findByIdForUpdate(purchaseId).ifPresent(p -> {
             if (p.getStatus() == CreditPurchaseStatus.PENDING) {
                 p.setStatus(CreditPurchaseStatus.EXPIRED);
+                releaseDiscount(p);
                 closeAssociatedOrderIfDirect(p);
                 log.info("Compra {} expirada — 24 h sin pago reportado por Mercado Pago", purchaseId);
             }
@@ -726,6 +746,8 @@ public class CreditPurchaseService {
      * compra, así que no hay ciclo nuevo de deadlock con este lock extra.
      */
     private void creditApprovedPurchase(CreditPurchase purchase) {
+        // Todos los caminos de acreditación (normal, mediación resuelta, pago tardío) pasan por acá.
+        consumeDiscount(purchase);
         if (purchase.getType() != PurchaseType.DIRECT || purchase.getOrder() == null) {
             creditPurchase(purchase);
             return;
@@ -803,6 +825,7 @@ public class CreditPurchaseService {
             return; // ya se había resuelto (p. ej. ya acreditada) — no se cierra retroactivamente
         }
         purchase.setStatus(status);
+        releaseDiscount(purchase);
         closeAssociatedOrderIfDirect(purchase);
     }
 
@@ -885,6 +908,48 @@ public class CreditPurchaseService {
         eventPublisher.publishEvent(new CreditPurchaseReversedEvent(
             purchase.getId(), purchase.getUser().getId(), purchase.getUser().getEmail(),
             delta, purchase.getCreditsReversed(), creditAmount, fullyReversed));
+    }
+
+    // ─── descuento de cuenta (V41) ──────────────────────────────────────────
+
+    /** Descuento ya calculado para una compra nueva: la fila bloqueada, el porcentaje y el total a cobrar. */
+    private record AppliedDiscount(AccountDiscount discount, int percent, long amountCents) {}
+
+    /**
+     * Si el usuario tiene un descuento utilizable, lo bloquea ({@code FOR UPDATE}, dentro de la
+     * transacción del insert) y calcula el total a cobrar, redondeado hacia abajo al peso entero.
+     * Si el total quedara en cero no se aplica y el descuento sigue disponible.
+     */
+    private Optional<AppliedDiscount> applyAccountDiscount(Long userId, long listAmountCents) {
+        return discountService.lockUsable(userId, clock.instant()).flatMap(d -> {
+            long discounted = AccountDiscountService.discountedAmountCents(listAmountCents, d.getPercent());
+            return discounted > 0
+                ? Optional.of(new AppliedDiscount(d, d.getPercent(), discounted))
+                : Optional.empty();
+        });
+    }
+
+    /** Reserva el descuento para la compra recién guardada (la fila ya está bloqueada). */
+    private void reserveDiscount(Optional<AppliedDiscount> discount, CreditPurchase purchase) {
+        discount.ifPresent(d -> discountService.reserve(d.discount(), purchase.getId()));
+    }
+
+    private static String discountTitleSuffix(Optional<AppliedDiscount> discount) {
+        return discount.map(d -> " (" + d.percent() + "% de descuento)").orElse("");
+    }
+
+    /** La compra se cerró sin pago: el descuento vuelve a estar disponible (idempotente). */
+    private void releaseDiscount(CreditPurchase purchase) {
+        if (purchase.getDiscountPercent() != null) {
+            discountService.release(purchase.getUser().getId(), purchase.getId());
+        }
+    }
+
+    /** El pago se aprobó: el descuento queda usado, aunque haya vencido o se haya liberado mientras tanto. */
+    private void consumeDiscount(CreditPurchase purchase) {
+        if (purchase.getDiscountPercent() != null) {
+            discountService.consume(purchase.getUser().getId(), purchase.getId());
+        }
     }
 
     // ─── helpers ────────────────────────────────────────────────────────────
