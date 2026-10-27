@@ -54,7 +54,7 @@ public class EmailService {
             log.warn("Email NO enviado (Resend no configurado): to={} subject='{}'", toEmail, subject);
             return;
         }
-        postWithRetry("/emails", emailBody(toEmail, subject, html),
+        postWithRetry("/emails", emailBody(new OutgoingEmail(toEmail, subject, html)),
             "to=" + toEmail + " subject='" + subject + "'");
     }
 
@@ -75,19 +75,20 @@ public class EmailService {
         for (int i = 0; i < emails.size(); i += BATCH_LIMIT) {
             List<OutgoingEmail> chunk = emails.subList(i, Math.min(i + BATCH_LIMIT, emails.size()));
             List<Map<String, Object>> body = chunk.stream()
-                .map(e -> emailBody(e.to(), e.subject(), e.html()))
+                .map(this::emailBody)
                 .toList();
             postWithRetry("/emails/batch", body, "batch de " + chunk.size() + " emails");
         }
     }
 
-    private Map<String, Object> emailBody(String toEmail, String subject, String html) {
-        return Map.of(
-            "from", props.fromHeader(),
-            "to", List.of(toEmail),
-            "subject", subject,
-            "html", html
-        );
+    Map<String, Object> emailBody(OutgoingEmail e) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("from", e.from() != null ? e.from() : props.fromHeader());
+        body.put("to", List.of(e.to()));
+        body.put("subject", e.subject());
+        body.put("html", e.html());
+        if (e.text() != null) body.put("text", e.text());
+        return body;
     }
 
     private void postWithRetry(String uri, Object body, String description) {

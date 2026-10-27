@@ -64,7 +64,13 @@ public final class EmailLayout {
             .append(INK).append(";\">").append(escape(c.title())).append("</h2>\n");
         sb.append(c.bodyHtml() == null ? "" : c.bodyHtml()).append('\n');
         if (c.cta() != null) {
-            sb.append(ctaButton(c.cta().label(), c.cta().url()));
+            sb.append("<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"left\" style=\"margin:8px 0 0;\"><tr>")
+                .append("<td bgcolor=\"#B3252B\" style=\"background-color:#B3252B; border-radius:6px;\">")
+                .append("<a href=\"").append(escape(c.cta().url())).append("\" style=\"display:inline-block; background:#B3252B; color:#ffffff; ")
+                .append("font-weight:700; font-size:13px; text-transform:uppercase; letter-spacing:1px; text-decoration:none; ")
+                .append("padding:14px 24px; border-radius:6px; line-height:18px; font-family:").append(SANS).append(";\">")
+                .append(escape(c.cta().label())).append("</a></td></tr></table>\n");
+            sb.append("<div style=\"clear:both; line-height:0; font-size:0;\">&nbsp;</div>\n");
         }
         sb.append("</td></tr>\n");
         sb.append("<tr><td align=\"center\" bgcolor=\"#F8F2E6\" style=\"background-color:#F8F2E6; border-top:1px solid ").append(RULE)
@@ -81,20 +87,6 @@ public final class EmailLayout {
     }
 
     // ─── Body helpers ───────────────────────────────────────────────────
-
-    /**
-     * The red call-to-action button, for emails that need content after it (the layout's own
-     * CTA always comes last). {@code label} and {@code url} are plain text; both are escaped.
-     */
-    public static String ctaButton(String label, String url) {
-        return "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"left\" style=\"margin:8px 0 0;\"><tr>"
-            + "<td bgcolor=\"#B3252B\" style=\"background-color:#B3252B; border-radius:6px;\">"
-            + "<a href=\"" + escape(url) + "\" style=\"display:inline-block; background:#B3252B; color:#ffffff; "
-            + "font-weight:700; font-size:13px; text-transform:uppercase; letter-spacing:1px; text-decoration:none; "
-            + "padding:14px 24px; border-radius:6px; line-height:18px; font-family:" + SANS + ";\">"
-            + escape(label) + "</a></td></tr></table>\n"
-            + "<div style=\"clear:both; line-height:0; font-size:0;\">&nbsp;</div>\n";
-    }
 
     /** Escapes text for HTML content and attribute values; accents are kept as-is. */
     public static String escape(String s) {

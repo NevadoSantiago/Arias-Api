@@ -1,6 +1,5 @@
 package com.arias.marketing;
 
-import com.arias.email.EmailContent;
 import com.arias.email.EmailLayout;
 import com.arias.email.EmailProperties;
 import com.arias.email.OutgoingEmail;
@@ -10,54 +9,74 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
- * Launch email: thanks the customer for trying Arias, asks for an optional Google opinion and
- * announces the account discount. The discount block is deliberately separate from the review
- * ask and never mentions it (Google's review policy: no incentives for reviews).
+ * Personal, almost plain-text note after a customer's lunch: asks for an optional Google opinion
+ * and mentions, in a separate paragraph, that their next purchase has a special price. Written
+ * and styled like a one-to-one email (no branded layout, no buttons, no promotional words) so it
+ * lands in the Primary inbox. The special-price paragraph never mentions the review (Google's
+ * review policy: no incentives for reviews).
  */
 @Component
 @RequiredArgsConstructor
 public class ReviewDiscountEmail {
 
-    private static final String SERIF = "'Playfair Display', Georgia, serif";
-    private static final String RED = "#B3252B";
+    private static final String FONT = "-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif";
+    private static final String SPECIAL_PRICE =
+        "Por estar entre nuestros primeros 100 clientes, tu próxima compra tiene un precio especial. "
+            + "Lo vas a ver en la app.";
 
     private final EmailProperties props;
     private final MarketingProperties marketing;
     private final NewsUnsubscribeToken tokens;
 
-    public OutgoingEmail build(User user, String dishName, int discountPercent) {
-        String subject = "Gracias por estar entre los primeros 100 clientes: tenés " + discountPercent + "% off";
-        return new OutgoingEmail(user.getEmail(), subject, buildHtml(user, dishName, discountPercent));
-    }
-
-    private String buildHtml(User user, String dishName, int percent) {
-        String dish = dishName != null && !dishName.isBlank()
-            ? "tu <strong style=\"font-weight:700;\">" + EmailLayout.escape(dishName) + "</strong>"
-            : "tu almuerzo";
-
-        String discountBlock = EmailLayout.labelledBox("Beneficio primeros 100 clientes",
-            "<div style=\"font-family:" + SERIF + "; font-size:46px; font-weight:900; line-height:1; color:" + RED + ";\">"
-                + percent + "% <span style=\"font-size:20px; font-weight:700;\">de descuento</span></div>"
-                + "<p style=\"margin:8px 0 0; font-size:13.5px; line-height:1.55;\">"
-                + "En tu próxima compra. Ya está aplicado en tu cuenta, no tenés que hacer nada.</p>");
-
-        String body = EmailLayout.paragraph("Esperamos que hayas disfrutado " + dish + ".")
-            + EmailLayout.paragraph("¿Qué tal estuvo? Contanos en Google, nos ayuda mucho.")
-            + EmailLayout.ctaButton("Dejar mi opinión", marketing.googleReviewUrl())
-            + "<div style=\"height:20px; line-height:20px; font-size:0;\">&nbsp;</div>\n"
-            + discountBlock;
-
+    public OutgoingEmail build(User user, String dishName) {
+        String name = isBlank(user.getFirstName()) ? null : user.getFirstName();
+        String dish = isBlank(dishName) ? "almuerzo" : dishName;
+        String subject = "¿Qué tal estuvo tu " + dish + (name != null ? ", " + name : "") + "?";
         String unsubscribeUrl = props.appUrl() + "/unsubscribe-news?t=" + tokens.generate(user.getId());
-        String unsubscribe = "<a href=\"" + EmailLayout.escape(unsubscribeUrl)
-            + "\" style=\"color:#66524B; text-decoration:underline;\">No quiero recibir más novedades</a>";
-
-        return EmailLayout.render(EmailContent.of(title(user.getFirstName()), body)
-            .withBelowFooter(unsubscribe));
+        return new OutgoingEmail(user.getEmail(), subject, html(name, dish, unsubscribeUrl),
+            text(name, dish, unsubscribeUrl), sender());
     }
 
-    private static String title(String firstName) {
-        return firstName != null && !firstName.isBlank()
-            ? "¡Gracias por probar Arias, " + firstName + "!"
-            : "¡Gracias por probar Arias!";
+    private String sender() {
+        String address = isBlank(marketing.from()) ? props.from() : marketing.from();
+        String fromName = isBlank(marketing.fromName()) ? props.fromName() : marketing.fromName();
+        return "%s <%s>".formatted(fromName, address);
+    }
+
+    private String html(String name, String dish, String unsubscribeUrl) {
+        String reviewUrl = EmailLayout.escape(marketing.googleReviewUrl());
+        return "<!DOCTYPE html>\n<html lang=\"es\"><head><meta charset=\"utf-8\"></head>\n"
+            + "<body style=\"margin:0; padding:0; background:#ffffff;\">\n"
+            + "<div style=\"max-width:560px; margin:0 auto; padding:24px 20px; font-family:" + FONT
+            + "; font-size:16px; line-height:1.5; color:#222222;\">\n"
+            + p("Hola" + (name != null ? " " + EmailLayout.escape(name) : "") + ",")
+            + p("Gracias por elegir Arias. Esperamos que hayas disfrutado tu <strong>"
+                + EmailLayout.escape(dish) + "</strong>.")
+            + p("Si tenés un minuto, nos ayudaría mucho que nos cuentes qué te pareció en Google:<br>"
+                + "<a href=\"" + reviewUrl + "\" style=\"color:#1a0dab; text-decoration:underline;\">"
+                + "Dejar mi opinión en Google</a>")
+            + p(SPECIAL_PRICE)
+            + p("¡Gracias!<br>Santiago, de Arias")
+            + "<p style=\"margin:32px 0 0; font-size:12px; line-height:1.4; color:#777777;\">"
+            + "<a href=\"" + EmailLayout.escape(unsubscribeUrl) + "\" style=\"color:#777777; text-decoration:underline;\">"
+            + "No quiero recibir más novedades</a></p>\n</div>\n</body></html>\n";
+    }
+
+    private String text(String name, String dish, String unsubscribeUrl) {
+        return "Hola" + (name != null ? " " + name : "") + ",\n\n"
+            + "Gracias por elegir Arias. Esperamos que hayas disfrutado tu " + dish + ".\n\n"
+            + "Si tenés un minuto, nos ayudaría mucho que nos cuentes qué te pareció en Google:\n"
+            + marketing.googleReviewUrl() + "\n\n"
+            + SPECIAL_PRICE + "\n\n"
+            + "¡Gracias!\nSantiago, de Arias\n\n"
+            + "No quiero recibir más novedades: " + unsubscribeUrl + "\n";
+    }
+
+    private static String p(String html) {
+        return "<p style=\"margin:0 0 16px;\">" + html + "</p>\n";
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 }

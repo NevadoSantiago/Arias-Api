@@ -140,6 +140,9 @@ arias:
   marketing:
     # Link de la ficha de Google del restaurante (boton "Dejar mi opinion" del mail).
     google-review-url: ${GOOGLE_REVIEW_URL:}
+    # Remitente de los mails de marketing (opcional). Vacio from = el remitente global.
+    from: ${MARKETING_EMAIL_FROM:}
+    from-name: ${MARKETING_EMAIL_FROM_NAME:Santiago de Arias}
 
   # Cloudflare R2 — storage de imágenes (fotos de platos)
   # Los valores reales viven en application-local-old.yml (gitignored) o env vars.

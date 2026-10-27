@@ -55,7 +55,7 @@ public class ReviewDiscountCampaign {
                 || user.getEmail() == null || user.getEmail().isBlank()) {
                 continue;
             }
-            emails.add(email.build(user, firstDishName(order), DISCOUNT_PERCENT));
+            emails.add(email.build(user, firstDishName(order)));
         }
         return emails;
     }
