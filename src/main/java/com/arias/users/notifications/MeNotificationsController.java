@@ -37,19 +37,21 @@ public class MeNotificationsController {
         @AuthenticationPrincipal JwtUser principal,
         @Valid @RequestBody UpdateNotificationPreferencesRequest req
     ) {
-        if (req.recibeRecordatorioPedido() == null && req.recibeAvisoRetiro() == null) {
+        if (req.recibeRecordatorioPedido() == null && req.recibeAvisoRetiro() == null && req.recibeNovedades() == null) {
             throw BusinessException.badRequest("no-preferences", "Indicá al menos una preferencia");
         }
         User user = findOrThrow(principal.userId());
         if (req.recibeRecordatorioPedido() != null) user.setRecibeRecordatorioPedido(req.recibeRecordatorioPedido());
         if (req.recibeAvisoRetiro() != null) user.setRecibeAvisoRetiro(req.recibeAvisoRetiro());
+        if (req.recibeNovedades() != null) user.setRecibeNovedades(req.recibeNovedades());
         return toDto(user);
     }
 
     private static NotificationPreferencesDto toDto(User user) {
         return new NotificationPreferencesDto(
             Boolean.TRUE.equals(user.getRecibeRecordatorioPedido()),
-            Boolean.TRUE.equals(user.getRecibeAvisoRetiro()));
+            Boolean.TRUE.equals(user.getRecibeAvisoRetiro()),
+            Boolean.TRUE.equals(user.getRecibeNovedades()));
     }
 
     private User findOrThrow(Long id) {

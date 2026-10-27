@@ -104,4 +104,44 @@ class MeNotificationsControllerTest {
                 .contentType(MediaType.APPLICATION_JSON).content("{}"))
             .andExpect(status().isBadRequest());
     }
+
+    @Test
+    @DisplayName("GET returns recibeNovedades, defaulting to true")
+    void getReturnsNewsPreference() throws Exception {
+        User user = newUser();
+
+        mockMvc.perform(get(URL).header(HttpHeaders.AUTHORIZATION, bearer(user)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.recibeNovedades").value(true));
+    }
+
+    @Test
+    @DisplayName("PUT with only recibeNovedades updates it and leaves the others untouched")
+    void putOnlyNews() throws Exception {
+        User user = newUser();
+
+        mockMvc.perform(put(URL).header(HttpHeaders.AUTHORIZATION, bearer(user))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"recibeNovedades\":false}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.recibeNovedades").value(false))
+            .andExpect(jsonPath("$.recibeRecordatorioPedido").value(true))
+            .andExpect(jsonPath("$.recibeAvisoRetiro").value(true));
+
+        assertThat(userRepo.findById(user.getId()).orElseThrow().getRecibeNovedades()).isFalse();
+    }
+
+    @Test
+    @DisplayName("PUT without recibeNovedades does not change it")
+    void putWithoutNewsKeepsIt() throws Exception {
+        User user = newUser();
+        user.setRecibeNovedades(false);
+        userRepo.saveAndFlush(user);
+
+        mockMvc.perform(put(URL).header(HttpHeaders.AUTHORIZATION, bearer(user))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"recibeAvisoRetiro\":false}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.recibeNovedades").value(false));
+
+        assertThat(userRepo.findById(user.getId()).orElseThrow().getRecibeNovedades()).isFalse();
+    }
 }

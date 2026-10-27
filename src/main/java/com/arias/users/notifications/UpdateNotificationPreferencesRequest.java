@@ -6,5 +6,6 @@ package com.arias.users.notifications;
  */
 public record UpdateNotificationPreferencesRequest(
     Boolean recibeRecordatorioPedido,
-    Boolean recibeAvisoRetiro
+    Boolean recibeAvisoRetiro,
+    Boolean recibeNovedades
 ) {}

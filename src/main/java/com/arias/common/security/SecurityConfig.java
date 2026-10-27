@@ -89,6 +89,8 @@ public class SecurityConfig {
                 ).permitAll()
                 // Unsubscribe del recordatorio — link público del mail
                 .requestMatchers(HttpMethod.POST, "/api/v1/me/unsubscribe-reminder").permitAll()
+                // Baja de novedades — link público del mail de marketing
+                .requestMatchers(HttpMethod.POST, "/api/v1/me/unsubscribe-news").permitAll()
                 // Cotización desde la landing pública
                 .requestMatchers(HttpMethod.POST, "/api/v1/contact/quote").permitAll()
                 // Webhook de Mercado Pago (unidad 11) — público por necesidad;

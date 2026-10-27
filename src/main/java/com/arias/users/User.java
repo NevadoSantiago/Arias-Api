@@ -84,6 +84,14 @@ public class User {
     private Boolean recibeAvisoRetiro = true;
 
     /**
+     * Opt-in a los mails de novedades / marketing (p. ej. el pedido de reseña con descuento).
+     * Default true — se apaga desde las preferencias o con el link de baja del mismo mail.
+     */
+    @Column(name = "recibe_novedades", nullable = false)
+    @lombok.Builder.Default
+    private Boolean recibeNovedades = true;
+
+    /**
      * Soft delete. NULL = visible. Cuando se setea, el user desaparece
      * de listings, login y check-email — pero su id sigue referenciable
      * desde DailyChoice y otras tablas históricas.
