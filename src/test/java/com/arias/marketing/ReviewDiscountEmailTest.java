@@ -70,12 +70,14 @@ class ReviewDiscountEmailTest {
     }
 
     @Test
-    @DisplayName("no links at all: no anchors in the html and no URL in the text")
-    void noLinks() {
+    @DisplayName("the only link is the button that opens the app, in html and text")
+    void onlyAppLink() {
         OutgoingEmail mail = email.build(user(), "Milanesa");
 
-        assertThat(mail.html()).doesNotContain("<a ").doesNotContain("href");
-        assertThat(mail.text()).doesNotContain("http");
+        assertThat(mail.html().split("<a ", -1)).hasSize(2);
+        assertThat(mail.html()).contains("href=\"" + emailProps.appUrl() + "\"").contains("Entrar a la app");
+        assertThat(mail.text().split("http", -1)).hasSize(2);
+        assertThat(mail.text()).contains("Entrar a la app: " + emailProps.appUrl());
     }
 
     @Test

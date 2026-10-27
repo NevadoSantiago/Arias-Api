@@ -18,7 +18,8 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class ReviewDiscountEmail {
 
-    private static final long DAYS = AccountDiscountService.VALIDITY.toDays();
+    private static final String CTA_LABEL = "Entrar a la app";
+    private static final long DAYS =AccountDiscountService.VALIDITY.toDays();
     private static final String SURPRISE = "La próxima vez que entres a la app vas a encontrar una sorpresa. "
         + "Tenés " + DAYS + " días antes de que venza.";
 
@@ -44,14 +45,15 @@ public class ReviewDiscountEmail {
                 + EmailLayout.escape(dish) + "</strong>.")
             + EmailLayout.paragraph(SURPRISE)
             + EmailLayout.paragraph("¡Gracias!<br>Equipo de Arias");
-        return EmailLayout.render(EmailContent.of(title, body));
+        return EmailLayout.render(EmailContent.of(title, body).withCta(CTA_LABEL, props.appUrl()));
     }
 
     private String text(String title, String dish) {
         return title + "\n\n"
             + "Esperamos que hayas disfrutado tu " + dish + ".\n\n"
             + SURPRISE + "\n\n"
-            + "¡Gracias!\nEquipo de Arias\n";
+            + "¡Gracias!\nEquipo de Arias\n\n"
+            + CTA_LABEL + ": " + props.appUrl() + "\n";
     }
 
     private static boolean isBlank(String s) {
