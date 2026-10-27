@@ -45,10 +45,30 @@ public class AuthService {
         this.refreshTokenService = refreshTokenService;
     }
 
-    /** Solo retorna si el email requiere first-login. No revela existencia. */
+    /**
+     * Tells the login screen what to ask for next. It deliberately reveals whether an account
+     * exists (NOT_FOUND vs the rest): new customers were confused by the password step, and the
+     * product owner accepted that trade-off. No rate limiting here by decision.
+     */
     public CheckEmailResponse checkEmail(String email) {
-        boolean requiresFirstLogin = userRepo.isFirstLoginPending(normalize(email));
-        return new CheckEmailResponse(requiresFirstLogin);
+        AccountStatus status = userRepo.findByEmail(normalize(email))
+            .map(AuthService::statusOf)
+            .orElse(AccountStatus.NOT_FOUND);
+        return new CheckEmailResponse(status == AccountStatus.FIRST_LOGIN, status);
+    }
+
+    private static AccountStatus statusOf(User user) {
+        if (!Boolean.TRUE.equals(user.getActive())) {
+            return AccountStatus.PASSWORD;
+        }
+        boolean noPassword = user.getPasswordHash() == null;
+        if (noPassword && user.getCompany() != null) {
+            return AccountStatus.FIRST_LOGIN;
+        }
+        if (noPassword && user.getGoogleSub() != null) {
+            return AccountStatus.GOOGLE;
+        }
+        return AccountStatus.PASSWORD;
     }
 
     /**

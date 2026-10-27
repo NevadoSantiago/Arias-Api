@@ -258,4 +258,86 @@ class AuthServiceTest {
         assertThat(authService.checkEmail(b2cEmail).requiresFirstLogin()).isFalse();
         assertThat(authService.checkEmail(companyEmail).requiresFirstLogin()).isTrue();
     }
+
+    private static String uniqueEmail(String prefix) {
+        return prefix + "-" + System.nanoTime() + "@test.arias.com";
+    }
+
+    private User.UserBuilder baseUser(String email) {
+        return User.builder().email(email).role(Role.EMPLOYEE).active(true);
+    }
+
+    @Test
+    void checkEmailStatusIsNotFoundForUnknownEmail() {
+        var res = authService.checkEmail(uniqueEmail("unknown"));
+        assertThat(res.status()).isEqualTo(AccountStatus.NOT_FOUND);
+        assertThat(res.requiresFirstLogin()).isFalse();
+    }
+
+    @Test
+    void checkEmailStatusIsNotFoundForSoftDeletedUser() {
+        String email = uniqueEmail("deleted");
+        userRepo.save(baseUser(email).passwordHash(passwordEncoder.encode("pw-123456"))
+            .deletedAt(java.time.Instant.now()).build());
+        assertThat(authService.checkEmail(email).status()).isEqualTo(AccountStatus.NOT_FOUND);
+    }
+
+    @Test
+    void checkEmailStatusIsPasswordForInactiveUser() {
+        String email = uniqueEmail("inactive");
+        userRepo.save(User.builder().email(email).role(Role.EMPLOYEE).active(false)
+            .company(persistCompany()).build());
+        var res = authService.checkEmail(email);
+        assertThat(res.status()).isEqualTo(AccountStatus.PASSWORD);
+        assertThat(res.requiresFirstLogin()).isFalse();
+    }
+
+    @Test
+    void checkEmailStatusIsPasswordForB2cWithPassword() {
+        String email = uniqueEmail("pw");
+        userRepo.save(baseUser(email).passwordHash(passwordEncoder.encode("pw-123456")).build());
+        assertThat(authService.checkEmail(email).status()).isEqualTo(AccountStatus.PASSWORD);
+    }
+
+    @Test
+    void checkEmailStatusIsGoogleForB2cGoogleOnly() {
+        String email = uniqueEmail("google");
+        userRepo.save(baseUser(email).googleSub("sub-" + System.nanoTime()).build());
+        var res = authService.checkEmail(email);
+        assertThat(res.status()).isEqualTo(AccountStatus.GOOGLE);
+        assertThat(res.requiresFirstLogin()).isFalse();
+    }
+
+    @Test
+    void checkEmailStatusIsPasswordWhenGoogleAccountAlsoHasPassword() {
+        String email = uniqueEmail("both");
+        userRepo.save(baseUser(email).googleSub("sub-" + System.nanoTime())
+            .passwordHash(passwordEncoder.encode("pw-123456")).build());
+        assertThat(authService.checkEmail(email).status()).isEqualTo(AccountStatus.PASSWORD);
+    }
+
+    @Test
+    void checkEmailStatusIsPasswordForUnverifiedSelfRegistered() {
+        String email = uniqueEmail("unverified");
+        userRepo.save(baseUser(email).passwordHash(passwordEncoder.encode("pw-123456"))
+            .emailVerifiedAt(null).build());
+        assertThat(authService.checkEmail(email).status()).isEqualTo(AccountStatus.PASSWORD);
+    }
+
+    @Test
+    void checkEmailStatusIsFirstLoginForWhitelistedCompanyWithoutPassword() {
+        String email = uniqueEmail("whitelisted");
+        userRepo.save(baseUser(email).company(persistCompany()).build());
+        var res = authService.checkEmail(email);
+        assertThat(res.status()).isEqualTo(AccountStatus.FIRST_LOGIN);
+        assertThat(res.requiresFirstLogin()).isTrue();
+    }
+
+    @Test
+    void checkEmailNormalizesCaseAndWhitespaceLikeLogin() {
+        String email = uniqueEmail("case");
+        userRepo.save(baseUser(email).googleSub("sub-" + System.nanoTime()).build());
+        assertThat(authService.checkEmail("  " + email.toUpperCase() + " ").status())
+            .isEqualTo(AccountStatus.GOOGLE);
+    }
 }
