@@ -278,28 +278,97 @@ class AccountDiscountCheckoutTest {
     // ─── reservation ────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("a PENDING purchase reserves the discount but the wallet still shows it")
+    @DisplayName("a PENDING purchase holds the discount: the wallet hides it during the hold")
     void reservedWhilePending() {
         givenDiscount();
         UUID first = buyPack(pack(10, 10_000L, CreditPackType.OTRO), null);
 
         assertThat(discount().getReservedPurchaseId()).isEqualTo(first);
         assertThat(discount().getConsumedAt()).isNull();
-        assertThat(usableNow()).isTrue();
+        assertThat(usableNow()).isFalse();
     }
 
     @Test
-    @DisplayName("a new purchase takes over the reservation of an abandoned PENDING one and gets the discount")
-    void newPurchaseTakesOverReservation() {
+    @DisplayName("within the hold a second purchase pays the list price and the first keeps the reservation")
+    void secondPurchaseWithinHoldPaysListPrice() {
         givenDiscount();
         CreditPack pack = pack(10, 10_000L, CreditPackType.OTRO);
         UUID first = buyPack(pack, null);
 
         UUID second = buyPack(pack, null);
 
+        assertThat(purchaseRepo.findById(second).orElseThrow().getAmountCents()).isEqualTo(10_000L);
+        assertThat(discount().getReservedPurchaseId()).isEqualTo(first);
+    }
+
+    @Test
+    @DisplayName("after the hold a new purchase takes over the reservation and gets the discount")
+    void purchaseAfterHoldTakesOver() {
+        givenDiscount();
+        CreditPack pack = pack(10, 10_000L, CreditPackType.OTRO);
+        UUID first = buyPack(pack, null);
+        age(first);
+
+        UUID second = buyPack(pack, null);
+
         assertThat(purchaseRepo.findById(second).orElseThrow().getAmountCents()).isEqualTo(9_000L);
-        assertThat(purchaseRepo.findById(first).orElseThrow().getAmountCents()).isEqualTo(9_000L);
         assertThat(discount().getReservedPurchaseId()).isEqualTo(second);
+    }
+
+    @Test
+    @DisplayName("a discounted checkout carries an expiry (the hold); a full-price one does not")
+    void discountedCheckoutExpires() {
+        givenDiscount();
+        buyPack(pack(10, 10_000L, CreditPackType.OTRO), null);
+        assertThat(lastCheckoutRequest().expiresAt()).isEqualTo(FIXED_NOW.plus(AccountDiscountService.DISCOUNT_HOLD));
+
+        org.mockito.Mockito.clearInvocations(paymentGateway);
+        buyPack(pack(10, 10_000L, CreditPackType.OTRO), null);
+        assertThat(lastCheckoutRequest().unitPriceCents()).isEqualTo(10_000L);
+        assertThat(lastCheckoutRequest().expiresAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("approving a discounted purchase whose discount another purchase consumed still credits it and logs an error")
+    void doubleConsumeStillCredits() {
+        givenDiscount();
+        CreditPack pack = pack(10, 10_000L, CreditPackType.OTRO);
+        UUID first = buyPack(pack, null);
+        age(first);
+        UUID second = buyPack(pack, null);
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(CreditPurchaseService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs =
+            new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+
+        apply(second, "mp-2", PaymentStatus.APPROVED);
+        apply(first, "mp-1", PaymentStatus.APPROVED);
+        logger.detachAppender(logs);
+
+        assertThat(walletRepo.findById(user.getId()).orElseThrow().getAvailable()).isEqualTo(20);
+        assertThat(discount().getConsumedPurchaseId()).isEqualTo(second);
+        assertThat(logs.list).anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR
+            && e.getFormattedMessage().contains(first.toString()) && e.getFormattedMessage().contains(second.toString()));
+    }
+
+    @Test
+    @DisplayName("resuming a discounted direct checkout past its hold cancels it, releases the discount and asks for a fresh one")
+    void resumePastHoldCancels() {
+        givenDiscount();
+        DirectCheckoutDto dto = buyDirect();
+        age(dto.purchaseId());
+
+        assertThatThrownBy(() -> purchaseService.resumeDirectCheckout(user.getId(), dto.orderId()))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "direct-checkout-expired");
+        flushAndClear();
+
+        assertThat(purchaseRepo.findById(dto.purchaseId()).orElseThrow().getStatus())
+            .isEqualTo(CreditPurchaseStatus.CANCELLED);
+        assertThat(discount().getReservedPurchaseId()).isNull();
+        assertThat(usableNow()).isTrue();
     }
 
     @Test
@@ -308,6 +377,7 @@ class AccountDiscountCheckoutTest {
         givenDiscount();
         CreditPack pack = pack(10, 10_000L, CreditPackType.OTRO);
         UUID first = buyPack(pack, null);
+        age(first);
         UUID second = buyPack(pack, null);
 
         purchaseService.expirePendingPurchase(first);
@@ -316,18 +386,12 @@ class AccountDiscountCheckoutTest {
         assertThat(discount().getReservedPurchaseId()).isEqualTo(second);
     }
 
-    @Test
-    @DisplayName("a consumed discount is never applied again")
-    void consumedIsNeverApplied() {
-        givenDiscount();
-        CreditPack pack = pack(10, 10_000L, CreditPackType.OTRO);
-        apply(buyPack(pack, null), "mp-1", PaymentStatus.APPROVED);
-
-        UUID next = buyPack(pack, null);
-
-        assertThat(purchaseRepo.findById(next).orElseThrow().getAmountCents()).isEqualTo(10_000L);
-        assertThat(purchaseRepo.findById(next).orElseThrow().getDiscountPercent()).isNull();
-        assertThat(usableNow()).isFalse();
+    /** Makes the purchase older than the discount hold plus margin. */
+    private void age(UUID purchaseId) {
+        entityManager.flush();
+        entityManager.createNativeQuery("UPDATE credit_purchase SET created_at = :t WHERE id = :id")
+            .setParameter("t", FIXED_NOW.minus(2, ChronoUnit.HOURS)).setParameter("id", purchaseId).executeUpdate();
+        entityManager.clear();
     }
 
     // ─── consume / release ──────────────────────────────────────────────────

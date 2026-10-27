@@ -192,7 +192,8 @@ public class CreditPurchaseService {
             returnUrl,
             returnUrl,
             returnUrl,
-            publicUrlProps.backendUrl() + WEBHOOK_PATH
+            publicUrlProps.backendUrl() + WEBHOOK_PATH,
+            discountExpiry(discount)
         );
         return new PendingPackPurchase(purchase.getId(), checkoutReq);
     }
@@ -324,7 +325,8 @@ public class CreditPurchaseService {
             returnUrl,
             returnUrl,
             returnUrl,
-            publicUrlProps.backendUrl() + WEBHOOK_PATH
+            publicUrlProps.backendUrl() + WEBHOOK_PATH,
+            discountExpiry(discount)
         );
         return new PendingDirectPurchase(order.getId(), purchase.getId(), checkoutReq);
     }
@@ -455,8 +457,18 @@ public class CreditPurchaseService {
      * OrderRepository}); {@code order-not-found} si no es suyo, igual que los
      * demás endpoints v2.
      */
-    @Transactional(readOnly = true)
     public DirectCheckoutDto resumeDirectCheckout(Long userId, Long orderId) {
+        DirectCheckoutDto dto = txTemplate.execute(status -> resumeOrCloseExpired(userId, orderId));
+        if (dto == null) {
+            // The close committed (a throw inside the transaction would have rolled it back).
+            throw BusinessException.conflict("direct-checkout-expired",
+                "Este pago con descuento venció — volvé a pagar tu pedido");
+        }
+        return dto;
+    }
+
+    /** Returns the checkout, or {@code null} after cancelling a discounted purchase whose hold has passed. */
+    private DirectCheckoutDto resumeOrCloseExpired(Long userId, Long orderId) {
         Order order = orderRepo.findByIdAndUserId(orderId, userId)
             .orElseThrow(() -> BusinessException.notFound("order-not-found", "Pedido no encontrado"));
 
@@ -469,6 +481,14 @@ public class CreditPurchaseService {
             .filter(p -> p.getStatus() == CreditPurchaseStatus.PENDING && p.getInitPoint() != null)
             .orElseThrow(() -> BusinessException.conflict("direct-checkout-not-resumable",
                 "No hay un pago directo pendiente para retomar en este pedido"));
+
+        if (purchase.getDiscountPercent() != null
+            && !clock.instant().isBefore(purchase.getCreatedAt().plus(AccountDiscountService.DISCOUNT_HOLD))) {
+            // The discounted preference has expired in Mercado Pago: close like any unpaid checkout
+            // (releases the discount, cancels the order, restores stock) and let the client start over.
+            purchaseRepo.findByIdForUpdate(purchase.getId()).ifPresent(p -> closeWithoutCrediting(p, CreditPurchaseStatus.CANCELLED));
+            return null;
+        }
 
         return new DirectCheckoutDto(order.getId(), purchase.getId(), purchase.getInitPoint());
     }
@@ -934,6 +954,11 @@ public class CreditPurchaseService {
         discount.ifPresent(d -> discountService.reserve(d.discount(), purchase.getId()));
     }
 
+    /** A discounted preference is payable only for the hold; full-price ones never expire. */
+    private Instant discountExpiry(Optional<AppliedDiscount> discount) {
+        return discount.map(d -> clock.instant().plus(AccountDiscountService.DISCOUNT_HOLD)).orElse(null);
+    }
+
     private static String discountTitleSuffix(Optional<AppliedDiscount> discount) {
         return discount.map(d -> " (" + d.percent() + "% de descuento)").orElse("");
     }
@@ -948,7 +973,9 @@ public class CreditPurchaseService {
     /** El pago se aprobó: el descuento queda usado, aunque haya vencido o se haya liberado mientras tanto. */
     private void consumeDiscount(CreditPurchase purchase) {
         if (purchase.getDiscountPercent() != null) {
-            discountService.consume(purchase.getUser().getId(), purchase.getId());
+            discountService.consume(purchase.getUser().getId(), purchase.getId()).ifPresent(other ->
+                log.error("Compra {} aprobada con descuento, pero el descuento ya lo consumió la compra {}; "
+                    + "se acredita igual (el pago ya entró)", purchase.getId(), other));
         }
     }
 

@@ -12,6 +12,8 @@ import com.mercadopago.client.payment.PaymentClient;
 import com.mercadopago.client.preference.PreferenceBackUrlsRequest;
 import com.mercadopago.client.preference.PreferenceClient;
 import com.mercadopago.client.preference.PreferenceItemRequest;
+import com.mercadopago.client.preference.PreferencePaymentMethodsRequest;
+import com.mercadopago.client.preference.PreferencePaymentTypeRequest;
 import com.mercadopago.client.preference.PreferenceRequest;
 import com.mercadopago.exceptions.MPApiException;
 import com.mercadopago.exceptions.MPException;
@@ -28,6 +30,8 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -110,6 +114,15 @@ public class MercadoPagoAdapter implements PaymentGateway {
         // frontend público es https (precedente CeroComa, diseño §Configuración).
         if (isHttps(publicUrlProps.frontendUrl())) {
             builder.autoReturn("approved");
+        }
+
+        // Discounted checkouts are payable only for a short hold and only with instant payment methods,
+        // so no approval can arrive after the discount is released to a newer purchase.
+        if (request.expiresAt() != null) {
+            builder.expires(true).expirationDateTo(OffsetDateTime.ofInstant(request.expiresAt(), ZoneOffset.UTC))
+                .paymentMethods(PreferencePaymentMethodsRequest.builder().excludedPaymentTypes(List.of(
+                    PreferencePaymentTypeRequest.builder().id("ticket").build(),
+                    PreferencePaymentTypeRequest.builder().id("atm").build())).build());
         }
 
         try {

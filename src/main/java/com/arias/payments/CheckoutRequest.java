@@ -17,5 +17,6 @@ public record CheckoutRequest(
     String successUrl,
     String pendingUrl,
     String failureUrl,
-    String notificationUrl
+    String notificationUrl,
+    java.time.Instant expiresAt
 ) {}

@@ -1,5 +1,7 @@
 package com.arias.credits.discount;
 
+import com.arias.payments.CreditPurchaseRepository;
+import com.arias.payments.CreditPurchaseStatus;
 import com.arias.users.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -22,7 +24,13 @@ public class AccountDiscountService {
     /** How long a granted discount stays usable. */
     public static final Duration VALIDITY = Duration.ofDays(7);
 
+    /** A discounted Mercado Pago preference is payable only this long. */
+    public static final Duration DISCOUNT_HOLD = Duration.ofMinutes(30);
+    /** Extra time before a held discount is considered free again. */
+    private static final Duration HOLD_MARGIN = Duration.ofMinutes(5);
+
     private final AccountDiscountRepository repo;
+    private final CreditPurchaseRepository purchaseRepo;
     private final Clock clock;
 
     /**
@@ -36,9 +44,8 @@ public class AccountDiscountService {
     }
 
     /**
-     * The discount the user can use at {@code now}: unexpired and unconsumed. A reservation by a
-     * PENDING purchase does not hide it: that purchase may be abandoned, and a new purchase takes
-     * the reservation over.
+     * The discount a new purchase would get at {@code now} (see {@link #isUsable}); hidden
+     * during the hold of a PENDING purchase so the app never shows a price the server will not charge.
      */
     @Transactional(readOnly = true)
     public Optional<AccountDiscountDto> findActive(Long userId, Instant now) {
@@ -90,18 +97,31 @@ public class AccountDiscountService {
      * or was released meanwhile, because the customer already paid the discounted price.
      */
     @Transactional
-    public void consume(Long userId, UUID purchaseId) {
-        repo.findByUserIdForUpdate(userId)
-            .filter(d -> d.getConsumedAt() == null)
-            .ifPresent(d -> {
-                d.setConsumedAt(clock.instant());
-                d.setConsumedPurchaseId(purchaseId);
-                d.setReservedPurchaseId(null);
-            });
+    public Optional<UUID> consume(Long userId, UUID purchaseId) {
+        return repo.findByUserIdForUpdate(userId).flatMap(d -> {
+            if (d.getConsumedAt() != null) {
+                // Already used: report a DIFFERENT consumer so the caller can flag the double use.
+                return Optional.ofNullable(d.getConsumedPurchaseId()).filter(id -> !id.equals(purchaseId));
+            }
+            d.setConsumedAt(clock.instant());
+            d.setConsumedPurchaseId(purchaseId);
+            d.setReservedPurchaseId(null);
+            return Optional.empty();
+        });
     }
 
-    static boolean isUsable(AccountDiscount d, Instant now) {
-        return d.getConsumedAt() == null
-            && now.isBefore(d.getExpiresAt());
+    /**
+     * Usable by a NEW purchase: unexpired, unconsumed and not held by a PENDING purchase still inside
+     * its payable window ({@link #DISCOUNT_HOLD} + margin). After that window the held checkout can no
+     * longer be paid (its preference expires), so a new purchase may take the reservation over.
+     */
+    private boolean isUsable(AccountDiscount d, Instant now) {
+        if (d.getConsumedAt() != null || !now.isBefore(d.getExpiresAt())) {
+            return false;
+        }
+        Instant heldSince = now.minus(DISCOUNT_HOLD).minus(HOLD_MARGIN);
+        return d.getReservedPurchaseId() == null || purchaseRepo.findById(d.getReservedPurchaseId())
+            .map(p -> p.getStatus() != CreditPurchaseStatus.PENDING || !p.getCreatedAt().isAfter(heldSince))
+            .orElse(true);
     }
 }
