@@ -182,6 +182,22 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
         @Param("fecha") LocalDate fecha, @Param("excluidos") Collection<OrderEstado> excluidos);
 
     /**
+     * Cancelled orders of the day for the admin board (read-only section), newest cancellation
+     * first. Cancellations caused by a failed payment are left out (the customer never really had
+     * the order); legacy rows without a reason are kept.
+     */
+    @Query("""
+        SELECT DISTINCT o FROM Order o
+        JOIN FETCH o.user
+        LEFT JOIN FETCH o.items
+        WHERE o.fecha = :fecha
+          AND o.estado = com.arias.orders.OrderEstado.CANCELADO
+          AND (o.cancelReason IS NULL OR o.cancelReason <> com.arias.orders.CancelReason.PAYMENT_FAILED)
+        ORDER BY o.cancelledAt DESC
+    """)
+    List<Order> findCancelledForBoard(@Param("fecha") LocalDate fecha);
+
+    /**
      * "Mis pedidos" del cliente (gap fix, {@code GET /api/v2/orders}) — scope
      * estricto por {@code userId} (spec: un cliente nunca ve pedidos ajenos).
      * {@code CANCELADO} se incluye a propósito: es soft-cancel, el cliente

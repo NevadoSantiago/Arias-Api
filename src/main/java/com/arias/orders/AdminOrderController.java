@@ -127,6 +127,19 @@ public class AdminOrderController {
             printStatusService.summarize(orders.stream().map(Order::getId).toList()));
     }
 
+    /**
+     * Cancelled orders of the day for the board's read-only "cancelados" section, newest
+     * cancellation first. Payment-failure cancellations are not listed.
+     */
+    @GetMapping("/by-pickup/cancelled")
+    @Transactional(readOnly = true)
+    public List<AdminOrderDto.CancelledOrderDto> getCancelledOrders(@RequestParam(required = false) LocalDate fecha) {
+        LocalDate target = fecha != null ? fecha : LocalDate.now(clock);
+        return orderRepository.findCancelledForBoard(target).stream()
+            .map(AdminOrderDto.CancelledOrderDto::from)
+            .toList();
+    }
+
     /** Legacy (the board no longer uses it): PENDIENTE -> CONFIRMADO a mano para un pedido B2C: consume sus créditos, sin deshacer. */
     @PutMapping("/{id}/confirmar")
     @Transactional

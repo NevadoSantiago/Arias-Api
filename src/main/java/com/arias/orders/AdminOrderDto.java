@@ -123,6 +123,36 @@ public record AdminOrderDto(
         }
     }
 
+    /**
+     * A cancelled order on the kitchen board (read-only). {@code comandadoAt} non-null means it had
+     * already been commanded; {@code cancelRefunded} says whether the lunches went back to the customer.
+     */
+    public record CancelledOrderDto(
+        Long id,
+        String customerNickname,
+        List<PickupOrderItemDto> items,
+        String notas,
+        Instant pickupAt,
+        Instant comandadoAt,
+        Instant cancelledAt,
+        Boolean cancelRefunded,
+        CancelReason cancelReason
+    ) {
+        public static CancelledOrderDto from(Order order) {
+            return new CancelledOrderDto(
+                order.getId(),
+                order.getUser().displayName(),
+                order.getItems().stream().map(PickupOrderItemDto::from).toList(),
+                order.getNotas(),
+                order.getPickupAt(),
+                order.getComandadoAt(),
+                order.getCancelledAt(),
+                order.getCancelRefunded(),
+                order.getCancelReason()
+            );
+        }
+    }
+
     /** Body of the batch kitchen-state endpoints. */
     public record KitchenBatchRequest(List<Long> orderIds) {}
 
