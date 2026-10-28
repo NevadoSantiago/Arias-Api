@@ -45,6 +45,7 @@ public class CreditLedgerService {
     private final CreditMovementRepository movementRepo;
     private final RestaurantConfigRepository restaurantConfigRepo;
     private final Clock clock;
+    private final CreditsProperties creditsProperties;
 
     /** Regla de producto: el almuerzo de bienvenida vence 96 horas después de otorgado. */
     static final Duration WELCOME_EXPIRY = Duration.ofHours(96);
@@ -233,6 +234,9 @@ public class CreditLedgerService {
      * y abortar esa request puntual — preferible a otorgar dos veces o a
      * dejar la conexión de otro reintento en estado abortado.
      *
+     * <p>Con {@code arias.credits.welcome-grant-enabled=false} no otorga ni
+     * escribe nada y devuelve {@code false}.
+     *
      * @return {@code true} si ESTA llamada creó el movimiento {@code
      *         WELCOME_GRANT} (primer otorgamiento real); {@code false} si ya
      *         existía y la llamada fue un no-op — así el caller (login con
@@ -241,6 +245,9 @@ public class CreditLedgerService {
      */
     @Transactional
     public boolean grantWelcomeLunch(Long userId) {
+        if (!creditsProperties.welcomeGrantEnabled()) {
+            return false;
+        }
         if (movementRepo.existsByUserIdAndType(userId, MovementType.WELCOME_GRANT)) {
             return false;
         }

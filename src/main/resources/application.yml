@@ -136,6 +136,10 @@ arias:
     # Si está vacío, el mail se loguea pero no se envía (igual que email.api-key).
     quote-to: ${CONTACT_QUOTE_TO:nevadosantiago97@gmail.com}
 
+  # Almuerzo de bienvenida de las cuentas nuevas. Con false no se otorga y los mails no lo prometen.
+  credits:
+    welcome-grant-enabled: ${WELCOME_GRANT_ENABLED:true}
+
   # Campanas de marketing. La campana diaria de descuento + mail de agradecimiento esta apagada por defecto.
   marketing:
     review-campaign-enabled: ${MARKETING_CAMPAIGN_ENABLED:false}

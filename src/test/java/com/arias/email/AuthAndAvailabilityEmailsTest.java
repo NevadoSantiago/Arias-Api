@@ -1,5 +1,6 @@
 package com.arias.email;
 
+import com.arias.credits.CreditsProperties;
 import com.arias.orders.DailyChoice;
 import com.arias.users.User;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,7 +42,7 @@ class AuthAndAvailabilityEmailsTest {
     @Test
     @DisplayName("verificación: layout, saludo, copy y botón")
     void verification() {
-        new EmailVerificationEmails(emailService, props).sendVerificationLink("a@x.test", "Ana", "tok");
+        new EmailVerificationEmails(emailService, props, new CreditsProperties(true)).sendVerificationLink("a@x.test", "Ana", "tok");
         String html = sentHtml("a@x.test", "Confirmá tu correo — Arias");
         assertThat(html).contains(BAND).contains("color-scheme")
             .contains(">¡Hola Ana!</h2>")
@@ -53,9 +54,19 @@ class AuthAndAvailabilityEmailsTest {
     }
 
     @Test
+    @DisplayName("verificación: con el regalo apagado no promete el almuerzo de bienvenida")
+    void verificationWithoutWelcomeGrant() {
+        new EmailVerificationEmails(emailService, props, new CreditsProperties(false)).sendVerificationLink("a@x.test", "Ana", "tok");
+        String html = sentHtml("a@x.test", "Confirmá tu correo — Arias");
+        assertThat(html)
+            .contains("Gracias por registrarte en Arias. Confirmá tu correo para activar tu cuenta.")
+            .doesNotContain("almuerzo de bienvenida");
+    }
+
+    @Test
     @DisplayName("verificación: nombre vacío cae en 'che' y se escapa")
     void verificationFallbackName() {
-        new EmailVerificationEmails(emailService, props).sendVerificationLink("a@x.test", " ", "t");
+        new EmailVerificationEmails(emailService, props, new CreditsProperties(true)).sendVerificationLink("a@x.test", " ", "t");
         assertThat(sentHtml("a@x.test", "Confirmá tu correo — Arias")).contains("¡Hola che!");
     }
 

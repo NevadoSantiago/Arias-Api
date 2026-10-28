@@ -1,5 +1,6 @@
 package com.arias.email;
 
+import com.arias.credits.CreditsProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -15,13 +16,17 @@ public class EmailVerificationEmails {
 
     private final EmailService emailService;
     private final EmailProperties props;
+    private final CreditsProperties creditsProperties;
 
     public void sendVerificationLink(String toEmail, String firstName, String tokenValue) {
         String safeName = (firstName != null && !firstName.isBlank()) ? firstName : "che";
         String verifyUrl = props.appUrl() + "/verify-email?token=" + tokenValue;
 
+        String welcomeLunchCopy = creditsProperties.welcomeGrantEnabled()
+            ? " y recibir tu almuerzo de bienvenida" : "";
+
         String html = EmailLayout.render(EmailContent.of("¡Hola " + safeName + "!",
-                EmailLayout.paragraph("Gracias por registrarte en Arias. Confirmá tu correo para activar tu cuenta y recibir tu almuerzo de bienvenida.")
+                EmailLayout.paragraph("Gracias por registrarte en Arias. Confirmá tu correo para activar tu cuenta" + welcomeLunchCopy + ".")
                     + EmailLayout.paragraph("El link expira en 30 minutos."))
             .withCta("Verificar mi correo", verifyUrl));
 
