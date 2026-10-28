@@ -24,6 +24,10 @@ import com.arias.credits.CreditMovementRepository;
 import com.arias.credits.CreditWallet;
 import com.arias.credits.CreditWalletRepository;
 import com.arias.credits.MovementType;
+import com.arias.printing.PrintJob;
+import com.arias.printing.PrintJobRepository;
+import com.arias.printing.PrintJobStatus;
+import com.arias.catalog.dishes.DishStation;
 import com.arias.payments.CreditPurchase;
 import com.arias.payments.CreditPurchaseRepository;
 import com.arias.payments.CreditPurchaseStatus;
@@ -174,6 +178,9 @@ class OrderPlacementServiceTest {
 
     @Autowired
     private Validator validator;
+
+    @Autowired
+    private PrintJobRepository printJobRepo;
 
     /** Ver el comentario equivalente en {@code OrderServiceCompanyFlowTest}: los
      *  UPDATE en bloque de {@code DishRepository} no refrescan el first-level
@@ -2036,6 +2043,33 @@ class OrderPlacementServiceTest {
         assertThat(cancelled.getCancelReason()).isEqualTo(CancelReason.CUSTOMER);
         assertThat(events.stream(OrderCancelledEvent.class).toList())
             .singleElement().satisfies(e -> assertThat(e.refunded()).isTrue());
+    }
+
+    @Test
+    @DisplayName("cancel(): queued tickets of the order are cancelled, already printed ones stay as they are")
+    void cancelDescartaLasComandasEnCola() {
+        Category category = persistCategory(2);
+        Dish dish = persistDish(category, persistMenuSection(), 3);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeAndAdvance(user, dish, 90, OrderEstado.COMANDADO);
+        Order order = orderRepo.findById(placed.id()).orElseThrow();
+        PrintJob queued = printJobRepo.save(printJob(order, DishStation.COCINA, PrintJobStatus.PENDING));
+        PrintJob printed = printJobRepo.save(printJob(order, DishStation.PARRILLA, PrintJobStatus.PRINTED));
+        entityManager.flush();
+        entityManager.clear();
+
+        orderPlacementService.cancel(user.getId(), placed.id());
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(printJobRepo.findById(queued.getId()).orElseThrow().getStatus()).isEqualTo(PrintJobStatus.CANCELLED);
+        assertThat(printJobRepo.findById(printed.getId()).orElseThrow().getStatus()).isEqualTo(PrintJobStatus.PRINTED);
+    }
+
+    private PrintJob printJob(Order order, DishStation station, PrintJobStatus status) {
+        return PrintJob.builder().order(order).station(station).host("192.168.0.1").port(9100)
+            .data(new byte[] {1}).status(status).availableAt(FIXED_NOW).build();
     }
 
     @Test

@@ -12,6 +12,7 @@ import com.arias.orders.notifications.OrderCancelledEvent;
 import com.arias.orders.notifications.OrderUnpaidCancelledEvent;
 import com.arias.payments.CreditPurchaseRepository;
 import com.arias.payments.PurchaseType;
+import com.arias.printing.PrintJobService;
 import com.arias.restaurantconfig.RestaurantConfigRepository;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -90,6 +91,7 @@ public class OrderPlacementService {
     private final PickupSlotService pickupSlotService;
     private final RestaurantConfigRepository restaurantConfigRepo;
     private final CreditPurchaseRepository creditPurchaseRepo;
+    private final PrintJobService printJobService;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
 
@@ -496,6 +498,8 @@ public class OrderPlacementService {
         order.setCancelledAt(now);
         order.setCancelReason(reason);
         order.setCancelRefunded(refunded);
+        // A cancelled order must never print: drop the tickets nobody claimed yet.
+        printJobService.cancelPending(order.getId());
 
         if (teniaCreditosComprometidos || teniaCreditosConsumidos) {
             // Publicado DENTRO de la transacción — OrderNotificationScheduler
