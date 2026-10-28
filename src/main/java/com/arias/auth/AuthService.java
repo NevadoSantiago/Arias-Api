@@ -3,6 +3,8 @@ package com.arias.auth;
 import com.arias.auth.dto.*;
 import com.arias.common.exception.BusinessException;
 import com.arias.common.exception.InvalidCredentialsException;
+import com.arias.credits.CreditMovementRepository;
+import com.arias.credits.MovementType;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -29,17 +31,20 @@ import java.util.Optional;
 public class AuthService {
 
     private final UserRepository userRepo;
+    private final CreditMovementRepository creditMovementRepo;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
 
     public AuthService(
         UserRepository userRepo,
+        CreditMovementRepository creditMovementRepo,
         PasswordEncoder passwordEncoder,
         JwtService jwtService,
         RefreshTokenService refreshTokenService
     ) {
         this.userRepo = userRepo;
+        this.creditMovementRepo = creditMovementRepo;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.refreshTokenService = refreshTokenService;
@@ -224,7 +229,8 @@ public class AuthService {
             // Solo un B2C puede quedar con el perfil pendiente: admins y
             // usuarios de empresa no tienen teléfono ni apodo y nunca los piden.
             !user.mustCompleteProfileToSpend(),
-            user.getOnboardingTourSeenAt()
+            user.getOnboardingTourSeenAt(),
+            creditMovementRepo.existsByUserIdAndType(user.getId(), MovementType.WELCOME_GRANT)
         );
     }
 

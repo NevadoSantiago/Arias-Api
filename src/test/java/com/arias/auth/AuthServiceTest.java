@@ -9,6 +9,7 @@ import com.arias.catalog.categories.Category;
 import com.arias.catalog.categories.CategoryRepository;
 import com.arias.companies.Company;
 import com.arias.companies.CompanyRepository;
+import com.arias.credits.CreditLedgerService;
 import com.arias.users.Role;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
@@ -40,6 +41,9 @@ class AuthServiceTest {
 
     @Autowired
     private UserRepository userRepo;
+
+    @Autowired
+    private CreditLedgerService creditLedgerService;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -102,6 +106,17 @@ class AuthServiceTest {
 
         MeResponse c = authService.me(sinNombre.getId());
         assertThat(c.displayName()).isEqualTo(sinNombre.getEmail());
+    }
+
+    @Test
+    @DisplayName("me(): receivedWelcomeLunch is true only for the account that got the WELCOME_GRANT")
+    void meReportsWhetherTheAccountReceivedTheWelcomeLunch() {
+        User granted = saveUser("Coty", "Ana", "Perez");
+        User notGranted = saveUser("Pipo", "Juan", "Lopez");
+        creditLedgerService.grantWelcomeLunch(granted.getId());
+
+        assertThat(authService.me(granted.getId()).receivedWelcomeLunch()).isTrue();
+        assertThat(authService.me(notGranted.getId()).receivedWelcomeLunch()).isFalse();
     }
 
     @Test

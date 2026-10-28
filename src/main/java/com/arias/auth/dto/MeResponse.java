@@ -19,6 +19,9 @@ import java.time.Instant;
  *                        creadas vía Google (diseño §Decisión 9).
  * @param onboardingTourSeenAt cuándo terminó o salteó el tour de primer
  *                        ingreso; {@code null} si todavía no lo vio.
+ * @param receivedWelcomeLunch {@code true} si la cuenta tiene el movimiento
+ *                        {@code WELCOME_GRANT}. Es un hecho de la cuenta, no
+ *                        del interruptor de configuración.
  */
 public record MeResponse(
     Long id,
@@ -33,5 +36,6 @@ public record MeResponse(
     String displayName,
     boolean emailVerified,
     boolean profileComplete,
-    Instant onboardingTourSeenAt
+    Instant onboardingTourSeenAt,
+    boolean receivedWelcomeLunch
 ) {}
