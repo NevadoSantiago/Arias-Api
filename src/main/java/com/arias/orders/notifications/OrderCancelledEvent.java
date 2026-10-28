@@ -20,6 +20,8 @@ public record OrderCancelledEvent(
     String userEmail,
     String userDisplayName,
     Instant pickupAt,
-    Integer creditTotal
+    Integer creditTotal,
+    /** {@code false} when the order was cancelled after the refund window: the lunches stay consumed. */
+    boolean refunded
 ) {
 }

@@ -82,8 +82,10 @@ public class OrderNotificationEmails {
         }
 
         if (event.userEmail() != null && !event.userEmail().isBlank()) {
-            String introCliente = EmailLayout.paragraph("Confirmamos que cancelaste tu pedido #%d, que tenías programado para retirar a las <strong>%s</strong>. Tus almuerzos ya vuelven a estar disponibles en tu saldo."
-                .formatted(event.orderId(), hora));
+            String introCliente = EmailLayout.paragraph("Confirmamos que cancelaste tu pedido #%d, que tenías programado para retirar a las <strong>%s</strong>. %s"
+                .formatted(event.orderId(), hora, event.refunded()
+                    ? "Tus almuerzos ya vuelven a estar disponibles en tu saldo."
+                    : "El pedido se canceló fuera de término, así que el almuerzo no se devuelve."));
             String htmlCliente = buildHtml("Cancelaste tu pedido", introCliente);
             emailService.send(event.userEmail(), "Cancelaste tu pedido #" + event.orderId() + " — Arias", htmlCliente);
         }

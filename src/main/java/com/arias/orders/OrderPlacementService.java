@@ -194,14 +194,17 @@ public class OrderPlacementService {
     }
 
     /**
-     * Cancela el pedido — mientras esté PENDIENTE, {@code PENDIENTE_PAGO}
-     * (unidad B7: solo se liberan los almuerzos que se reservaron del saldo,
-     * unidad B13), {@code CONFIRMADO} o {@code COMANDADO} (sus almuerzos ya se
-     * consumieron y se devuelven con {@code ORDER_REFUND}) — ver {@link
-     * #applyCancellation}, y falte más de {@code cancelLimit} minutos para el
-     * retiro (límite de cancelación configurable, re-validación perezosa del
-     * diseño §Decisión 4, independiente de si el job de consumo corrió).
-     * {@code ENTREGADO} y {@code CANCELADO} responden {@code order-locked}.
+     * Cancela el pedido en cualquier momento hasta la entrega — {@code PENDIENTE},
+     * {@code PENDIENTE_PAGO} (unidad B7: solo se liberan los almuerzos que se
+     * reservaron del saldo, unidad B13), {@code CONFIRMADO} o {@code COMANDADO}
+     * — mientras la fecha del pedido sea hoy o futura (Buenos Aires). Ver
+     * {@link #applyCancellation}.
+     *
+     * <p>Dentro del plazo ({@code now < pickupAt - cancelLimit}) los almuerzos
+     * vuelven al saldo; pasado el plazo el pedido se cancela y el stock se
+     * repone, pero los almuerzos se pierden (quedan consumidos).
+     * {@code ENTREGADO} y {@code CANCELADO} responden {@code order-locked}; un
+     * pedido de un día anterior, {@code order-past-day}.
      */
     @Transactional
     public void cancel(Long userId, Long orderId) {
@@ -214,15 +217,14 @@ public class OrderPlacementService {
         }
 
         Instant now = clock.instant();
-        int cancelLimit = restaurantConfigRepo.getSingleton().getCancelLimitMinutes();
-        Instant deadline = order.getPickupAt().minus(cancelLimit, ChronoUnit.MINUTES);
-        if (!now.isBefore(deadline)) {
-            throw BusinessException.conflict("cancel-window-closed",
-                "Ya no se puede cancelar: falta menos de " + cancelLimit
-                    + " minutos para el retiro");
+        if (isPastDay(order, now)) {
+            throw BusinessException.conflict("order-past-day",
+                "El pedido es de un día anterior y ya no se puede cancelar");
         }
+        int cancelLimit = restaurantConfigRepo.getSingleton().getCancelLimitMinutes();
+        boolean refund = isWithinCancelWindow(order, now, cancelLimit);
 
-        applyCancellation(order, now);
+        applyCancellation(order, now, CancelReason.CUSTOMER, refund);
     }
 
     /**
@@ -348,7 +350,7 @@ public class OrderPlacementService {
             .orElseThrow(() -> BusinessException.notFound("order-item-not-found", "Ítem no encontrado"));
 
         if (order.getItems().size() == 1) {
-            applyCancellation(order, now);
+            applyCancellation(order, now, CancelReason.CUSTOMER, true);
         } else {
             dishRepo.incrementStock(item.getDish().getId());
             creditLedgerService.release(userId, item.getCreditCost(),
@@ -422,7 +424,7 @@ public class OrderPlacementService {
         if (order == null || order.getEstado() != OrderEstado.PENDIENTE_PAGO) {
             return;
         }
-        applyCancellation(order, clock.instant());
+        applyCancellation(order, clock.instant(), CancelReason.PAYMENT_FAILED, true);
 
         if (notifyCustomer) {
             // Publicado DENTRO de la transacción; el mail sale AFTER_COMMIT
@@ -435,20 +437,22 @@ public class OrderPlacementService {
 
     /**
      * Núcleo compartido de {@link #cancel} y {@link #closeForPaymentFailure}:
-     * restaura stock, marca {@code CANCELADO} y devuelve créditos: libera
-     * COMMITTED por el total si el pedido estaba {@code PENDIENTE}, devuelve
-     * a AVAILABLE el total ya consumido ({@code ORDER_REFUND}) si estaba
-     * {@code CONFIRMADO} o {@code COMANDADO}, o libera solo {@code
-     * creditsFromBalance} si estaba {@code PENDIENTE_PAGO} (unidad B13; lo
-     * que iba a pagar Mercado Pago nunca se acreditó). Para {@code PENDIENTE},
-     * {@code CONFIRMADO} y {@code COMANDADO} publica el evento de cancelación
-     * (su copy de cliente asume que todo el pedido vuelve al saldo — para
-     * {@code PENDIENTE_PAGO} no se publica). El llamador es
-     * responsable de cualquier validación previa (ventana de cancelación,
-     * ownership, idempotencia) — acá se asume que YA se decidió que el
-     * pedido debe cerrarse.
+     * restaura stock, marca {@code CANCELADO} (con su motivo y si los
+     * almuerzos se devolvieron) y trata los créditos según {@code refund}.
+     * Con {@code refund}: libera COMMITTED por el total si el pedido estaba
+     * {@code PENDIENTE}, o devuelve a AVAILABLE el total ya consumido ({@code
+     * ORDER_REFUND}) si estaba {@code CONFIRMADO} o {@code COMANDADO}. Sin
+     * {@code refund} (cancelación tardía del cliente): los {@code CONFIRMADO}
+     * y {@code COMANDADO} conservan su consumo y los {@code PENDIENTE}
+     * consumen lo comprometido, para que nada quede colgado. Un {@code
+     * PENDIENTE_PAGO} libera siempre solo {@code creditsFromBalance} (unidad
+     * B13; lo que iba a pagar Mercado Pago nunca se acreditó). Para {@code
+     * PENDIENTE}, {@code CONFIRMADO} y {@code COMANDADO} publica el evento de
+     * cancelación; para {@code PENDIENTE_PAGO} no. El llamador es
+     * responsable de cualquier validación previa (ownership, idempotencia) —
+     * acá se asume que YA se decidió que el pedido debe cerrarse.
      */
-    private void applyCancellation(Order order, Instant now) {
+    private void applyCancellation(Order order, Instant now, CancelReason reason, boolean refund) {
         Long userId = order.getUser().getId();
         boolean teniaCreditosComprometidos = order.getEstado() == OrderEstado.PENDIENTE;
         // CONFIRMADO/COMANDADO: los almuerzos ya se consumieron (salieron de
@@ -458,28 +462,40 @@ public class OrderPlacementService {
         // Pedido esperando pago con una parte reservada del saldo (unidad
         // B13): esos almuerzos se devuelven a disponibles. Los que iba a
         // pagar Mercado Pago nunca se acreditaron, no hay nada que liberar.
-        int reservadosDelSaldo = order.getEstado() == OrderEstado.PENDIENTE_PAGO
-            ? order.getCreditsFromBalance() : 0;
+        boolean esperandoPago = order.getEstado() == OrderEstado.PENDIENTE_PAGO;
+        int reservadosDelSaldo = esperandoPago ? order.getCreditsFromBalance() : 0;
 
         for (OrderItem item : order.getItems()) {
             dishRepo.incrementStock(item.getDish().getId());
         }
 
         if (teniaCreditosComprometidos) {
-            creditLedgerService.release(userId, order.getCreditTotal(),
-                MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()));
+            if (refund) {
+                creditLedgerService.release(userId, order.getCreditTotal(),
+                    MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()));
+            } else {
+                creditLedgerService.consume(userId, order.getCreditTotal(),
+                    MovementRef.forOrder(order.getId(), "Cancelación tardía de pedido #" + order.getId()
+                        + " — los almuerzos no se devuelven"));
+            }
         } else if (teniaCreditosConsumidos) {
-            creditLedgerService.refundConsumed(userId, order.getCreditTotal(),
-                MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()
-                    + " — devolución de almuerzos ya confirmados"));
+            if (refund) {
+                creditLedgerService.refundConsumed(userId, order.getCreditTotal(),
+                    MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()
+                        + " — devolución de almuerzos ya confirmados"));
+            }
         } else if (reservadosDelSaldo > 0) {
             creditLedgerService.release(userId, reservadosDelSaldo,
                 MovementRef.forOrder(order.getId(), "Cancelación de pedido #" + order.getId()
                     + " sin pago — se devuelven los almuerzos del saldo"));
         }
 
+        // Un PENDIENTE_PAGO nunca tuvo almuerzos consumidos: cancelarlo tarde no pierde nada.
+        boolean refunded = refund || esperandoPago;
         order.setEstado(OrderEstado.CANCELADO);
         order.setCancelledAt(now);
+        order.setCancelReason(reason);
+        order.setCancelRefunded(refunded);
 
         if (teniaCreditosComprometidos || teniaCreditosConsumidos) {
             // Publicado DENTRO de la transacción — OrderNotificationScheduler
@@ -489,7 +505,7 @@ public class OrderPlacementService {
             User user = order.getUser();
             eventPublisher.publishEvent(new OrderCancelledEvent(
                 order.getId(), userId, user.getEmail(), displayName(user),
-                order.getPickupAt(), order.getCreditTotal()));
+                order.getPickupAt(), order.getCreditTotal(), refunded));
         }
     }
 
@@ -505,7 +521,7 @@ public class OrderPlacementService {
 
     // ─── helpers ──────────────────────────────────────────────────────────
 
-    /** Estados desde los que {@link #cancel} acepta cancelar (dentro de la ventana). */
+    /** Estados desde los que {@link #cancel} acepta cancelar (hasta la entrega). */
     private static boolean isCancellableState(Order order) {
         return switch (order.getEstado()) {
             case PENDIENTE, PENDIENTE_PAGO, CONFIRMADO, COMANDADO -> true;
@@ -513,19 +529,24 @@ public class OrderPlacementService {
         };
     }
 
+    /** El pedido es de un día anterior al de hoy (Buenos Aires): ya no se puede cancelar. */
+    private static boolean isPastDay(Order order, Instant now) {
+        return order.getFecha().isBefore(LocalDate.ofInstant(now, ZONE));
+    }
+
     /**
      * Misma regla que {@link #cancel} sin lanzar: estado cancelable ({@link
-     * #isCancellableState}) {@code && now < pickupAt - cancelLimit}. Único
-     * punto de verdad para "¿se puede cancelar ESTE pedido AHORA?" — usado
-     * por {@link #place} y {@link #list} para que el campo {@code
-     * cancellable} de {@link OrderDto} nunca se calcule dos veces con lógica
-     * distinta. {@code PENDIENTE_PAGO}, {@code CONFIRMADO} y {@code
-     * COMANDADO} son cancelables con la MISMA ventana — pero NO son
-     * MODIFICABLES, ver {@link #isWithinCancelWindow} y {@link
-     * #notModifiableReason}.
+     * #isCancellableState}) y fecha de hoy o futura. Único punto de verdad
+     * para "¿se puede cancelar ESTE pedido AHORA?" — usado por {@link #place}
+     * y {@link #list} para que el campo {@code cancellable} de {@link
+     * OrderDto} nunca se calcule dos veces con lógica distinta. El plazo de
+     * devolución ({@link #isWithinCancelWindow}) ya no impide cancelar, solo
+     * decide si los almuerzos se devuelven. {@code PENDIENTE_PAGO}, {@code
+     * CONFIRMADO} y {@code COMANDADO} son cancelables — pero NO son
+     * MODIFICABLES, ver {@link #notModifiableReason}.
      */
-    private static boolean isCancellable(Order order, Instant now, int cancelLimitMinutes) {
-        return isCancellableState(order) && isWithinCancelWindow(order, now, cancelLimitMinutes);
+    private static boolean isCancellable(Order order, Instant now) {
+        return isCancellableState(order) && !isPastDay(order, now);
     }
 
     /** {@code now < pickupAt - cancelLimit}: la ventana de cancelación/modificación sigue abierta. */
@@ -631,10 +652,11 @@ public class OrderPlacementService {
         // (notModifiableReason corta antes por estado).
         boolean paidWithMercadoPago = hasDirectPurchase.getAsBoolean();
         return OrderDto.from(order,
-            isCancellable(order, now, cancelLimitMinutes),
+            isCancellable(order, now),
             notModifiableReason(order, now, cancelLimitMinutes, () -> paidWithMercadoPago) == null,
             isPickupTimeChangeable(order, now, cancelLimitMinutes),
-            paidWithMercadoPago);
+            paidWithMercadoPago,
+            order.getPickupAt().minus(cancelLimitMinutes, ChronoUnit.MINUTES));
     }
 
     /**

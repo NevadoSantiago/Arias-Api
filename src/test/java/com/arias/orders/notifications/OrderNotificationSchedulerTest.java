@@ -219,7 +219,7 @@ class OrderNotificationSchedulerTest {
         User admin = persistSuperAdmin();
         OrderCancelledEvent event = new OrderCancelledEvent(
             42L, 7L, "cliente-cancela@test.arias.com", "Cliente",
-            FIXED_NOW.plus(2, ChronoUnit.HOURS), 3);
+            FIXED_NOW.plus(2, ChronoUnit.HOURS), 3, true);
 
         scheduler.onOrderCancelled(event);
 

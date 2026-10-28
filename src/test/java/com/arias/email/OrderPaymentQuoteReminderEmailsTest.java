@@ -127,7 +127,7 @@ class OrderPaymentQuoteReminderEmailsTest {
     void cancellationAlert() {
         User admin = user("adm@x.test", "Adm", "Adm");
         OrderCancelledEvent ev = new OrderCancelledEvent(42L, 7L, "c@x.test", "Cli <b>",
-            Instant.parse("2026-03-10T15:00:00Z"), 1);
+            Instant.parse("2026-03-10T15:00:00Z"), 1, true);
         new OrderNotificationEmails(emailService, props).sendCancellationAlert(List.of(admin), ev);
 
         assertThat(html("adm@x.test", "Pedido #42 cancelado — Arias"))
@@ -135,7 +135,22 @@ class OrderPaymentQuoteReminderEmailsTest {
             .contains("El pedido #42 de <strong>Cli &lt;b&gt;</strong> se canceló. Horario de retiro original: <strong>12:00</strong>.");
         assertThat(html("c@x.test", "Cancelaste tu pedido #42 — Arias"))
             .contains(">Cancelaste tu pedido</h2>")
-            .contains("Confirmamos que cancelaste tu pedido #42");
+            .contains("Confirmamos que cancelaste tu pedido #42")
+            .contains("Tus almuerzos ya vuelven a estar disponibles en tu saldo.");
+    }
+
+    @Test
+    @DisplayName("cancelación fuera de término: el mail al cliente avisa que el almuerzo no se devuelve")
+    void lateCancellationAlert() {
+        User admin = user("adm@x.test", "Adm", "Adm");
+        OrderCancelledEvent ev = new OrderCancelledEvent(42L, 7L, "c@x.test", "Cli",
+            Instant.parse("2026-03-10T15:00:00Z"), 1, false);
+        new OrderNotificationEmails(emailService, props).sendCancellationAlert(List.of(admin), ev);
+
+        assertThat(html("c@x.test", "Cancelaste tu pedido #42 — Arias"))
+            .contains("Confirmamos que cancelaste tu pedido #42")
+            .contains("El pedido se canceló fuera de término, así que el almuerzo no se devuelve.")
+            .doesNotContain("vuelven a estar disponibles");
     }
 
     @Test

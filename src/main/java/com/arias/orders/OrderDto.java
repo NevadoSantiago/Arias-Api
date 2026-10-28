@@ -47,10 +47,14 @@ public record OrderDto(
      * directo (unidad B13, pago parcial); {@code creditTotal - creditsFromBalance}
      * es lo que paga Mercado Pago. 0 para pedidos sin pago parcial.
      */
-    int creditsFromBalance
+    int creditsFromBalance,
+    /** Last instant to cancel with refund: {@code pickupAt - cancel_limit_minutes}. */
+    Instant refundableUntil,
+    /** For cancelled orders: whether the lunches went back to the balance. {@code null} otherwise. */
+    Boolean cancelRefunded
 ) {
     public static OrderDto from(Order order, boolean cancellable, boolean modifiable, boolean pickupTimeChangeable,
-                                boolean paidWithMercadoPago) {
+                                boolean paidWithMercadoPago, Instant refundableUntil) {
         return new OrderDto(
             order.getId(),
             order.getFecha(),
@@ -63,7 +67,9 @@ public record OrderDto(
             modifiable,
             pickupTimeChangeable,
             paidWithMercadoPago,
-            order.getCreditsFromBalance()
+            order.getCreditsFromBalance(),
+            refundableUntil,
+            order.getCancelRefunded()
         );
     }
 }

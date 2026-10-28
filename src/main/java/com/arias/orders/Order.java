@@ -107,6 +107,17 @@ public class Order {
     private Instant cancelledAt;
 
     /**
+     * Whether the lunches went back to the customer's balance when the order was cancelled
+     * ({@code false} = cancelled after the refund window, credits stay consumed). NULL while not cancelled.
+     */
+    @Column(name = "cancel_refunded")
+    private Boolean cancelRefunded;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cancel_reason", length = 20)
+    private CancelReason cancelReason;
+
+    /**
      * Dedup atómico del recordatorio de retiro (unidad 12, migración V21):
      * {@code NULL} hasta que {@code OrderNotificationScheduler} lo reclama
      * vía {@code UPDATE ... WHERE reminder_sent_at IS NULL}, mismo patrón que

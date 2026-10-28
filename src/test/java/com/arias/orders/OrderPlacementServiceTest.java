@@ -473,30 +473,6 @@ class OrderPlacementServiceTest {
         assertThat(cancelled.getCancelledAt()).isNotNull();
     }
 
-    @Test
-    @DisplayName("cancel(): rechaza si ya no falta más de `lead` minutos para el retiro")
-    void cancelRechazaFueraDeVentana() {
-        Category category = persistCategory(1);
-        MenuSection section = persistMenuSection();
-        Dish dish = persistDish(category, section, 3);
-        User user = persistB2cUser();
-        seedWallet(user.getId(), 10);
-
-        // pickupAt = ahora + 20 (el mínimo aceptado por place()); el deadline de
-        // cancelación (pickupAt - 20) cae exactamente en "ahora" → ya cerrado.
-        OrderDto placed = orderPlacementService.place(user.getId(),
-            singleItemRequest(dish.getId(), FIXED_NOW.plus(20, ChronoUnit.MINUTES)));
-
-        assertThatThrownBy(() -> orderPlacementService.cancel(user.getId(), placed.id()))
-            .isInstanceOf(BusinessException.class)
-            .hasFieldOrPropertyWithValue("errorCode", "cancel-window-closed");
-
-        entityManager.clear();
-        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(2);
-        Order stillPending = orderRepo.findById(placed.id()).orElseThrow();
-        assertThat(stillPending.getEstado()).isEqualTo(OrderEstado.PENDIENTE);
-    }
-
     // ─── placeAwaitingPayment() / B7: pedido "esperando pago" ──────────────
 
     @Test
@@ -827,8 +803,8 @@ class OrderPlacementServiceTest {
             singleItemRequest(dishFarAway.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
         // Earliest pickup allowed by PickupSlotService (now + lead) → the
         // cancellation deadline (pickupAt - lead) equals "now" exactly, so
-        // `now < deadline` is false → NOT cancellable (same boundary as
-        // cancelRechazaFueraDeVentana above, now exposed via list()).
+        // `now < deadline` is false → past the refund window, but still
+        // cancellable (late cancellation, no refund) until the order is delivered.
         OrderDto atDeadline = orderPlacementService.place(user.getId(),
             singleItemRequest(dishAtDeadline.getId(), FIXED_NOW.plus(20, ChronoUnit.MINUTES)));
 
@@ -838,7 +814,8 @@ class OrderPlacementServiceTest {
         OrderDto foundAtDeadline = orders.stream().filter(o -> o.id().equals(atDeadline.id())).findFirst().orElseThrow();
 
         assertThat(foundFarAway.cancellable()).isTrue();
-        assertThat(foundAtDeadline.cancellable()).isFalse();
+        assertThat(foundAtDeadline.cancellable()).isTrue();
+        assertThat(foundAtDeadline.refundableUntil()).isEqualTo(FIXED_NOW.minus(10, ChronoUnit.MINUTES));
     }
 
     @Test
@@ -1930,39 +1907,194 @@ class OrderPlacementServiceTest {
             .hasFieldOrPropertyWithValue("errorCode", "order-locked");
     }
 
+    // ─── Late cancellation: allowed until delivery, credits are NOT returned ───
+
+    private static final Instant PAST_WINDOW_PICKUP = FIXED_NOW.plus(30, ChronoUnit.MINUTES);
+
     @Test
-    @DisplayName("cancel(): un CONFIRMADO pasado el límite de cancelación responde cancel-window-closed con el límite en el mensaje")
-    void cancelConfirmadoFueraDelLimite() {
+    @DisplayName("cancel(): a CONFIRMADO past the window cancels, restores stock, keeps the consumption (no ORDER_REFUND) and flags cancelRefunded=false")
+    void cancelConfirmadoFueraDelLimiteConsumeElAlmuerzo(ApplicationEvents events) {
         Category category = persistCategory(2);
         Dish dish = persistDish(category, persistMenuSection(), 3);
         User user = persistB2cUser();
         seedWallet(user.getId(), 10);
-        // 30 min: justo en el límite (30), que ya cierra; con la preparación (20) seguiría abierto.
+        // 30 min: exactly on the limit (30), which is already closed.
         OrderDto placed = placeAndAdvance(user, dish, 30, OrderEstado.CONFIRMADO);
+        entityManager.flush();
+        entityManager.clear();
 
-        assertThatThrownBy(() -> orderPlacementService.cancel(user.getId(), placed.id()))
-            .isInstanceOf(BusinessException.class)
-            .hasFieldOrPropertyWithValue("errorCode", "cancel-window-closed")
-            .hasMessageContaining("30");
-        assertThat(orderRepo.findById(placed.id()).orElseThrow().getEstado()).isEqualTo(OrderEstado.CONFIRMADO);
+        orderPlacementService.cancel(user.getId(), placed.id());
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(3);
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(8);
+        assertThat(wallet.getCommitted()).isZero();
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId()))
+            .noneMatch(m -> m.getType() == MovementType.ORDER_REFUND);
+        Order cancelled = orderRepo.findById(placed.id()).orElseThrow();
+        assertThat(cancelled.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(cancelled.getCancelRefunded()).isFalse();
+        assertThat(cancelled.getCancelReason()).isEqualTo(CancelReason.CUSTOMER);
+        assertThat(events.stream(OrderCancelledEvent.class).toList())
+            .singleElement().satisfies(e -> assertThat(e.refunded()).isFalse());
     }
 
     @Test
-    @DisplayName("cancel(): un PENDIENTE a 30 min del retiro ya no se cancela (el límite es 30, no la preparación de 20)")
-    void cancelPendienteSigueElLimiteDeCancelacion() {
+    @DisplayName("cancel(): a COMANDADO past the window keeps comandadoAt and credits stay consumed")
+    void cancelComandadoFueraDelLimiteConservaComandadoAt() {
+        Category category = persistCategory(2);
+        Dish dish = persistDish(category, persistMenuSection(), 3);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeAndAdvance(user, dish, 30, OrderEstado.COMANDADO);
+        Order order = orderRepo.findById(placed.id()).orElseThrow();
+        Instant comandadoAt = FIXED_NOW.minus(5, ChronoUnit.MINUTES);
+        order.setComandadoAt(comandadoAt);
+        orderRepo.saveAndFlush(order);
+        entityManager.flush();
+        entityManager.clear();
+
+        orderPlacementService.cancel(user.getId(), placed.id());
+
+        entityManager.flush();
+        entityManager.clear();
+        Order cancelled = orderRepo.findById(placed.id()).orElseThrow();
+        assertThat(cancelled.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(cancelled.getComandadoAt()).isEqualTo(comandadoAt);
+        assertThat(cancelled.getCancelRefunded()).isFalse();
+        assertThat(walletRepo.findByIdForUpdate(user.getId()).orElseThrow().getAvailable()).isEqualTo(8);
+    }
+
+    @Test
+    @DisplayName("cancel(): a PENDIENTE past the window consumes its committed credits (nothing left hanging) and restores stock")
+    void cancelPendienteFueraDelLimiteConsumeLosCreditosComprometidos(ApplicationEvents events) {
         Category category = persistCategory(2);
         Dish dish = persistDish(category, persistMenuSection(), 3);
         User user = persistB2cUser();
         seedWallet(user.getId(), 10);
         OrderDto placed = placeScheduled(user, dish, 30);
+        entityManager.flush();
+        entityManager.clear();
 
-        assertThatThrownBy(() -> orderPlacementService.cancel(user.getId(), placed.id()))
-            .isInstanceOf(BusinessException.class)
-            .hasFieldOrPropertyWithValue("errorCode", "cancel-window-closed");
+        orderPlacementService.cancel(user.getId(), placed.id());
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(3);
+        CreditWallet wallet = walletRepo.findByIdForUpdate(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(8);
+        assertThat(wallet.getCommitted()).isZero();
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).anySatisfy(m -> {
+            assertThat(m.getType()).isEqualTo(MovementType.CONSUME);
+            assertThat(m.getDeltaCommitted()).isEqualTo(-2);
+            assertThat(m.getOrderId()).isEqualTo(placed.id());
+        });
+        Order cancelled = orderRepo.findById(placed.id()).orElseThrow();
+        assertThat(cancelled.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(cancelled.getCancelRefunded()).isFalse();
+        assertThat(events.stream(OrderCancelledEvent.class).toList())
+            .singleElement().satisfies(e -> assertThat(e.refunded()).isFalse());
     }
 
     @Test
-    @DisplayName("list(): cancellable sigue el límite de cancelación; modifiable y pickupTimeChangeable siguen siendo solo de PENDIENTE")
+    @DisplayName("cancel(): a PENDIENTE_PAGO past the window just cancels (nothing was charged), restoring stock")
+    void cancelPendientePagoFueraDelLimiteSoloCancela() {
+        Category category = persistCategory(2);
+        Dish dish = persistDish(category, persistMenuSection(), 3);
+        User user = persistB2cUser();
+        Order order = orderPlacementService.placeAwaitingPayment(user.getId(),
+            singleItemRequest(dish.getId(), PAST_WINDOW_PICKUP));
+        entityManager.flush();
+        entityManager.clear();
+
+        orderPlacementService.cancel(user.getId(), order.getId());
+
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(dishRepo.findById(dish.getId()).orElseThrow().getStockActual()).isEqualTo(3);
+        assertThat(movementRepo.findByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
+        Order cancelled = orderRepo.findById(order.getId()).orElseThrow();
+        assertThat(cancelled.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(cancelled.getCancelReason()).isEqualTo(CancelReason.CUSTOMER);
+    }
+
+    @Test
+    @DisplayName("cancel(): within the window flags cancelRefunded=true and reason CUSTOMER")
+    void cancelDentroDeVentanaMarcaDevuelto(ApplicationEvents events) {
+        Category category = persistCategory(2);
+        Dish dish = persistDish(category, persistMenuSection(), 3);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeScheduled(user, dish, 90);
+
+        orderPlacementService.cancel(user.getId(), placed.id());
+
+        Order cancelled = orderRepo.findById(placed.id()).orElseThrow();
+        assertThat(cancelled.getCancelRefunded()).isTrue();
+        assertThat(cancelled.getCancelReason()).isEqualTo(CancelReason.CUSTOMER);
+        assertThat(events.stream(OrderCancelledEvent.class).toList())
+            .singleElement().satisfies(e -> assertThat(e.refunded()).isTrue());
+    }
+
+    @Test
+    @DisplayName("cancel(): an order of a past day is rejected with order-past-day")
+    void cancelRechazaPedidoDeUnDiaPasado() {
+        Category category = persistCategory(2);
+        Dish dish = persistDish(category, persistMenuSection(), 3);
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 10);
+        OrderDto placed = placeAndAdvance(user, dish, 90, OrderEstado.CONFIRMADO);
+        Order order = orderRepo.findById(placed.id()).orElseThrow();
+        order.setFecha(order.getFecha().minusDays(1));
+        orderRepo.saveAndFlush(order);
+
+        assertThatThrownBy(() -> orderPlacementService.cancel(user.getId(), placed.id()))
+            .isInstanceOf(BusinessException.class)
+            .hasFieldOrPropertyWithValue("errorCode", "order-past-day");
+        assertThat(orderRepo.findById(placed.id()).orElseThrow().getEstado()).isEqualTo(OrderEstado.CONFIRMADO);
+    }
+
+    @Test
+    @DisplayName("closeForPaymentFailure(): reason PAYMENT_FAILED, cancelRefunded=true")
+    void cierrePorFalloDePagoMarcaMotivo() {
+        Category category = persistCategory(2);
+        Dish dish = persistDish(category, persistMenuSection(), 3);
+        User user = persistB2cUser();
+        Order order = orderPlacementService.placeAwaitingPayment(user.getId(),
+            singleItemRequest(dish.getId(), FIXED_NOW.plus(90, ChronoUnit.MINUTES)));
+
+        orderPlacementService.closeForPaymentFailure(order.getId());
+
+        Order closed = orderRepo.findById(order.getId()).orElseThrow();
+        assertThat(closed.getEstado()).isEqualTo(OrderEstado.CANCELADO);
+        assertThat(closed.getCancelReason()).isEqualTo(CancelReason.PAYMENT_FAILED);
+        assertThat(closed.getCancelRefunded()).isTrue();
+    }
+
+    @Test
+    @DisplayName("list(): exposes refundableUntil (pickupAt - cancel limit) and cancelRefunded of cancelled orders")
+    void listExponeRefundableUntilYCancelRefunded() {
+        Category category = persistCategory(2);
+        MenuSection section = persistMenuSection();
+        User user = persistB2cUser();
+        seedWallet(user.getId(), 20);
+        OrderDto active = placeScheduled(user, persistDish(category, section, 3), 90);
+        OrderDto late = placeScheduled(user, persistDish(category, section, 3), 30);
+        orderPlacementService.cancel(user.getId(), late.id());
+
+        List<OrderDto> orders = orderPlacementService.list(user.getId());
+        OrderDto foundActive = orders.stream().filter(o -> o.id().equals(active.id())).findFirst().orElseThrow();
+        OrderDto foundLate = orders.stream().filter(o -> o.id().equals(late.id())).findFirst().orElseThrow();
+
+        assertThat(foundActive.refundableUntil()).isEqualTo(FIXED_NOW.plus(60, ChronoUnit.MINUTES));
+        assertThat(foundActive.cancelRefunded()).isNull();
+        assertThat(foundLate.cancelRefunded()).isFalse();
+    }
+
+    @Test
+    @DisplayName("list(): cancellable sigue hasta la entrega; modifiable y pickupTimeChangeable siguen siendo solo de PENDIENTE")
     void listCancellableConfirmadoPeroNoModificable() {
         Category category = persistCategory(2);
         MenuSection section = persistMenuSection();
@@ -1982,7 +2114,7 @@ class OrderPlacementServiceTest {
             assertThat(find.apply(d).modifiable()).isFalse();
             assertThat(find.apply(d).pickupTimeChangeable()).isFalse();
         }
-        assertThat(find.apply(pastLimit).cancellable()).isFalse();
+        assertThat(find.apply(pastLimit).cancellable()).isTrue();
         assertThat(find.apply(delivered).cancellable()).isFalse();
     }
 
