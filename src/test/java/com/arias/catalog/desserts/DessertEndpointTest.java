@@ -22,6 +22,7 @@ import java.time.Instant;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -197,5 +198,30 @@ class DessertEndpointTest {
         mockMvc.perform(delete(ADMIN + "/1").header(HttpHeaders.AUTHORIZATION, customerAuth))
             .andExpect(status().isForbidden());
         mockMvc.perform(get(AVAILABLE)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("edit and disable never write stock_actual, even over a stale loaded entity")
+    void adminEditsLeaveStockUntouched() throws Exception {
+        long id = create("Budin", 5);
+        em.flush();
+        em.clear();
+        dessertRepo.findById(id).orElseThrow(); // stale copy (stock 5) stays in the persistence context
+        dessertRepo.decrementStock(id);         // a concurrent order took one: real stock is 4
+
+        mockMvc.perform(json(put(ADMIN + "/" + id), adminAuth,
+                "{\"nombre\":\"Budin 2\",\"stockDiarioDefault\":9,\"enabled\":true}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.stockActual").value(4))
+            .andExpect(jsonPath("$.nombre").value("Budin 2"));
+        mockMvc.perform(delete(ADMIN + "/" + id).header(HttpHeaders.AUTHORIZATION, adminAuth))
+            .andExpect(status().isNoContent());
+
+        em.flush();
+        em.clear();
+        Dessert d = dessertRepo.findById(id).orElseThrow();
+        assertThat(d.getStockActual()).isEqualTo(4);
+        assertThat(d.getEnabled()).isFalse();
+        assertThat(d.getStockDiarioDefault()).isEqualTo(9);
     }
 }

@@ -38,28 +38,28 @@ public class DessertService {
         return AdminDessertDto.from(repo.save(dessert));
     }
 
+    /** Targeted UPDATEs: an edit never rewrites {@code stock_actual} unless the request sends it. */
     @Transactional
     public AdminDessertDto update(Long id, UpdateDessertRequest req) {
-        Dessert dessert = find(id);
-        dessert.setNombre(req.nombre().trim());
-        dessert.setDescripcion(trimOrNull(req.descripcion()));
-        dessert.setFotoUrl(trimOrNull(req.fotoUrl()));
-        dessert.setStockDiarioDefault(req.stockDiarioDefault());
+        find(id);
+        repo.updateDetails(id, req.nombre().trim(), trimOrNull(req.descripcion()), trimOrNull(req.fotoUrl()),
+            req.stockDiarioDefault(), req.enabled());
         if (req.stockActual() != null) {
-            dessert.setStockActual(req.stockActual());
+            repo.updateStock(id, req.stockActual());
         }
-        dessert.setEnabled(req.enabled());
-        return AdminDessertDto.from(dessert);
+        return AdminDessertDto.from(find(id));
     }
 
     @Transactional
     public void enable(Long id) {
-        find(id).setEnabled(true);
+        find(id);
+        repo.updateEnabled(id, true);
     }
 
     @Transactional
     public void disable(Long id) {
-        find(id).setEnabled(false);
+        find(id);
+        repo.updateEnabled(id, false);
     }
 
     private Dessert find(Long id) {
