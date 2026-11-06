@@ -1,5 +1,6 @@
 package com.arias.orders;
 
+import com.arias.catalog.desserts.DessertRepository;
 import com.arias.catalog.dishes.DishRepository;
 import com.arias.restaurantconfig.RestaurantConfigRepository;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +26,7 @@ import java.time.LocalTime;
 public class OrdersScheduler {
 
     private final DishRepository dishRepo;
+    private final DessertRepository dessertRepo;
     private final DailyChoiceRepository orderRepo;
     private final RestaurantConfigRepository configRepo;
     private final Clock clock;
@@ -38,6 +40,9 @@ public class OrdersScheduler {
     public void resetDailyStock() {
         int reset = dishRepo.resetAllStock();
         log.info("[CRON] Reset diario de stock — {} platos afectados", reset);
+
+        int dessertsReset = dessertRepo.resetAllStock();
+        log.info("[CRON] Reset diario de stock — {} postres afectados", dessertsReset);
 
         LocalDate today = LocalDate.now(clock);
         int adjusted = dishRepo.adjustStockForScheduledOrders(today);
