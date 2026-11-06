@@ -396,4 +396,46 @@ class TicketRendererTest {
         assertThat(l).allMatch(s -> s.length() <= 48);
         assertThat(String.join("", l)).contains(word);
     }
+
+    // -- loyalty dessert (reward line) ---------------------------------------
+
+    private static Order orderWithDessert(String dessert, OrderItem... items) {
+        Order o = order(null, items);
+        o.addRewardItem(com.arias.orders.OrderRewardItem.builder().dessertNombre(dessert).build());
+        return o;
+    }
+
+    @Test
+    @DisplayName("the COCINA ticket prints the gift dessert as a clearly marked line")
+    void printsRewardDessertOnCocina() {
+        List<String> l = lines(renderer.render(orderWithDessert("Flan", item("Milanesa", null)), DishStation.COCINA));
+
+        assertThat(l).contains("1x POSTRE DE REGALO: Flan");
+        assertThat(l).contains("1x Milanesa");
+    }
+
+    @Test
+    @DisplayName("the PARRILLA ticket does not repeat the gift dessert")
+    void rewardDessertNotOnParrilla() {
+        List<String> l = lines(renderer.render(
+            orderWithDessert("Flan", item("Bife", null, null, DishStation.PARRILLA)), DishStation.PARRILLA));
+
+        assertThat(l).noneMatch(s -> s.contains("POSTRE DE REGALO"));
+    }
+
+    @Test
+    @DisplayName("an order without a gift dessert prints no dessert line")
+    void noRewardNoLine() {
+        List<String> l = lines(renderer.render(order(null, item("Milanesa", null)), DishStation.COCINA));
+
+        assertThat(l).noneMatch(s -> s.contains("POSTRE"));
+    }
+
+    @Test
+    @DisplayName("the gift dessert does not count as a plate in the footer")
+    void rewardNotCountedAsPlate() {
+        List<String> l = lines(renderer.render(orderWithDessert("Flan", item("Milanesa", null)), DishStation.COCINA));
+
+        assertThat(l).anyMatch(s -> s.contains("1 plato · fin del pedido 123"));
+    }
 }

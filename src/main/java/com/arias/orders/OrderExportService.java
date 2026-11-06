@@ -182,6 +182,15 @@ public class OrderExportService {
                     row.createCell(4).setCellValue(order.getNotas() != null ? order.getNotas() : "");
                     itemCount++;
                 }
+                for (OrderRewardItem reward : order.getRewardItems()) {
+                    // The gift dessert is listed for the kitchen but is not a plate: it stays out of the total.
+                    Row row = sheet.createRow(rowNum++);
+                    row.createCell(0).setCellValue(pickupTime.toString());
+                    row.createCell(1).setCellValue(customer);
+                    row.createCell(2).setCellValue("POSTRE DE REGALO: " + reward.getDessertNombre());
+                    row.createCell(3).setCellValue("");
+                    row.createCell(4).setCellValue("");
+                }
             }
 
             rowNum++;

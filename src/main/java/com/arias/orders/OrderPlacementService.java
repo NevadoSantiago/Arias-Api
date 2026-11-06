@@ -12,6 +12,7 @@ import com.arias.orders.notifications.OrderCancelledEvent;
 import com.arias.orders.notifications.OrderUnpaidCancelledEvent;
 import com.arias.payments.CreditPurchaseRepository;
 import com.arias.payments.PurchaseType;
+import com.arias.loyalty.LoyaltyService;
 import com.arias.printing.PrintJobService;
 import com.arias.restaurantconfig.RestaurantConfigRepository;
 import com.arias.users.User;
@@ -92,6 +93,7 @@ public class OrderPlacementService {
     private final RestaurantConfigRepository restaurantConfigRepo;
     private final CreditPurchaseRepository creditPurchaseRepo;
     private final PrintJobService printJobService;
+    private final LoyaltyService loyaltyService;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
 
@@ -105,6 +107,7 @@ public class OrderPlacementService {
         User user = findUserAndAssertCanSpend(userId);
         Order order = buildValidatedOrder(user, req, OrderEstado.PENDIENTE);
         Order saved = orderRepo.save(order);
+        redeemRewardDessert(saved, req);
 
         // Si el saldo no alcanza, CreditLedgerService.commit lanza
         // insufficient-credits DENTRO de esta misma transacción — Spring
@@ -143,6 +146,7 @@ public class OrderPlacementService {
         User user = findUserAndAssertCanSpend(userId);
         Order order = buildValidatedOrder(user, req, OrderEstado.PENDIENTE_PAGO);
         Order saved = orderRepo.save(order);
+        redeemRewardDessert(saved, req);
 
         // Pago parcial (unidad B13, pedido del usuario 2026-09-29): los
         // almuerzos disponibles se usan primero y Mercado Pago cobra solo el
@@ -500,6 +504,8 @@ public class OrderPlacementService {
         order.setCancelRefunded(refunded);
         // A cancelled order must never print: drop the tickets nobody claimed yet.
         printJobService.cancelPending(order.getId());
+        // The gift dessert goes back to stock and its reward is returned to the customer (idempotent).
+        loyaltyService.returnDessert(order);
 
         if (teniaCreditosComprometidos || teniaCreditosConsumidos) {
             // Publicado DENTRO de la transacción — OrderNotificationScheduler
@@ -510,6 +516,13 @@ public class OrderPlacementService {
             eventPublisher.publishEvent(new OrderCancelledEvent(
                 order.getId(), userId, user.getEmail(), displayName(user),
                 order.getPickupAt(), order.getCreditTotal(), refunded));
+        }
+    }
+
+    /** Redeems the optional loyalty dessert on the saved order (gift line, no credits); see {@link LoyaltyService#redeemDessert}. */
+    private void redeemRewardDessert(Order saved, PlaceOrderV2Request req) {
+        if (req.rewardDessertId() != null) {
+            loyaltyService.redeemDessert(saved, req.rewardDessertId());
         }
     }
 

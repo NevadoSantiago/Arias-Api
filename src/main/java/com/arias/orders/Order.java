@@ -86,6 +86,15 @@ public class Order {
     @Builder.Default
     private List<OrderItem> items = new ArrayList<>();
 
+    /**
+     * Loyalty reward lines (the gift dessert). No orphan removal: the line of a cancelled order stays as
+     * history, the reward is returned instead.
+     */
+    @OneToMany(mappedBy = "order", cascade = {CascadeType.PERSIST, CascadeType.MERGE}, fetch = FetchType.LAZY)
+    @org.hibernate.annotations.BatchSize(size = 50)
+    @Builder.Default
+    private List<OrderRewardItem> rewardItems = new ArrayList<>();
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -126,6 +135,12 @@ public class Order {
      */
     @Column(name = "reminder_sent_at")
     private Instant reminderSentAt;
+
+    /** Adds a reward line (the gift dessert) to this order, keeping both sides of the relation. */
+    public void addRewardItem(OrderRewardItem item) {
+        item.setOrder(this);
+        rewardItems.add(item);
+    }
 
     /** Asocia el ítem a este pedido y lo agrega a la colección — mantiene ambos lados de la relación. */
     public void addItem(OrderItem item) {

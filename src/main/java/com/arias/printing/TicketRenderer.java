@@ -3,6 +3,7 @@ package com.arias.printing;
 import com.arias.catalog.dishes.DishStation;
 import com.arias.orders.Order;
 import com.arias.orders.OrderItem;
+import com.arias.orders.OrderRewardItem;
 import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayOutputStream;
@@ -99,6 +100,18 @@ public class TicketRenderer {
             if (g.note != null) {
                 write(out, BOLD_ON);
                 wrapped(out, INDENT + "NOTA: ", INDENT + "      ", g.note);
+                write(out, BOLD_OFF);
+            }
+        }
+
+        // Loyalty gift: one clearly marked extra line, only on the COCINA ticket (which every order prints).
+        if (station == DishStation.COCINA) {
+            for (OrderRewardItem reward : order.getRewardItems()) {
+                line(out, "");
+                write(out, BOLD_ON);
+                write(out, SIZE_HEIGHT);
+                wrapped(out, "1x POSTRE DE REGALO: ", INDENT, clean(reward.getDessertNombre()));
+                write(out, SIZE_NORMAL);
                 write(out, BOLD_OFF);
             }
         }

@@ -51,7 +51,9 @@ public record OrderDto(
     /** Last instant to cancel with refund: {@code pickupAt - cancel_limit_minutes}. */
     Instant refundableUntil,
     /** For cancelled orders: whether the lunches went back to the balance. {@code null} otherwise. */
-    Boolean cancelRefunded
+    Boolean cancelRefunded,
+    /** Loyalty gift lines (the redeemed dessert); empty when none. */
+    List<RewardItemDto> rewardItems
 ) {
     public static OrderDto from(Order order, boolean cancellable, boolean modifiable, boolean pickupTimeChangeable,
                                 boolean paidWithMercadoPago, Instant refundableUntil) {
@@ -69,7 +71,8 @@ public record OrderDto(
             paidWithMercadoPago,
             order.getCreditsFromBalance(),
             refundableUntil,
-            order.getCancelRefunded()
+            order.getCancelRefunded(),
+            order.getRewardItems().stream().map(RewardItemDto::from).toList()
         );
     }
 }

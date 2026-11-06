@@ -101,7 +101,9 @@ public record AdminOrderDto(
         /** NONE | QUEUED | PRINTED | FAILED | EXPIRED, aggregated over the order latest comanda jobs. */
         PrintStatus printStatus,
         /** When the comanda finished printing; only set when printStatus is PRINTED. */
-        Instant printedAt
+        Instant printedAt,
+        /** Loyalty gift lines (the redeemed dessert) to hand over with the order; empty when none. */
+        List<RewardItemDto> rewardItems
     ) {
         public static PickupOrderDto from(Order order) {
             return from(order, PrintSummary.NONE);
@@ -118,7 +120,8 @@ public record AdminOrderDto(
                 order.getComandadoAt(),
                 order.getDeliveredAt(),
                 print.status(),
-                print.printedAt()
+                print.printedAt(),
+                order.getRewardItems().stream().map(RewardItemDto::from).toList()
             );
         }
     }
@@ -136,7 +139,8 @@ public record AdminOrderDto(
         Instant comandadoAt,
         Instant cancelledAt,
         Boolean cancelRefunded,
-        CancelReason cancelReason
+        CancelReason cancelReason,
+        List<RewardItemDto> rewardItems
     ) {
         public static CancelledOrderDto from(Order order) {
             return new CancelledOrderDto(
@@ -148,7 +152,8 @@ public record AdminOrderDto(
                 order.getComandadoAt(),
                 order.getCancelledAt(),
                 order.getCancelRefunded(),
-                order.getCancelReason()
+                order.getCancelReason(),
+                order.getRewardItems().stream().map(RewardItemDto::from).toList()
             );
         }
     }

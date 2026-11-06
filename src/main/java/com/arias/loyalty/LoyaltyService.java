@@ -1,9 +1,13 @@
 package com.arias.loyalty;
 
 import com.arias.credits.discount.AccountDiscount;
+import com.arias.catalog.desserts.Dessert;
+import com.arias.catalog.desserts.DessertRepository;
+import com.arias.common.exception.BusinessException;
 import com.arias.credits.discount.AccountDiscountService;
 import com.arias.orders.Order;
 import com.arias.orders.OrderRepository;
+import com.arias.orders.OrderRewardItem;
 import com.arias.users.User;
 import com.arias.users.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +45,7 @@ public class LoyaltyService {
     private final UserRepository userRepo;
     private final AccountDiscountService discountService;
     private final LoyaltyLock lock;
+    private final DessertRepository dessertRepo;
     private final Clock clock;
 
     public boolean isEnabled() {
@@ -99,6 +104,58 @@ public class LoyaltyService {
             .map(r -> new LoyaltyDto.PendingDessertDto(r.getId(), r.getExpiresAt()))
             .orElse(null);
         return new LoyaltyDto(true, cycle, waiting, milestones, pending);
+    }
+
+    /**
+     * Redeems the user's pending dessert reward (the one expiring first) on a freshly saved order as a
+     * gift line: no credits are involved. Runs under the per-user loyalty lock; any failure leaves
+     * the reward and the dessert stock untouched (the caller's transaction rolls back).
+     *
+     * @throws BusinessException 409 {@code loyalty-disabled}, 409 {@code no-pending-dessert},
+     *     404 {@code dessert-not-found}, 409 {@code dessert-out-of-stock}
+     */
+    @Transactional
+    public void redeemDessert(Order order, Long dessertId) {
+        if (!props.enabled()) {
+            throw BusinessException.conflict("loyalty-disabled", "La línea de beneficios no está disponible");
+        }
+        Long userId = order.getUser().getId();
+        Instant now = clock.instant();
+        lock.lock(userId);
+        LoyaltyReward reward = rewardRepo.findPendingDessert(userId, now)
+            .orElseThrow(() -> BusinessException.conflict("no-pending-dessert",
+                "No tenés un postre de regalo disponible"));
+        Dessert dessert = dessertRepo.findById(dessertId)
+            .filter(d -> Boolean.TRUE.equals(d.getEnabled()) && d.getDeletedAt() == null)
+            .orElseThrow(() -> BusinessException.notFound("dessert-not-found", "Postre no encontrado"));
+        if (dessertRepo.decrementStock(dessert.getId()) == 0) {
+            throw BusinessException.conflict("dessert-out-of-stock", "Se agotó el stock de " + dessert.getNombre());
+        }
+        reward.setUsedAt(now);
+        reward.setUsedOrderId(order.getId());
+        order.addRewardItem(OrderRewardItem.builder()
+            .reward(reward).dessert(dessert).dessertNombre(dessert.getNombre()).build());
+    }
+
+    /**
+     * Gives the dessert of a closed order back: stock +1 and the reward is returned (usable again until it
+     * expires; past its expiry it simply shows as expired). Idempotent: only a reward still held by this
+     * order is returned. The history line of the order stays.
+     */
+    @Transactional
+    public void returnDessert(Order order) {
+        if (order.getRewardItems().isEmpty()) {
+            return;
+        }
+        lock.lock(order.getUser().getId());
+        for (OrderRewardItem item : order.getRewardItems()) {
+            LoyaltyReward reward = item.getReward();
+            if (order.getId().equals(reward.getUsedOrderId())) {
+                dessertRepo.incrementStock(item.getDessert().getId());
+                reward.setUsedAt(null);
+                reward.setUsedOrderId(null);
+            }
+        }
     }
 
     private LoyaltyDto.MilestoneDto milestoneDto(LoyaltyMilestone m, LoyaltyReward reward, Instant now) {

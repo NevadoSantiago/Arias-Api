@@ -256,4 +256,31 @@ class PrintJobFlowTest {
 
         assertThat(jobRepo.count()).isEqualTo(before);
     }
+
+    @Autowired private com.arias.catalog.desserts.DessertRepository dessertRepo;
+    @Autowired private com.arias.loyalty.LoyaltyCycleRepository cycleRepo;
+    @Autowired private com.arias.loyalty.LoyaltyRewardRepository rewardRepo;
+
+    @Test
+    @DisplayName("the gift dessert is printed on the COCINA tickets only, never on PARRILLA")
+    void rewardDessertOnCocinaJobOnly() {
+        Order o = confirmedOrder(dish("Fideos", DishStation.COCINA), dish("Bife", DishStation.PARRILLA));
+        var flan = com.arias.loyalty.LoyaltyTestSupport.dessert(dessertRepo, "Flan casero", 5);
+        var reward = com.arias.loyalty.LoyaltyTestSupport.dessertReward(cycleRepo, rewardRepo, user,
+            FIXED_NOW.minusSeconds(60), FIXED_NOW.plusSeconds(86400));
+        o.addRewardItem(com.arias.orders.OrderRewardItem.builder()
+            .reward(reward).dessert(flan).dessertNombre("Flan casero").build());
+        orderRepo.saveAndFlush(o);
+
+        kitchen.markComandado(List.of(o.getId()));
+
+        for (PrintJob j : jobRepo.findByOrderId(o.getId())) {
+            String text = new String(j.getData(), java.nio.charset.Charset.forName("IBM850"));
+            if (j.getStation() == DishStation.COCINA) {
+                assertThat(text).contains("1x POSTRE DE REGALO: Flan casero");
+            } else {
+                assertThat(text).doesNotContain("POSTRE DE REGALO");
+            }
+        }
+    }
 }
