@@ -89,10 +89,13 @@ public class CreditLedgerService {
         // en esta rama, así que nunca renuevan — igual que exige la spec.
         // Excepción: el almuerzo de bienvenida vence a las 96 horas de otorgado
         // (no a los días configurados); si la billetera ya tiene fecha, no se toca.
+        // El almuerzo de regalo de la línea de beneficios vence con el resto del saldo, salvo que esa fecha ya
+        // haya pasado (billetera vacía con fecha vieja): ahí toma una nueva, o el barrido lo borraría enseguida.
         if (type == MovementType.WELCOME_GRANT && wallet.getExpiresAt() == null) {
             wallet.setExpiresAt(clock.instant().plus(WELCOME_EXPIRY));
         } else if (type == MovementType.PACK_PURCHASE
-            || (wallet.getExpiresAt() == null && deltaAvailable > 0)) {
+            || (wallet.getExpiresAt() == null && deltaAvailable > 0)
+            || (type == MovementType.LOYALTY_GRANT && !wallet.getExpiresAt().isAfter(clock.instant()))) {
             int expiryDays = restaurantConfigRepo.getSingleton().getCreditExpiryDays();
             wallet.setExpiresAt(clock.instant().plus(expiryDays, ChronoUnit.DAYS));
         }

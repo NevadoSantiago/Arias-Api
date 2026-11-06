@@ -81,6 +81,20 @@ class LoyaltyLunchGrantTest {
     }
 
     @Test
+    @DisplayName("an empty wallet whose expiry already passed gets a fresh expiry, so the gift is not swept at once")
+    void eighteenthLunchRenewsStaleExpiryOfEmptyWallet() {
+        User user = newUser(userRepo);
+        walletRepo.saveAndFlush(CreditWallet.builder().userId(user.getId()).available(0).committed(0)
+            .expiresAt(Instant.now().minus(Duration.ofDays(6))).build());
+
+        service.onDelivered(delivered(orderRepo, user, 18, at("2026-11-02T13:00")));
+
+        CreditWallet wallet = walletRepo.findById(user.getId()).orElseThrow();
+        assertThat(wallet.getAvailable()).isEqualTo(1);
+        assertThat(wallet.getExpiresAt()).isAfter(Instant.now().plus(Duration.ofDays(1)));
+    }
+
+    @Test
     @DisplayName("below 18 lunches nothing is credited")
     void seventeenLunchesGrantNothing() {
         User user = newUser(userRepo);
