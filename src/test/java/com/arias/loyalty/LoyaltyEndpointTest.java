@@ -113,6 +113,18 @@ class LoyaltyEndpointTest {
     }
 
     @Test
+    @DisplayName("the 18th-lunch prize shows as EARNED with no own expiry (it lives and dies with the wallet balance)")
+    void lunchMilestoneEarned() throws Exception {
+        User user = newUser(userRepo);
+        loyaltyService.onDelivered(delivered(orderRepo, user, 18, daysAgo(1)));
+
+        mockMvc.perform(get(URL).header(HttpHeaders.AUTHORIZATION, bearer(user)))
+            .andExpect(jsonPath("$.milestones[1].kind").value("LUNCH"))
+            .andExpect(jsonPath("$.milestones[1].status").value("EARNED"))
+            .andExpect(jsonPath("$.milestones[1].expiresAt").value((Object) null));
+    }
+
+    @Test
     @DisplayName("an unused dessert past its 7 days is EXPIRED and no longer pending")
     void expiredDessert() throws Exception {
         User user = newUser(userRepo);

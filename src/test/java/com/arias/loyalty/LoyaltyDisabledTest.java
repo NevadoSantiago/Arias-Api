@@ -28,6 +28,21 @@ class LoyaltyDisabledTest {
     @Autowired private LoyaltyCycleRepository cycleRepo;
     @Autowired private LoyaltyRewardRepository rewardRepo;
 
+    @Autowired private com.arias.credits.CreditWalletRepository walletRepo;
+    @Autowired private com.arias.loyalty.LoyaltyService loyaltyService;
+
+    @Test
+    @DisplayName("an 18-lunch order credits nothing to the wallet while disabled")
+    void noLunchGrantWhenDisabled() {
+        User user = newUser(userRepo);
+        Order o = LoyaltyTestSupport.delivered(orderRepo, user, 18, java.time.Instant.now());
+
+        loyaltyService.onDelivered(o);
+
+        assertThat(walletRepo.findById(user.getId())).isEmpty();
+        assertThat(rewardRepo.findByUserIdOrderByMilestoneAsc(user.getId())).isEmpty();
+    }
+
     @Test
     @DisplayName("markEntregado() creates no cycle and grants nothing while disabled")
     void noAccrualWhenDisabled() {

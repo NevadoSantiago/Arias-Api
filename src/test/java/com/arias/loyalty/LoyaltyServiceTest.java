@@ -173,17 +173,17 @@ class LoyaltyServiceTest {
     }
 
     @Test
-    @DisplayName("the 24th lunch grants a 10% LOYALTY discount; the 18th grants nothing yet")
+    @DisplayName("the 24th lunch grants a 10% LOYALTY discount on top of the earlier prizes")
     void twentyFourthLunchGrantsDiscount() {
         User user = newUser(userRepo);
         service.onDelivered(delivered(orderRepo, user, 18, at("2026-11-02T13:00")));
-        assertThat(rewards(user)).extracting(LoyaltyReward::getMilestone).containsExactly(6);
+        assertThat(rewards(user)).extracting(LoyaltyReward::getMilestone).containsExactly(6, 18);
 
         Instant at24 = at("2026-11-05T13:00");
         service.onDelivered(delivered(orderRepo, user, 6, at24));
 
         assertThat(rewards(user)).extracting(LoyaltyReward::getKind)
-            .containsExactly(LoyaltyRewardKind.DESSERT, LoyaltyRewardKind.DISCOUNT);
+            .containsExactly(LoyaltyRewardKind.DESSERT, LoyaltyRewardKind.LUNCH, LoyaltyRewardKind.DISCOUNT);
         AccountDiscount d = discountRepo.findByUserId(user.getId()).orElseThrow();
         assertThat(d.getPercent()).isEqualTo(10);
         assertThat(d.getSource()).isEqualTo("LOYALTY");

@@ -15,6 +15,7 @@ package com.arias.credits;
  *       almuerzos van a disponibles en vez de perderse o reabrir el pedido</li>
  *   <li>{@link #ORDER_REFUND} — {@code +N available}, {@code 0 committed}: devuelve créditos ya
  *       consumidos al cancelar un pedido confirmado/comandado dentro del límite</li>
+ *   <li>{@link #LOYALTY_GRANT} — {@code +1 available}</li>
  *   <li>{@link #COMMIT} — {@code -N available, +N committed}</li>
  *   <li>{@link #RELEASE} — {@code +N available, -N committed}</li>
  *   <li>{@link #CONSUME} — {@code -N committed}</li>
@@ -34,6 +35,11 @@ public enum MovementType {
      * {@code +N available}, committed intacto (0).
      */
     ORDER_REFUND,
+    /**
+     * Almuerzo de regalo de la línea de beneficios (18 almuerzos en el ciclo):
+     * {@code +1 available}, committed intacto. Vence con el resto del saldo.
+     */
+    LOYALTY_GRANT,
     COMMIT,
     RELEASE,
     CONSUME,

@@ -1,5 +1,8 @@
 package com.arias.loyalty;
 
+import com.arias.credits.CreditLedgerService;
+import com.arias.credits.MovementRef;
+import com.arias.credits.MovementType;
 import com.arias.credits.discount.AccountDiscount;
 import com.arias.catalog.desserts.Dessert;
 import com.arias.catalog.desserts.DessertRepository;
@@ -36,6 +39,7 @@ public class LoyaltyService {
     static final ZoneId ZONE = ZoneId.of("America/Argentina/Buenos_Aires");
     static final int CYCLE_MONTHS = 2;
     static final Duration REWARD_VALIDITY = Duration.ofDays(7);
+    static final int LUNCH_REWARD_CREDITS = 1;
     static final String DISCOUNT_SOURCE = "LOYALTY";
 
     private final LoyaltyProperties props;
@@ -45,6 +49,7 @@ public class LoyaltyService {
     private final UserRepository userRepo;
     private final AccountDiscountService discountService;
     private final LoyaltyLock lock;
+    private final CreditLedgerService ledger;
     private final DessertRepository dessertRepo;
     private final Clock clock;
 
@@ -213,15 +218,22 @@ public class LoyaltyService {
                 discountService.grantReplacing(user, LoyaltyMilestone.DISCOUNT_PERCENT, DISCOUNT_SOURCE, at);
             }
             case LUNCH -> {
-                // Task B4: save the reward row (expires with the wallet balance) and credit the wallet
-                // with the new LOYALTY_GRANT movement. Until then the milestone stays unearned.
+                // No own expiry: the credit lives and dies with the wallet balance. The reward row (unique
+                // per cycle and milestone) is saved first, so a repeat can never credit twice.
+                saveReward(user, cycle, m, at, null);
+                ledger.apply(user.getId(), MovementType.LOYALTY_GRANT, LUNCH_REWARD_CREDITS, 0,
+                    MovementRef.none("Almuerzo de regalo (línea de beneficios)"));
             }
         }
     }
 
     private void saveReward(User user, LoyaltyCycle cycle, LoyaltyMilestone m, Instant at) {
+        saveReward(user, cycle, m, at, at.plus(REWARD_VALIDITY));
+    }
+
+    private void saveReward(User user, LoyaltyCycle cycle, LoyaltyMilestone m, Instant at, Instant expiresAt) {
         rewardRepo.saveAndFlush(LoyaltyReward.builder()
             .user(user).cycle(cycle).milestone(m.lunches()).kind(m.kind())
-            .earnedAt(at).expiresAt(at.plus(REWARD_VALIDITY)).build());
+            .earnedAt(at).expiresAt(expiresAt).build());
     }
 }
