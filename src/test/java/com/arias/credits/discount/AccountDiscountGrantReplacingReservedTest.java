@@ -25,7 +25,7 @@ class AccountDiscountGrantReplacingReservedTest {
     @DisplayName("lower active percent that is reserved keeps reserved_purchase_id when raised")
     void raisedKeepsReservation() {
         AccountDiscountRepository repo = mock(AccountDiscountRepository.class);
-        AccountDiscountService service = new AccountDiscountService(repo, mock(CreditPurchaseRepository.class),
+        AccountDiscountService service = new AccountDiscountService(repo, mock(CreditPurchaseRepository.class), mock(com.arias.loyalty.LoyaltyRewardRepository.class),
             Clock.fixed(NOW, ZoneOffset.UTC));
         User user = User.builder().id(7L).build();
         UUID purchase = UUID.randomUUID();

@@ -1,7 +1,6 @@
 package com.arias.loyalty;
 
 import com.arias.credits.discount.AccountDiscount;
-import com.arias.credits.discount.AccountDiscountRepository;
 import com.arias.credits.discount.AccountDiscountService;
 import com.arias.orders.Order;
 import com.arias.orders.OrderRepository;
@@ -41,7 +40,7 @@ public class LoyaltyService {
     private final OrderRepository orderRepo;
     private final UserRepository userRepo;
     private final AccountDiscountService discountService;
-    private final AccountDiscountRepository discountRepo;
+    private final LoyaltyLock lock;
     private final Clock clock;
 
     public boolean isEnabled() {
@@ -59,6 +58,7 @@ public class LoyaltyService {
             return;
         }
         User user = order.getUser();
+        lock.lock(user.getId());
         Instant at = order.getDeliveredAt();
         rebuildHistoryIfMissing(user);
         LoyaltyCycle cycle = cycleRepo.findContaining(user.getId(), at).orElseGet(() -> openCycle(user, at));
@@ -75,12 +75,11 @@ public class LoyaltyService {
     @Transactional
     public LoyaltyDto view(Long userId) {
         Instant now = clock.instant();
+        lock.lock(userId);
         User user = userRepo.getReferenceById(userId);
-        boolean rebuilt = rebuildHistoryIfMissing(user);
+        rebuildHistoryIfMissing(user);
         Optional<LoyaltyCycle> current = cycleRepo.findContaining(userId, now);
-        if (rebuilt) {
-            current.ifPresent(c -> grantReached(user, c, now));
-        }
+        current.ifPresent(c -> grantReached(user, c, now));
         List<LoyaltyCycle> cycles = cycleRepo.findByUserIdOrderByStartedAtAsc(userId);
         boolean waiting = current.isEmpty() && !cycles.isEmpty();
         Optional<LoyaltyCycle> shown = current.or(() -> cycles.isEmpty()
@@ -91,7 +90,7 @@ public class LoyaltyService {
                 .collect(Collectors.toMap(LoyaltyReward::getMilestone, Function.identity())))
             .orElse(Map.of());
         List<LoyaltyDto.MilestoneDto> milestones = LoyaltyMilestone.ALL.stream()
-            .map(m -> milestoneDto(userId, m, byMilestone.get(m.lunches()), now))
+            .map(m -> milestoneDto(m, byMilestone.get(m.lunches()), now))
             .toList();
         LoyaltyDto.CycleDto cycle = current
             .map(c -> new LoyaltyDto.CycleDto(c.getStartedAt(), c.getEndsAt(), lunchesIn(c)))
@@ -102,28 +101,14 @@ public class LoyaltyService {
         return new LoyaltyDto(true, cycle, waiting, milestones, pending);
     }
 
-    private LoyaltyDto.MilestoneDto milestoneDto(Long userId, LoyaltyMilestone m, LoyaltyReward reward, Instant now) {
+    private LoyaltyDto.MilestoneDto milestoneDto(LoyaltyMilestone m, LoyaltyReward reward, Instant now) {
         Integer percent = m.kind() == LoyaltyRewardKind.DISCOUNT ? LoyaltyMilestone.DISCOUNT_PERCENT : null;
         LoyaltyDto.MilestoneStatus status = reward == null ? LoyaltyDto.MilestoneStatus.LOCKED
-            : isUsed(userId, reward) ? LoyaltyDto.MilestoneStatus.USED
+            : reward.getUsedAt() != null ? LoyaltyDto.MilestoneStatus.USED
             : reward.getExpiresAt() != null && !now.isBefore(reward.getExpiresAt()) ? LoyaltyDto.MilestoneStatus.EXPIRED
             : LoyaltyDto.MilestoneStatus.EARNED;
         return new LoyaltyDto.MilestoneDto(m.lunches(), m.kind(), percent, status,
             reward == null ? null : reward.getExpiresAt());
-    }
-
-    /** Dessert and lunch record their own use; the discount is used when its account discount row was consumed. */
-    private boolean isUsed(Long userId, LoyaltyReward reward) {
-        if (reward.getUsedAt() != null) {
-            return true;
-        }
-        if (reward.getKind() != LoyaltyRewardKind.DISCOUNT) {
-            return false;
-        }
-        return discountRepo.findByUserId(userId)
-            .filter(d -> DISCOUNT_SOURCE.equals(d.getSource()) && d.getConsumedAt() != null)
-            .filter(d -> !d.getGrantedAt().isBefore(reward.getEarnedAt()))
-            .isPresent();
     }
 
     /**

@@ -3,9 +3,9 @@ package com.arias.orders;
 import com.arias.common.exception.BusinessException;
 import com.arias.credits.CreditLedgerService;
 import com.arias.credits.MovementRef;
-import com.arias.loyalty.LoyaltyService;
 import com.arias.printing.PrintJobService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,7 +29,7 @@ public class OrderKitchenService {
     private final OrderRepository orderRepository;
     private final CreditLedgerService creditLedgerService;
     private final PrintJobService printJobService;
-    private final LoyaltyService loyaltyService;
+    private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
 
     /**
@@ -120,7 +120,7 @@ public class OrderKitchenService {
             o.setEstado(OrderEstado.ENTREGADO);
             o.setDeliveredAt(now);
         });
-        orders.forEach(loyaltyService::onDelivered);
+        eventPublisher.publishEvent(new OrderDeliveredEvent(orders.stream().map(Order::getId).toList()));
         return orders;
     }
 

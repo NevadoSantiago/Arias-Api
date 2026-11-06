@@ -1,5 +1,7 @@
 package com.arias.credits.discount;
 
+import com.arias.loyalty.LoyaltyRewardRepository;
+import com.arias.loyalty.LoyaltyRewardKind;
 import com.arias.payments.CreditPurchaseRepository;
 import com.arias.payments.CreditPurchaseStatus;
 import com.arias.users.User;
@@ -24,6 +26,9 @@ public class AccountDiscountService {
     /** How long a granted discount stays usable. */
     public static final Duration VALIDITY = Duration.ofDays(7);
 
+    /** Source label of a discount backed by the loyalty line (its reward is marked used when consumed). */
+    private static final String LOYALTY_SOURCE = "LOYALTY";
+
     /** A discounted Mercado Pago preference is payable only this long. */
     public static final Duration DISCOUNT_HOLD = Duration.ofMinutes(30);
     /** Extra time before a held discount is considered free again. */
@@ -31,6 +36,7 @@ public class AccountDiscountService {
 
     private final AccountDiscountRepository repo;
     private final CreditPurchaseRepository purchaseRepo;
+    private final LoyaltyRewardRepository loyaltyRewardRepo;
     private final Clock clock;
 
     /**
@@ -69,10 +75,12 @@ public class AccountDiscountService {
                 d.setConsumedAt(null);
                 d.setConsumedPurchaseId(null);
             } else if (percent == d.getPercent()) {
+                d.setSource(source);
                 if (expiresAt.isAfter(d.getExpiresAt())) {
                     d.setExpiresAt(expiresAt);
                 }
             } else if (percent > d.getPercent()) {
+                d.setGrantedAt(now);
                 d.setPercent(percent);
                 d.setSource(source);
                 d.setExpiresAt(expiresAt);
@@ -142,6 +150,10 @@ public class AccountDiscountService {
             }
             d.setConsumedAt(clock.instant());
             d.setConsumedPurchaseId(purchaseId);
+            if (LOYALTY_SOURCE.equals(d.getSource())) {
+                loyaltyRewardRepo.findFirstByUserIdAndKindAndUsedAtIsNullOrderByEarnedAtDescIdDesc(
+                    userId, LoyaltyRewardKind.DISCOUNT).ifPresent(r -> r.setUsedAt(d.getConsumedAt()));
+            }
             d.setReservedPurchaseId(null);
             return Optional.empty();
         });

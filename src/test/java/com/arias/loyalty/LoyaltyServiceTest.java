@@ -191,12 +191,16 @@ class LoyaltyServiceTest {
     }
 
     @Test
-    @DisplayName("markEntregado() accrues loyalty in the same transaction")
-    void kitchenHook() {
+    @DisplayName("view() grants a reached milestone that was never granted (self-heal of a missed accrual)")
+    void viewSelfHeals() {
         User user = newUser(userRepo);
-        Order o = LoyaltyTestSupport.order(orderRepo, user, 6, OrderEstado.COMANDADO, null);
+        Instant start = Instant.now().minus(Duration.ofDays(3));
+        delivered(orderRepo, user, 7, start);
+        cycleRepo.saveAndFlush(LoyaltyCycle.builder().user(user).startedAt(start)
+            .endsAt(start.plus(Duration.ofDays(60))).build());
+        assertThat(rewards(user)).isEmpty();
 
-        kitchen.markEntregado(List.of(o.getId()));
+        service.view(user.getId());
 
         assertThat(rewards(user)).singleElement().satisfies(r -> assertThat(r.getMilestone()).isEqualTo(6));
     }

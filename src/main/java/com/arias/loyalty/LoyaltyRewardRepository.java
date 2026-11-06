@@ -28,4 +28,9 @@ public interface LoyaltyRewardRepository extends JpaRepository<LoyaltyReward, Lo
     default Optional<LoyaltyReward> findPendingDessert(Long userId, Instant now) {
         return findPendingDesserts(userId, now).stream().findFirst();
     }
+
+
+    /** The user's most recently earned reward of {@code kind} that was not used yet. */
+    Optional<LoyaltyReward> findFirstByUserIdAndKindAndUsedAtIsNullOrderByEarnedAtDescIdDesc(
+        Long userId, LoyaltyRewardKind kind);
 }

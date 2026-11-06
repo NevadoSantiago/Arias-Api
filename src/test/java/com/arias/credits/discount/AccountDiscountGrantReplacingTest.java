@@ -116,6 +116,7 @@ class AccountDiscountGrantReplacingTest {
         service.grantReplacing(user, 10, "LOYALTY", NOW);
 
         assertThat(reload(user).getExpiresAt()).isEqualTo(NOW.plus(SEVEN_DAYS));
+        assertThat(reload(user).getSource()).isEqualTo("LOYALTY");
 
         User other = newUser();
         Instant later = NOW.plus(Duration.ofDays(9));
@@ -124,6 +125,7 @@ class AccountDiscountGrantReplacingTest {
         service.grantReplacing(other, 10, "LOYALTY", NOW);
 
         assertThat(reload(other).getExpiresAt()).isEqualTo(later);
+        assertThat(reload(other).getSource()).isEqualTo("LOYALTY");
     }
 
     @Test
@@ -137,6 +139,7 @@ class AccountDiscountGrantReplacingTest {
         AccountDiscount d = reload(user);
         assertThat(d.getPercent()).isEqualTo(10);
         assertThat(d.getSource()).isEqualTo("LOYALTY");
+        assertThat(d.getGrantedAt()).isEqualTo(NOW);
         assertThat(d.getExpiresAt()).isEqualTo(NOW.plus(SEVEN_DAYS));
     }
 }
