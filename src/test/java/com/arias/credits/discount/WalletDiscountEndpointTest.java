@@ -74,7 +74,8 @@ class WalletDiscountEndpointTest {
         mockMvc.perform(get(URL).header(HttpHeaders.AUTHORIZATION, bearer(user)))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.discount.percent").value(10))
-            .andExpect(jsonPath("$.discount.expiresAt").exists());
+            .andExpect(jsonPath("$.discount.expiresAt").exists())
+            .andExpect(jsonPath("$.discount.source").value("test"));
     }
 
     @Test

@@ -43,6 +43,24 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
         """)
     List<Order> findOrdersForReviewCampaign(@Param("fecha") LocalDate fecha);
 
+    /** Lunches picked up by a B2C customer in {@code [from, to)}: the sum of the credit totals of their ENTREGADO orders. */
+    @Query("""
+        SELECT COALESCE(SUM(o.creditTotal), 0) FROM Order o
+        WHERE o.user.id = :userId AND o.company IS NULL
+          AND o.estado = com.arias.orders.OrderEstado.ENTREGADO
+          AND o.deliveredAt >= :from AND o.deliveredAt < :to
+        """)
+    int sumLoyaltyLunches(@Param("userId") Long userId, @Param("from") Instant from, @Param("to") Instant to);
+
+    /** Delivered B2C orders of a customer, oldest delivery first. */
+    @Query("""
+        SELECT o FROM Order o
+        WHERE o.user.id = :userId AND o.company IS NULL
+          AND o.estado = com.arias.orders.OrderEstado.ENTREGADO AND o.deliveredAt IS NOT NULL
+        ORDER BY o.deliveredAt ASC, o.id ASC
+        """)
+    List<Order> findLoyaltyDeliveries(@Param("userId") Long userId);
+
     /** Locks the given orders ({@code SELECT ... FOR UPDATE}) for the kitchen state transitions. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT o FROM Order o WHERE o.id IN :ids")

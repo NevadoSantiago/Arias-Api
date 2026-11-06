@@ -140,6 +140,10 @@ arias:
   credits:
     welcome-grant-enabled: ${WELCOME_GRANT_ENABLED:true}
 
+  # Linea de beneficios (fidelizacion B2C): apagada por defecto.
+  loyalty:
+    enabled: ${LOYALTY_ENABLED:false}
+
   # Campanas de marketing. La campana diaria de descuento + mail de agradecimiento esta apagada por defecto.
   marketing:
     review-campaign-enabled: ${MARKETING_CAMPAIGN_ENABLED:false}

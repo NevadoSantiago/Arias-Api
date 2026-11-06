@@ -44,6 +44,43 @@ public class AccountDiscountService {
     }
 
     /**
+     * Grants {@code percent}% under the "one pending discount" rule, updating the user's single row in
+     * place (the row is locked while deciding): no row inserts; a consumed or expired row is overwritten;
+     * an active row with a higher percent stays; an equal percent keeps the later expiry; a lower percent
+     * is raised and renewed (a reservation by a pending purchase stays, that purchase keeps its own price).
+     */
+    @Transactional
+    public void grantReplacing(User user, int percent, String source, Instant now) {
+        Instant expiresAt = now.plus(VALIDITY);
+        Optional<AccountDiscount> locked = repo.findByUserIdForUpdate(user.getId());
+        if (locked.isEmpty()) {
+            if (repo.insertIfAbsent(user.getId(), percent, now, expiresAt, source) == 1) {
+                return;
+            }
+            locked = repo.findByUserIdForUpdate(user.getId());
+        }
+        locked.ifPresent(d -> {
+            if (d.getConsumedAt() != null || !now.isBefore(d.getExpiresAt())) {
+                d.setPercent(percent);
+                d.setSource(source);
+                d.setGrantedAt(now);
+                d.setExpiresAt(expiresAt);
+                d.setReservedPurchaseId(null);
+                d.setConsumedAt(null);
+                d.setConsumedPurchaseId(null);
+            } else if (percent == d.getPercent()) {
+                if (expiresAt.isAfter(d.getExpiresAt())) {
+                    d.setExpiresAt(expiresAt);
+                }
+            } else if (percent > d.getPercent()) {
+                d.setPercent(percent);
+                d.setSource(source);
+                d.setExpiresAt(expiresAt);
+            }
+        });
+    }
+
+    /**
      * The discount a new purchase would get at {@code now} (see {@link #isUsable}); hidden
      * during the hold of a PENDING purchase so the app never shows a price the server will not charge.
      */
