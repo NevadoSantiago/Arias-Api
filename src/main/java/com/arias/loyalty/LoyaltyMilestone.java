@@ -7,8 +7,8 @@ import java.util.List;
  * {@link LoyaltyRewardKind} in {@link LoyaltyService}.
  */
 public enum LoyaltyMilestone {
-    DESSERT_AT_6(6, LoyaltyRewardKind.DESSERT),
-    LUNCH_AT_18(18, LoyaltyRewardKind.LUNCH),
+    DESSERT_AT_9(9, LoyaltyRewardKind.DESSERT),
+    LUNCH_AT_15(15, LoyaltyRewardKind.LUNCH),
     DISCOUNT_AT_24(24, LoyaltyRewardKind.DISCOUNT);
 
     /** Percent of the discount prize. */

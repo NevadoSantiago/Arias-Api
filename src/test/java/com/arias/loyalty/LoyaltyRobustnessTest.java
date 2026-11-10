@@ -67,7 +67,7 @@ class LoyaltyRobustnessTest {
     @DisplayName("concurrent views of a customer with history build exactly one cycle and one reward per milestone")
     void concurrentViewsDoNotDuplicate() throws Exception {
         User u = user();
-        delivered(orderRepo, u, 7, Instant.now().minus(Duration.ofDays(2)));
+        delivered(orderRepo, u, 10, Instant.now().minus(Duration.ofDays(2)));
         int threads = 8;
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         CountDownLatch go = new CountDownLatch(1);
@@ -92,7 +92,7 @@ class LoyaltyRobustnessTest {
     @DisplayName("granting is idempotent: calling the delivery hook twice grants the milestone once")
     void grantTwiceIsHarmless() {
         User u = user();
-        Order o = delivered(orderRepo, u, 6, Instant.now().minus(Duration.ofDays(1)));
+        Order o = delivered(orderRepo, u, 9, Instant.now().minus(Duration.ofDays(1)));
 
         service.onDelivered(o);
         service.onDelivered(o);
@@ -105,19 +105,19 @@ class LoyaltyRobustnessTest {
     @DisplayName("markEntregado accrues loyalty after the commit")
     void accruesAfterCommit() {
         User u = user();
-        Order o = LoyaltyTestSupport.order(orderRepo, u, 6, OrderEstado.COMANDADO, null);
+        Order o = LoyaltyTestSupport.order(orderRepo, u, 9, OrderEstado.COMANDADO, null);
 
         kitchen.markEntregado(List.of(o.getId()));
 
         assertThat(rewardRepo.findByUserIdOrderByMilestoneAsc(u.getId()))
-            .singleElement().satisfies(r -> assertThat(r.getMilestone()).isEqualTo(6));
+            .singleElement().satisfies(r -> assertThat(r.getMilestone()).isEqualTo(9));
     }
 
     @Test
     @DisplayName("a loyalty failure never rolls back the kitchen delivery")
     void loyaltyFailureDoesNotBlockDelivery() {
         User u = user();
-        Order o = LoyaltyTestSupport.order(orderRepo, u, 6, OrderEstado.COMANDADO, null);
+        Order o = LoyaltyTestSupport.order(orderRepo, u, 9, OrderEstado.COMANDADO, null);
         Mockito.doThrow(new IllegalStateException("boom")).when(spiedService).onDelivered(Mockito.any());
 
         kitchen.markEntregado(List.of(o.getId()));

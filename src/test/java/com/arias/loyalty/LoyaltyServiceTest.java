@@ -58,22 +58,22 @@ class LoyaltyServiceTest {
     }
 
     @Test
-    @DisplayName("the 6th lunch grants a dessert that expires 7 days later")
-    void sixthLunchGrantsDessert() {
+    @DisplayName("the 9th lunch grants a dessert that expires 7 days later")
+    void ninthLunchGrantsDessert() {
         User user = newUser(userRepo);
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 8; i++) {
             service.onDelivered(delivered(orderRepo, user, 1, at("2026-11-02T13:00").plus(Duration.ofDays(i))));
         }
         assertThat(rewards(user)).isEmpty();
 
-        Instant sixth = at("2026-11-07T13:00");
-        service.onDelivered(delivered(orderRepo, user, 1, sixth));
+        Instant ninth = at("2026-11-10T13:00");
+        service.onDelivered(delivered(orderRepo, user, 1, ninth));
 
         assertThat(rewards(user)).singleElement().satisfies(r -> {
-            assertThat(r.getMilestone()).isEqualTo(6);
+            assertThat(r.getMilestone()).isEqualTo(9);
             assertThat(r.getKind()).isEqualTo(LoyaltyRewardKind.DESSERT);
-            assertThat(r.getEarnedAt()).isEqualTo(sixth);
-            assertThat(r.getExpiresAt()).isEqualTo(sixth.plus(Duration.ofDays(7)));
+            assertThat(r.getEarnedAt()).isEqualTo(ninth);
+            assertThat(r.getExpiresAt()).isEqualTo(ninth.plus(Duration.ofDays(7)));
             assertThat(r.getUsedAt()).isNull();
         });
     }
@@ -82,33 +82,33 @@ class LoyaltyServiceTest {
     @DisplayName("an order counts as many lunches as its credit total")
     void multiLunchOrderCountsCreditTotal() {
         User user = newUser(userRepo);
-        service.onDelivered(delivered(orderRepo, user, 4, at("2026-11-02T13:00")));
+        service.onDelivered(delivered(orderRepo, user, 6, at("2026-11-02T13:00")));
         assertThat(rewards(user)).isEmpty();
 
         service.onDelivered(delivered(orderRepo, user, 3, at("2026-11-03T13:00")));
 
-        assertThat(rewards(user)).singleElement().satisfies(r -> assertThat(r.getMilestone()).isEqualTo(6));
+        assertThat(rewards(user)).singleElement().satisfies(r -> assertThat(r.getMilestone()).isEqualTo(9));
     }
 
     @Test
     @DisplayName("undoing a delivery and delivering again never grants twice, and the reward is not revoked")
     void undoAndRedeliverDoesNotDoubleGrant() {
         User user = newUser(userRepo);
-        service.onDelivered(delivered(orderRepo, user, 5, at("2026-11-02T13:00")));
-        Order sixth = delivered(orderRepo, user, 1, at("2026-11-03T13:00"));
-        service.onDelivered(sixth);
+        service.onDelivered(delivered(orderRepo, user, 8, at("2026-11-02T13:00")));
+        Order ninth = delivered(orderRepo, user, 1, at("2026-11-03T13:00"));
+        service.onDelivered(ninth);
         assertThat(rewards(user)).hasSize(1);
 
-        sixth.setEstado(OrderEstado.COMANDADO);
-        sixth.setDeliveredAt(null);
-        orderRepo.saveAndFlush(sixth);
-        assertThat(service.lunchesIn(cycleRepo.findByUserIdOrderByStartedAtAsc(user.getId()).get(0))).isEqualTo(5);
+        ninth.setEstado(OrderEstado.COMANDADO);
+        ninth.setDeliveredAt(null);
+        orderRepo.saveAndFlush(ninth);
+        assertThat(service.lunchesIn(cycleRepo.findByUserIdOrderByStartedAtAsc(user.getId()).get(0))).isEqualTo(8);
         assertThat(rewards(user)).hasSize(1);
 
-        sixth.setEstado(OrderEstado.ENTREGADO);
-        sixth.setDeliveredAt(at("2026-11-04T13:00"));
-        orderRepo.saveAndFlush(sixth);
-        service.onDelivered(sixth);
+        ninth.setEstado(OrderEstado.ENTREGADO);
+        ninth.setDeliveredAt(at("2026-11-04T13:00"));
+        orderRepo.saveAndFlush(ninth);
+        service.onDelivered(ninth);
 
         assertThat(rewards(user)).hasSize(1);
     }
@@ -144,8 +144,8 @@ class LoyaltyServiceTest {
     @DisplayName("history rebuild: cycles come from past deliveries and only the current one grants")
     void historyRebuildGrantsOnlyCurrentCycle() {
         User user = newUser(userRepo);
-        // Cycle 1: 2026-09-01 13:00 .. 2026-11-01 13:00 (7 lunches: would have earned a dessert).
-        delivered(orderRepo, user, 7, at("2026-09-01T13:00"));
+        // Cycle 1: 2026-09-01 13:00 .. 2026-11-01 13:00 (10 lunches: would have earned a dessert).
+        delivered(orderRepo, user, 10, at("2026-09-01T13:00"));
         // Cycle 2 starts at the first delivery at/after the end of cycle 1: 3 lunches so far.
         delivered(orderRepo, user, 1, at("2026-11-03T13:00"));
         Order last = delivered(orderRepo, user, 2, at("2026-11-04T13:00"));
@@ -164,23 +164,23 @@ class LoyaltyServiceTest {
     @DisplayName("history rebuild grants the milestones the current cycle already reached")
     void historyRebuildGrantsReachedMilestones() {
         User user = newUser(userRepo);
-        delivered(orderRepo, user, 4, at("2026-11-02T13:00"));
+        delivered(orderRepo, user, 6, at("2026-11-02T13:00"));
         Order last = delivered(orderRepo, user, 3, at("2026-11-04T13:00"));
 
         service.onDelivered(last);
 
-        assertThat(rewards(user)).singleElement().satisfies(r -> assertThat(r.getMilestone()).isEqualTo(6));
+        assertThat(rewards(user)).singleElement().satisfies(r -> assertThat(r.getMilestone()).isEqualTo(9));
     }
 
     @Test
     @DisplayName("the 24th lunch grants a 10% LOYALTY discount on top of the earlier prizes")
     void twentyFourthLunchGrantsDiscount() {
         User user = newUser(userRepo);
-        service.onDelivered(delivered(orderRepo, user, 18, at("2026-11-02T13:00")));
-        assertThat(rewards(user)).extracting(LoyaltyReward::getMilestone).containsExactly(6, 18);
+        service.onDelivered(delivered(orderRepo, user, 15, at("2026-11-02T13:00")));
+        assertThat(rewards(user)).extracting(LoyaltyReward::getMilestone).containsExactly(9, 15);
 
         Instant at24 = at("2026-11-05T13:00");
-        service.onDelivered(delivered(orderRepo, user, 6, at24));
+        service.onDelivered(delivered(orderRepo, user, 9, at24));
 
         assertThat(rewards(user)).extracting(LoyaltyReward::getKind)
             .containsExactly(LoyaltyRewardKind.DESSERT, LoyaltyRewardKind.LUNCH, LoyaltyRewardKind.DISCOUNT);
@@ -195,13 +195,13 @@ class LoyaltyServiceTest {
     void viewSelfHeals() {
         User user = newUser(userRepo);
         Instant start = Instant.now().minus(Duration.ofDays(3));
-        delivered(orderRepo, user, 7, start);
+        delivered(orderRepo, user, 10, start);
         cycleRepo.saveAndFlush(LoyaltyCycle.builder().user(user).startedAt(start)
             .endsAt(start.plus(Duration.ofDays(60))).build());
         assertThat(rewards(user)).isEmpty();
 
         service.view(user.getId());
 
-        assertThat(rewards(user)).singleElement().satisfies(r -> assertThat(r.getMilestone()).isEqualTo(6));
+        assertThat(rewards(user)).singleElement().satisfies(r -> assertThat(r.getMilestone()).isEqualTo(9));
     }
 }

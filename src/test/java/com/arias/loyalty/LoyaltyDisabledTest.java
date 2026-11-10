@@ -32,10 +32,10 @@ class LoyaltyDisabledTest {
     @Autowired private com.arias.loyalty.LoyaltyService loyaltyService;
 
     @Test
-    @DisplayName("an 18-lunch order credits nothing to the wallet while disabled")
+    @DisplayName("a 15-lunch order credits nothing to the wallet while disabled")
     void noLunchGrantWhenDisabled() {
         User user = newUser(userRepo);
-        Order o = LoyaltyTestSupport.delivered(orderRepo, user, 18, java.time.Instant.now());
+        Order o = LoyaltyTestSupport.delivered(orderRepo, user, 15, java.time.Instant.now());
 
         loyaltyService.onDelivered(o);
 
@@ -47,7 +47,7 @@ class LoyaltyDisabledTest {
     @DisplayName("markEntregado() creates no cycle and grants nothing while disabled")
     void noAccrualWhenDisabled() {
         User user = newUser(userRepo);
-        Order o = LoyaltyTestSupport.order(orderRepo, user, 6, OrderEstado.COMANDADO, null);
+        Order o = LoyaltyTestSupport.order(orderRepo, user, 9, OrderEstado.COMANDADO, null);
 
         kitchen.markEntregado(List.of(o.getId()));
 

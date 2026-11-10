@@ -63,7 +63,7 @@ public final class LoyaltyTestSupport {
                                               User user, Instant earnedAt, Instant expiresAt) {
         LoyaltyCycle cycle = cycleRepo.saveAndFlush(LoyaltyCycle.builder().user(user)
             .startedAt(earnedAt.minusSeconds(3600)).endsAt(earnedAt.plusSeconds(60L * 86400)).build());
-        return rewardRepo.saveAndFlush(LoyaltyReward.builder().user(user).cycle(cycle).milestone(6)
+        return rewardRepo.saveAndFlush(LoyaltyReward.builder().user(user).cycle(cycle).milestone(9)
             .kind(LoyaltyRewardKind.DESSERT).earnedAt(earnedAt).expiresAt(expiresAt).build());
     }
 }

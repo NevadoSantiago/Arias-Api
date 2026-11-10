@@ -36,7 +36,7 @@ public enum MovementType {
      */
     ORDER_REFUND,
     /**
-     * Almuerzo de regalo de la línea de beneficios (18 almuerzos en el ciclo):
+     * Almuerzo de regalo de la línea de beneficios (15 almuerzos en el ciclo):
      * {@code +1 available}, committed intacto. Vence con el resto del saldo.
      */
     LOYALTY_GRANT,

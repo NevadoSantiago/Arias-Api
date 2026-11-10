@@ -81,10 +81,10 @@ class LoyaltyEndpointTest {
             .andExpect(jsonPath("$.waiting").value(false))
             .andExpect(jsonPath("$.pendingDessert").value((Object) null))
             .andExpect(jsonPath("$.milestones.length()").value(3))
-            .andExpect(jsonPath("$.milestones[0].lunches").value(6))
+            .andExpect(jsonPath("$.milestones[0].lunches").value(9))
             .andExpect(jsonPath("$.milestones[0].kind").value("DESSERT"))
             .andExpect(jsonPath("$.milestones[0].status").value("LOCKED"))
-            .andExpect(jsonPath("$.milestones[1].lunches").value(18))
+            .andExpect(jsonPath("$.milestones[1].lunches").value(15))
             .andExpect(jsonPath("$.milestones[1].kind").value("LUNCH"))
             .andExpect(jsonPath("$.milestones[2].lunches").value(24))
             .andExpect(jsonPath("$.milestones[2].kind").value("DISCOUNT"))
@@ -95,12 +95,12 @@ class LoyaltyEndpointTest {
     @DisplayName("progress and an earned dessert show up as the pending dessert")
     void progressAndPendingDessert() throws Exception {
         User user = newUser(userRepo);
-        Order o = delivered(orderRepo, user, 6, daysAgo(1));
+        Order o = delivered(orderRepo, user, 9, daysAgo(1));
         loyaltyService.onDelivered(o);
 
         mockMvc.perform(get(URL).header(HttpHeaders.AUTHORIZATION, bearer(user)))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.cycle.lunches").value(6))
+            .andExpect(jsonPath("$.cycle.lunches").value(9))
             .andExpect(jsonPath("$.cycle.startedAt").exists())
             .andExpect(jsonPath("$.cycle.endsAt").exists())
             .andExpect(jsonPath("$.waiting").value(false))
@@ -113,10 +113,10 @@ class LoyaltyEndpointTest {
     }
 
     @Test
-    @DisplayName("the 18th-lunch prize shows as EARNED with no own expiry (it lives and dies with the wallet balance)")
+    @DisplayName("the 15th-lunch prize shows as EARNED with no own expiry (it lives and dies with the wallet balance)")
     void lunchMilestoneEarned() throws Exception {
         User user = newUser(userRepo);
-        loyaltyService.onDelivered(delivered(orderRepo, user, 18, daysAgo(1)));
+        loyaltyService.onDelivered(delivered(orderRepo, user, 15, daysAgo(1)));
 
         mockMvc.perform(get(URL).header(HttpHeaders.AUTHORIZATION, bearer(user)))
             .andExpect(jsonPath("$.milestones[1].kind").value("LUNCH"))
@@ -130,8 +130,8 @@ class LoyaltyEndpointTest {
         User user = newUser(userRepo);
         // Cycle began 20 days ago; the dessert was earned 10 days ago (7 days of validity ran out).
         loyaltyService.onDelivered(delivered(orderRepo, user, 1, daysAgo(20)));
-        Order sixth = delivered(orderRepo, user, 5, daysAgo(10));
-        loyaltyService.onDelivered(sixth);
+        Order ninth = delivered(orderRepo, user, 8, daysAgo(10));
+        loyaltyService.onDelivered(ninth);
 
         mockMvc.perform(get(URL).header(HttpHeaders.AUTHORIZATION, bearer(user)))
             .andExpect(jsonPath("$.milestones[0].status").value("EXPIRED"))
@@ -142,7 +142,7 @@ class LoyaltyEndpointTest {
     @DisplayName("a used dessert is USED")
     void usedDessert() throws Exception {
         User user = newUser(userRepo);
-        loyaltyService.onDelivered(delivered(orderRepo, user, 6, daysAgo(1)));
+        loyaltyService.onDelivered(delivered(orderRepo, user, 9, daysAgo(1)));
         LoyaltyReward dessert = rewardRepo.findByUserIdOrderByMilestoneAsc(user.getId()).get(0);
         dessert.setUsedAt(Instant.now());
         rewardRepo.saveAndFlush(dessert);
